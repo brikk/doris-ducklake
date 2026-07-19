@@ -59,14 +59,21 @@ internal class DuckLakeScanPlanProvider(
         columns: List<ConnectorColumnHandle>,
         filter: Optional<ConnectorExpression>,
     ): List<ConnectorScanRange> =
-        planScanInternal(handle, filter, countPushdown = false)
+        planScanInternal(handle, filter, countPushdown = false, limit = LIMIT_NONE)
 
     /**
-     * COUNT(*)-pushdown-aware scan entry, mirroring the iceberg connector's
-     * 7-arg override (`IcebergScanPlanProvider.planScan` → `planScanInternal`).
-     * `limit` / `requiredPartitions` are not consumed by the DuckLake read
-     * path — pruning is predicate-driven via the handle's [DuckLakeTableHandle.prunedFileIds],
-     * exactly like the 4-arg path (the default SPI overloads fold down to it).
+     * COUNT(*)- and LIMIT-pushdown-aware scan entry, mirroring the iceberg
+     * connector's 7-arg override (`IcebergScanPlanProvider.planScan` →
+     * `planScanInternal`). `requiredPartitions` is not consumed — file pruning is
+     * predicate-driven via the handle's [DuckLakeTableHandle.prunedFileIds].
+     *
+     * `limit` IS consumed: on a clean, unfiltered, latest-snapshot scan (the same
+     * gate that makes COUNT(*) exactly servable from metadata) the engine will
+     * stop the BE after `limit` rows, so we emit only the minimal prefix of data
+     * files whose cumulative `record_count` already covers the limit — a
+     * split-scheduling win with no correctness risk (see [trimFilesToLimit]).
+     * Iceberg's file-scan path leans purely on BE early-termination and ignores
+     * `limit`; we go one step further only where metadata makes it provably safe.
      */
     override fun planScan(
         session: ConnectorSession?,
@@ -77,12 +84,13 @@ internal class DuckLakeScanPlanProvider(
         requiredPartitions: List<String>?,
         countPushdown: Boolean,
     ): List<ConnectorScanRange> =
-        planScanInternal(handle, filter, countPushdown)
+        planScanInternal(handle, filter, countPushdown, limit)
 
     private fun planScanInternal(
         handle: ConnectorTableHandle,
         filter: Optional<ConnectorExpression>,
         countPushdown: Boolean,
+        limit: Long,
     ): List<ConnectorScanRange> {
         // v1: full scan. Column projection and `filter` pushdown layer on top
         // later (READ todo Step 6); the snapshot is already pinned on the handle
@@ -137,11 +145,17 @@ internal class DuckLakeScanPlanProvider(
         // Honour the file-level pruning applyFilter computed from column stats
         // (null = no filter pushed, scan all files).
         val prunedIds = dlHandle.prunedFileIds
-        val scanFiles = if (prunedIds != null) {
+        val prunedFiles = if (prunedIds != null) {
             dataFiles.filter { it.dataFileId in prunedIds }
         } else {
             dataFiles
         }
+
+        // LIMIT pushdown: drop the file suffix the BE will never reach once it has
+        // `limit` rows. Only fires on a clean scan (same gate as COUNT(*)), so
+        // each retained file's record_count is an exact live-row count and the
+        // kept prefix provably holds >= limit rows — never an under-return.
+        val scanFiles = trimFilesToLimit(prunedFiles, dlHandle, filter, dataFiles, limit)
 
         val ranges = ArrayList<ConnectorScanRange>(scanFiles.size)
         for (file in scanFiles) {
@@ -458,6 +472,53 @@ internal class DuckLakeScanPlanProvider(
         val first = dataFiles.firstOrNull() ?: return listOf()
         val totalRecords = dataFiles.sumOf { it.recordCount }
         return listOf(buildRange(first, tableDataPath, partitions, totalRecords))
+    }
+
+    /**
+     * LIMIT-pushdown file trim: returns the minimal PREFIX of [scanFiles] whose
+     * cumulative `record_count` reaches [limit], or [scanFiles] unchanged when a
+     * trim would be unsafe or pointless.
+     *
+     * Safety hinges on `record_count` being an EXACT count of the live rows the
+     * BE will read from each file — otherwise a kept prefix could hold fewer than
+     * `limit` rows and the query would UNDER-return. That is exactly the property
+     * [isCountServableFromMetadata] certifies, so we reuse it verbatim: it refuses
+     * on any filter (remaining expression / pushed filter / pruned file set — the
+     * BE would apply the predicate before the limit, so record_count over-counts
+     * post-filter rows), position deletes, inlined data/deletes, partial
+     * cross-snapshot files, and non-latest (time-travel) snapshots. Under that
+     * gate `scanFiles == dataFiles` (no prune is in play), so the prefix sum is
+     * over the whole active file set.
+     *
+     * The BE still applies the real LIMIT operator on top; this only spares it
+     * from scheduling scan ranges it would never reach. `limit <= 0` (the
+     * no-limit sentinel, or fe-core's suppress-source-limit signal when it strips
+     * non-pushable conjuncts) is a no-op.
+     */
+    private fun trimFilesToLimit(
+        scanFiles: List<DucklakeDataFile>,
+        dlHandle: DuckLakeTableHandle,
+        filter: Optional<ConnectorExpression>,
+        dataFiles: List<DucklakeDataFile>,
+        limit: Long,
+    ): List<DucklakeDataFile> {
+        if (limit <= 0 || scanFiles.isEmpty()) {
+            return scanFiles
+        }
+        if (!isCountServableFromMetadata(dlHandle, filter, dataFiles)) {
+            return scanFiles
+        }
+        var cumulative = 0L
+        var keep = 0
+        for (file in scanFiles) {
+            keep++
+            cumulative += file.recordCount
+            if (cumulative >= limit) {
+                break
+            }
+        }
+        // Whole set needed (limit exceeds total rows): return as-is, no copy.
+        return if (keep >= scanFiles.size) scanFiles else scanFiles.subList(0, keep)
     }
 
     /**
@@ -913,6 +974,11 @@ internal class DuckLakeScanPlanProvider(
         // The ConnectorScanRange "no precomputed count" sentinel every normal
         // range carries; only the collapsed count-pushdown range differs.
         private const val PUSH_DOWN_COUNT_NONE: Long = -1L
+
+        // The "no LIMIT" sentinel for the 4-arg planScan → planScanInternal path.
+        // Matches the engine's own no-limit convention (limit <= 0), so
+        // trimFilesToLimit is a no-op unless a real positive limit is pushed.
+        private const val LIMIT_NONE: Long = -1L
 
         // Scalar DuckLake types DuckLakeInlinedParquetWriter can encode
         // (decimal(p,s) handled separately). Keep in sync with the writer.
