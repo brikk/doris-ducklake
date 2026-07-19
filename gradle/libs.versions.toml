@@ -1,0 +1,42 @@
+[versions]
+kotlin = "2.3.10"
+duckdb = "1.5.4.0"
+minio = "8.6.0"
+postgres = "42.7.8"
+junit = "5.12.2"
+assertj = "3.27.3"
+detekt = "2.0.0-alpha.3"
+# Published DuckLake catalog + corpus-replay coordinates (dev.brikk.ducklake). Bump in lockstep
+# when consuming a new catalog release; -SNAPSHOT resolves from the Central Portal snapshots repo.
+ducklake-catalog = "0.0.1"
+# brikk-sql: TEST-ONLY DuckDB->Doris SQL transpiler for the corpus-replay dialect gate.
+# Releases on Maven Central; -SNAPSHOTs via the Central Portal snapshots repo (wired in
+# buildlogic.kotlin.brikk).
+brikk-sql = "0.3.0-SNAPSHOT"
+
+[libraries]
+kotlin-bom = { module = "org.jetbrains.kotlin:kotlin-bom", version.ref = "kotlin" }
+
+duckdb-jdbc = { module = "org.duckdb:duckdb_jdbc", version.ref = "duckdb" }
+minio-client = { module = "io.minio:minio", version.ref = "minio" }
+postgres-jdbc = { module = "org.postgresql:postgresql", version.ref = "postgres" }
+
+# Published DuckLake catalog artifacts (from dev.brikk.ducklake:ducklake-catalog repo).
+ducklake-catalog = { module = "dev.brikk.ducklake:ducklake-catalog", version.ref = "ducklake-catalog" }
+ducklake-test-corpus-replay = { module = "dev.brikk.ducklake:ducklake-test-corpus-replay", version.ref = "ducklake-catalog" }
+
+junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
+junit-jupiter-api = { module = "org.junit.jupiter:junit-jupiter-api" }
+junit-jupiter-engine = { module = "org.junit.jupiter:junit-jupiter-engine" }
+junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
+assertj-core = { module = "org.assertj:assertj-core", version.ref = "assertj" }
+kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }
+
+# brikk-sql (dev.brikk.house) — TEST-ONLY. KMP JVM artifacts; see buildlogic.kotlin.brikk.
+brikk-sql = { module = "dev.brikk.house:brikk-sql-jvm", version.ref = "brikk-sql" }
+brikk-sql-metadata = { module = "dev.brikk.house:brikk-sql-metadata-jvm", version.ref = "brikk-sql" }
+brikk-sql-verify = { module = "dev.brikk.house:brikk-sql-verify", version.ref = "brikk-sql" }
+
+[plugins]
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+detekt = { id = "dev.detekt", version.ref = "detekt" }

@@ -1,0 +1,3 @@
+[submodule "ducklake"]
+	path = ducklake
+	url = https://github.com/duckdb/ducklake.git
