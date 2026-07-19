@@ -108,8 +108,22 @@ internal class DorisCorpusDialectTest {
 
     @Test
     fun skipsNonLiteralInlineTimeTravel() {
-        assertThat(skip("SELECT * FROM lake.s.t AT (TIMESTAMP => now())").reason)
+        // A non-literal timestamp (here a column ref) has no Doris FOR-VERSION form, so the
+        // gate refuses it at the inline-time-travel branch. NB: don't use now() here — as of
+        // brikk-sql 0.7.0 certify catches now() earlier as a semantic NOW hazard (rendering/
+        // zone divergence), which short-circuits before the time-travel branch is reached
+        // (see skipsNowInTimeTravelAsHazard). A bare column exercises the branch this test
+        // is named for.
+        assertThat(skip("SELECT * FROM lake.s.t AT (TIMESTAMP => ts_col)").reason)
             .contains("time travel")
+    }
+
+    @Test
+    fun skipsNowInTimeTravelAsHazard() {
+        // now() inside inline time travel is refused as a semantic NOW hazard (DuckDB vs Doris
+        // differ in rendering/precision/zone), before the non-literal time-travel branch.
+        assertThat(skip("SELECT * FROM lake.s.t AT (TIMESTAMP => now())").reason)
+            .contains("NOW")
     }
 
     @Test
