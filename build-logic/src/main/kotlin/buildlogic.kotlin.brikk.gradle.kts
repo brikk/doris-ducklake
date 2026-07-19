@@ -22,6 +22,9 @@ repositories {
         name = "centralPortalSnapshots"
         url = uri("https://central.sonatype.com/repository/maven-snapshots/")
         mavenContent { snapshotsOnly() }
-        content { includeGroup("dev.brikk.house") }
+        content {
+            includeGroup("dev.brikk.house")
+            includeGroup("dev.brikk.ducklake")
+        }
     }
 }
