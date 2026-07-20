@@ -31,3 +31,40 @@ section — those are tracked asks, not open research.
      syntactically loadable).
   Captured 2026-06-08 as a "remember this" idea — feasibility research only, well
   after the read-path v1 lands.
+
+- [ ] **DuckLake system / metadata tables (`$snapshots` / `$history` / `$files`…) (speculative).**
+  DuckLake carries rich snapshot + file metadata (`ducklake_snapshot`,
+  `ducklake_snapshot_changes`, `ducklake_data_file`, …) that maps naturally onto
+  Iceberg-style system tables — `db.table$snapshots`, `$history`, `$files`,
+  `$manifests`-equivalents — for snapshot discovery, time-travel target lookup,
+  and file-level introspection. The catalog layer already surfaces most of it
+  (`getSnapshot`, `listSnapshots`, `listSnapshotChanges`, `getDataFiles`), so the
+  data is on hand; the missing piece is presenting it as a **queryable** table.
+
+  *Reference pattern (upstream, current).* Iceberg exposes its system tables via a
+  dedicated BE JNI scanner — `IcebergSysTableJniScanner`
+  (`be-java-extensions/iceberg-metadata-scanner/…`) — plus SPI hooks on
+  `ConnectorScanPlanProvider` (`classifyColumn`, `supportsSystemTableTimeTravel`),
+  with the FE planning a metadata scan (`doPlanSystemTableScan`) that projects the
+  requested columns. See `branch-catalog-spi` commits `61a8b380` (add sys-table
+  projection) and `5f009592` (fix the positional JNI read + order-preserving
+  projection); design detail + the gotcha are in the friction log
+  (2026-07-19 entry).
+
+  *Blocker to reuse.* The sys-table JNI path is **hardwired to iceberg** — a
+  per-format be-java-extension module + a hardcoded `table_format_type` dispatch in
+  `file_scanner.cpp` (the same closed dispatch documented in the 2026-07-06
+  friction entry "No SPI path for a connector to hand FE-computed rows to the BE").
+  There is no generic `plugin_driven` case, so a DuckLake plugin can't reach it
+  without a BE patch + its own scanner. Two routes if/when we want this:
+  1. Land the "smallest fix" from that friction entry — a generic
+     `table_format_type == "plugin_driven"` `FORMAT_JNI` dispatch — then ship a
+     DuckLake metadata JNI scanner. Also unlocks arbitrary FE-computed rows
+     (subsumes the inlined-data temp-Parquet crutch).
+  2. FE-synthesize the metadata rows into a temp Parquet and emit a normal
+     `FILE_SCAN` (the same shared-storage crutch we use for inlined data — same
+     dev/compose-only limitation).
+  Contract to honor if we build the JNI scanner: the FE must project columns in
+  **scan-slot order** and the BE reads rows **positionally** (see friction
+  2026-07-19 for why, and a proposed field-id-bound alternative). Captured
+  2026-07-19 as a "remember this" — well after read-path v1.

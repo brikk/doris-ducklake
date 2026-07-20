@@ -19,6 +19,63 @@ Entry shape: **Symptom** → **Root cause** (file:line) → **Workaround**
 
 ---
 
+## 2026-07-19 · Iceberg system-table JNI scanner: FE projection order IS the BE row contract (positional read)
+
+**Symptom.** Not one we hit — an upstream lesson from two `branch-catalog-spi`
+commits worth banking BEFORE we build any BE JNI scanner (DuckLake system tables,
+or the generic `plugin_driven` sys-table dispatch proposed in the 2026-07-06
+"No SPI path…" entry below). Upstream `$snapshots`/`$history`/`$refs` queries that
+projected a column SUBSET failed on the BE with
+`[JNI_ERROR]ArrayIndexOutOfBoundsException: Index N out of bounds for length M`
+(`IcebergSysTableJniScanner.getNext` → `StructProjection.get`).
+
+**Root cause.** The iceberg sys-table JNI scanner reads row values
+**positionally** (`row.get(i)`), but the rows come from a metadata
+`StaticDataTask` whose `FileScanTask.schema()` returns the FULL table schema
+while `rows()` yields a NARROWED `StructProjection`. A full-schema ordinal (e.g.
+`snapshot_id` at 2) then overruns a projected row of length 2 — iceberg's own
+#65262 comment warns exactly this: "`FileScanTask.schema()` is not the row schema
+for every `DataTask` implementation." Compounded on the branch by an FE change
+that added `scan.select(projectedColumns)` to narrow the materialized rows:
+`scan.select(ids)` routes ids through a `Set` and re-emits them in **table-schema
+order** (`TypeUtil.project`), so even the surviving columns arrive in the wrong
+order for a positional read.
+
+**Workaround.** None needed on our side — this is iceberg-internal. Recorded as a
+contract, not a bug we route around.
+
+**Fix (upstream, already landed on `branch-catalog-spi`).** `61a8b380` (add
+sys-table projection) + `5f009592` (BE reads positionally against the *projected*
+row via `row.get(i, Object.class)`; FE uses `scan.project(schema)` built from the
+requested columns **in scan-slot order**, which preserves order — unlike
+`scan.select`). No SPI-surface change; our plugin is unaffected (we compile
+against `fe-connector-api`/`-spi`/`-thrift` only, and use `FILE_SCAN`/parquet, no
+JNI, no system tables).
+
+**Why it matters to us.** The "smallest fix" this log proposes for FE-computed
+rows (2026-07-06 entry) is a generic `table_format_type == "plugin_driven"`
+`FORMAT_JNI` dispatch that "mirrors the iceberg sys-table path." If we take that
+route (DuckLake `$snapshots`/`$history`, or serving inlined rows without a temp
+file), this positional contract becomes a load-bearing invariant we inherit: the
+FE must emit column projections in scan-slot order and the BE scanner must read by
+ordinal against the *projected* (not table) schema — a mismatch is a silent index
+overrun, not a clean type error.
+
+**Opinion (design).** The positional FE↔BE row contract is fragile: it couples two
+codebases across a JNI boundary through an unstated ordinal convention, and the
+failure mode is an AIOOBE deep in the BE rather than a plan-time validation error.
+A generic `plugin_driven` JNI scanner should instead carry the projected field
+schema (names + field-ids + order) IN the serialized split and have the BE bind by
+**field-id/name**, not bare ordinal — the same field-id robustness we already lean
+on for data-file reads (the schema dictionary, see 2026-07-06 per-file mapping
+entry). That converts a whole class of silent overruns into explicit binds and
+lets FE and BE evolve projection independently. If positional stays for cost
+reasons, the scanner should at minimum assert `row.size() == requested.size()` and
+put the projected-vs-table schema in the error. Tracked in
+[`TODO-research.md`](./TODO-research.md) (DuckLake system tables).
+
+---
+
 ## 2026-07-07 · No way to hand a small FE-built payload to the BE without shared storage (inlined-data reads)
 
 **Symptom.** DuckLake keeps small tables' rows inline in the metadata catalog
