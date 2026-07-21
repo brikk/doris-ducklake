@@ -76,7 +76,10 @@ done
 # 2. Plugin zip — rebuild and unpack into the bind mount.
 if [[ $DO_BUILD -eq 1 ]]; then
     log "Building plugin zip…"
-    (cd "${JVM_ROOT}" && ./gradlew :doris-ducklake:assemble -q)
+    # doris-ducklake is its own standalone repo (a sibling of trino-ducklake under
+    # JVM_ROOT), so build with ITS gradlew + top-level `assemble` task — not the
+    # pre-split umbrella `:doris-ducklake:assemble`.
+    (cd "${JVM_ROOT}/doris-ducklake" && ./gradlew assemble -q)
 fi
 
 zip_path=$(ls -t ${PLUGIN_ZIP_GLOB} 2>/dev/null | head -1 || true)
@@ -234,6 +237,37 @@ if [[ "${orders_n:-0}" -gt 0 && "${lineitem_n:-0}" -gt 0 ]]; then
 else
     log "§8b row counts CHECK: orders=${orders_n:-?}, lineitem=${lineitem_n:-?} (exp both > 0) — inspect above."
 fi
+
+# §8b-count: COUNT(*) vs COUNT(col) semantics on a nullable column (baseline
+# 2026-07-21 / upstream #65548). Our COUNT(*) pushdown collapses a clean scan to
+# sum(record_count); the connector CAN'T tell COUNT(*) from COUNT(col) at the SPI,
+# so it trusts the engine's countPushdown boolean, which #65548 now sets for
+# COUNT(*) ONLY (isTableLevelCountStarPushdown = COUNT && empty count-slot list).
+# Pre-#65548 the boolean over-fired and COUNT(col) was served record_count too —
+# a NULL-blind over-count with no possible connector-side guard. This is the ONE
+# place that distinction is exercised end-to-end: headless tests supply the
+# boolean themselves and only cover COUNT(*); the gate lives in fe-core's Nereids
+# translator, so only a live BE run proves it. Seed a clean table with NULLs:
+# COUNT(*)=4 (all rows, metadata count-pushdown), COUNT(v)=2 (non-null; must NOT
+# be 4). A COUNT(v)==4 here is the #65548 regression resurfacing.
+log "§8b-count: COUNT(*) vs COUNT(col) on a nullable column (metadata count-pushdown must stay COUNT(*)-only)…"
+docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
+    SWITCH dl;
+    DROP TABLE IF EXISTS tpch.count_col_check;
+    CREATE TABLE tpch.count_col_check (id INT, v INT);
+    INSERT INTO tpch.count_col_check VALUES (1,10),(2,NULL),(3,30),(4,NULL);
+" 2>&1 | tail -4
+cc_star=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -N -e "SELECT COUNT(*) FROM dl.tpch.count_col_check;" 2>/dev/null | tail -1)
+cc_col=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -N -e "SELECT COUNT(v) FROM dl.tpch.count_col_check;" 2>/dev/null | tail -1)
+log "  COUNT(*)=${cc_star:-?} (exp 4)  COUNT(v)=${cc_col:-?} (exp 2, non-null)"
+if [[ "${cc_star:-0}" == "4" && "${cc_col:-0}" == "2" ]]; then
+    log "§8b-count GREEN: COUNT(*) serves the metadata count and COUNT(col) excludes NULLs (#65548 gate holds)."
+elif [[ "${cc_col:-0}" == "4" ]]; then
+    log "§8b-count RED: COUNT(v)=4 — count-pushdown over-fired for COUNT(col) (the #65548 over-count regression). Check the FE baseline (isTableLevelCountStarPushdown)."
+else
+    log "§8b-count CHECK: COUNT(*)=${cc_star:-?}, COUNT(v)=${cc_col:-?} (exp 4 and 2) — inspect above."
+fi
+docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "DROP TABLE IF EXISTS dl.tpch.count_col_check;" 2>&1 | tail -1
 
 log "§8b EXPLAIN VERBOSE of a filter-pushdown SELECT (expect a plugin scan over tpch.orders)…"
 explain_out=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
