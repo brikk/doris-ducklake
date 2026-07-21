@@ -12,12 +12,12 @@ These are **not** committed to the OSS Doris checkout — they live here as a
 reapplyable patch (`ducklake-fe.patch`) so the FE build is reproducible and the
 upstream asks are tracked. See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]].
 
-> **⚠️ Build from the PINNED commit.** `branch-catalog-spi` rebases constantly.
-> The **current pin** (the commit we last researched, validated the plugin against,
-> and re-diffed this patch to) is the newest entry in the **Re-vendor log** below —
-> as of 2026-07-18: `b2dff681aad`, subject *"[feat](catalog) fe-connector-iceberg:
-> port #64966 REST 401 re-auth to the connector"*. `compose/README.md` step 1 pins
-> the same commit. **Do not build from a blind branch tip.** If the SHA has been
+ > **⚠️ Build from the PINNED commit.** `branch-catalog-spi` rebases constantly.
+ > The **current pin** (the commit we last researched, validated the plugin against,
+ > and re-diffed this patch to) is the newest entry in the **Re-vendor log** below —
+ > as of 2026-07-21: `568c4bb4571`, subject *"[perf](catalog) two-level cross-query
+ > cache for external partition derived views (#65829)"*. `compose/README.md` step 1
+ > pins the same commit. **Do not build from a blind branch tip.** If the SHA has been
 > GC'd, check out the commit with that exact subject and re-validate (re-diff this
 > patch — `git apply --check` clean — and re-run the REPORT §"upstream re-check")
 > before building. Keep all three in sync: this note, the Re-vendor log, and
@@ -25,6 +25,42 @@ upstream asks are tracked. See [[doris-fe-build-macos]] + [[doris-compose-smoke-
 
 ### Re-vendor log
 
+- **2026-07-21 → tip subject `[perf](catalog) two-level cross-query cache for external
+  partition derived views (#65829)`** (was `568c4bb4571`; SHAs churn on rebase — match
+  the subject). Bumped from `b2dff681aad` past 4 new catalog commits (full rebase; all
+  hashes changed). **Connector unaffected — recompiles with zero source changes:**
+  the only `fe-connector-api`/`-spi` deltas are **100% additive `default`s / a new
+  optional interface** — `ConnectorSession.getStatementScope()` (default `NONE`), the
+  new opt-in `ConnectorStatementScope`, and `ConnectorContext.newStorageUriNormalizer()`
+  (default delegates) — **zero removed/changed signatures, no thrift/gensrc change**.
+  The committed `ducklake-fe.patch` applied to the fresh tip with **`git apply --check`
+  clean** (both anchors survived, no re-diff needed). Per-commit impact:
+  - `e697837760d` **port #65548 COUNT(\*)/COUNT(col) semantics** — the plugin-scan count
+    gate moved from `getPushDownAggNoGroupingOp()==COUNT` (fired for BOTH COUNT(\*) and
+    COUNT(col)) to `isTableLevelCountStarPushdown()` (COUNT **with empty count-slot
+    list** = COUNT(\*) only). **Fixes a latent over-count our COUNT(\*) pushdown was
+    exposed to** on the prior pin (a `COUNT(col)` on a nullable column would have been
+    served `sum(record_count)`, ignoring NULLs). No connector change — the connector
+    can't distinguish COUNT(\*) from COUNT(col) at the SPI (no count-slot info), so it
+    correctly trusts the engine's `countPushdown` boolean, now gated right. See
+    `../dev-docs/TODO-read.md`.
+  - `1ea735ff0a5` **iceberg deletion-vector metadata validation (#65676)** — validates
+    puffin DV blob offset/length bounds in `fe-connector-iceberg` only; **does NOT touch**
+    our pending REQUIRED-vs-OPTIONAL parquet position-delete nullability blocker (that
+    remains open). Inert for us.
+  - `777a61671ab` **hot-path caching + per-statement metadata funnel** — iceberg/hive
+    caching + the additive API above. For us: fe-core now funnels `getMetadata(session)`
+    once per statement and shares it across resolvers (safe — our metadata wrapper is
+    immutable; minor perf win). Optional future opt-in: memoize our own catalog/table
+    loads via `session.getStatementScope()`.
+  - `568c4bb4571` **two-level partition derived-view cache (#65829)** — fe-core perf;
+    `PluginDrivenMvccExternalTable` now implements `SupportBinarySearchFilteringPartitions`.
+    Inert for us TODAY: Cache B only engages when the table exposes **Nereids-level
+    partition items** (`getNameToPartitionItems`/`SortedPartitionRanges`), and our
+    connector prunes at the **file level in `applyFilter`** (stats + bucket), not via
+    Nereids partition items — so no ranges are cached. No breakage. **Future
+    optimization** (tracked in `../dev-docs/TODO-read.md`): if we ever surface Nereids
+    partition items, this cross-query cache engages for free.
 - **2026-07-18 → tip subject `[feat](catalog) fe-connector-iceberg: port #64966 REST
   401 re-auth to the connector`** (was `b2dff681aad`; SHAs churn on rebase — match the
   subject). Re-diffed after the **Hive P11 migration** (`[refactor](catalog) Catalog spi
@@ -58,11 +94,11 @@ upstream asks are tracked. See [[doris-fe-build-macos]] + [[doris-compose-smoke-
 
 ```bash
 # ⚠️ PIN to the commit we last researched + re-diffed against (branch-catalog-spi REBASES —
-#    don't build from a blind branch tip). Pin (2026-07-18): b2dff681aad
-#    subject "[feat](catalog) fe-connector-iceberg: port #64966 REST 401 re-auth to the connector".
+#    don't build from a blind branch tip). Pin (2026-07-21): 568c4bb4571
+#    subject "[perf](catalog) two-level cross-query cache for external partition derived views (#65829)".
 #    SHA gone (GC'd)? check out the commit with that exact subject, then re-diff this patch
 #    (git apply --check must be clean) and re-run the REPORT §"upstream re-check" before building.
-cd ~/DEV/OSS/doris-catalog-spi && git checkout b2dff681aad   # branch-catalog-spi @ pinned commit
+cd ~/DEV/OSS/doris-catalog-spi && git checkout 568c4bb4571   # branch-catalog-spi @ pinned commit
 git apply --3way /path/to/jvm/doris-ducklake/fe-patches/ducklake-fe.patch   # --3way tolerates line-offset drift
 JAVA_HOME=<jdk17> DISABLE_BUILD_UI=ON ./build.sh --fe                 # ~2 min incremental
 # then re-install the SPI artifacts our gradle build compiles against (mavenLocal):

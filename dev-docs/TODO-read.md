@@ -25,12 +25,35 @@ Cross-references:
 Phase-R sweep on the P6 baseline (`8b391c7`) landed four features + a parity
 audit (full module suite green: 140+ tests + detekt):
 
-- **COUNT(\*) pushdown** — 7-arg `planScan` collapses a clean scan to one range
-  carrying the summed `recordCount` (`getPushDownRowCount()` + thrift
-  `table_level_row_count`, iceberg emission shape). Refusal gates (any of
-  these → normal ranges, BE counts by reading): remaining filter, pushed
-  filter/pruned files on the handle, any delete file, inlined deletes,
-  inlined data rows, partial-compacted files (`partialMax > snapshotId`).
+ - **COUNT(\*) pushdown** — 7-arg `planScan` collapses a clean scan to one range
+   carrying the summed `recordCount` (`getPushDownRowCount()` + thrift
+   `table_level_row_count`, iceberg emission shape). Refusal gates (any of
+   these → normal ranges, BE counts by reading): remaining filter, pushed
+   filter/pruned files on the handle, any delete file, inlined deletes,
+   inlined data rows, partial-compacted files (`partialMax > snapshotId`).
+   - **⚠️ COUNT(\*) vs COUNT(col) is an ENGINE-gated contract, not ours (baseline
+     dependency).** The connector CANNOT tell `COUNT(*)` from `COUNT(col)` at the
+     SPI — `planScan` only gets the `countPushdown` boolean, never the count-slot
+     list — so it must trust the engine to set that boolean for `COUNT(*)` **only**.
+     Our collapse serves `sum(record_count)`, which is correct for `COUNT(*)` but
+     **over-counts `COUNT(col)` on a nullable column** (`record_count` includes rows
+     where `col` IS NULL). Upstream #65548 (on `branch-catalog-spi` as
+     `e697837760d`, "port #65548 … COUNT(*)/COUNT(col) semantics", picked up at the
+     **2026-07-21** baseline) moves `PluginDrivenScanNode`'s gate from
+     `getPushDownAggNoGroupingOp()==COUNT` (fired for BOTH) to
+     `isTableLevelCountStarPushdown()` (`COUNT` **and empty count-slot list** =
+     `COUNT(*)` only), so the boolean is now right and `COUNT(col)` keeps all splits
+     (BE counts non-null). **Before that baseline the boolean over-fired**, so
+     `COUNT(col)`-with-NULLs was a latent over-count on our side with no possible
+     connector-side guard. No connector code change — the fix is purely the engine
+     gate we depend on.
+   - [ ] **Smoke test (do after the 2026-07-21 FE build lands in the overlay):** add
+     a `compose/smoke.sh` step proving `COUNT(col)` on a nullable column with NULLs
+     returns the non-null count (NOT `record_count`), alongside a `COUNT(*)` that
+     still serves the metadata count. Our headless tests can't cover this (they
+     supply the `countPushdown` boolean themselves and only exercise `COUNT(*)`); the
+     gate lives in fe-core, so only a live BE run through the real Nereids translator
+     exercises the `COUNT(*)`-vs-`COUNT(col)` distinction end-to-end.
 - **Partition-bearing scan ranges** — `isPartitionBearing()`=true whenever the
   table has an active spec (stops BE hive-path-parsing our layout);
   identity-transform partition values surfaced lowercase-column-name-keyed
@@ -332,7 +355,8 @@ unit test and (where applicable) a live-FE smoke checkpoint.
 
 ### Step 6.5 — Planner statistics
 - [x] **Table-level `getTableStatistics`** — done. `DuckLakeConnectorMetadata.getTableStatistics` returns `ConnectorTableStatistics(recordCount, fileSizeBytes)` from `ducklake_table_stats` (`DucklakeCatalog.getTableStats`). Whole-table for now; the planner applies pushed-filter selectivity on top. fe-core also falls back to `dataSize / rowWidth` if only a size is present, but we supply an exact `recordCount`.
-- [ ] ⛔️ **Column-level `getColumnStatistics`** — deliberately NOT implemented (decision 2026-07-19). DuckLake tracks **no NDV / distinct count anywhere** (`ducklake_file_column_stats` / `ducklake_table_column_stats` carry only value_count / null_count / column_size / min / max — verified). Doris's `PluginDrivenExternalTable.toColumnStatistic` requires an `ndv` and **ignores min/max**, so implementing the SPI method would force fabricating an NDV — and a wrong NDV misleads join/predicate cardinality worse than supplying no column stats at all (the planner already has an exact table row count from `getTableStatistics`). Revisit only if DuckLake grows real distinct-count stats, or if a sketch (HLL) NDV can be computed cheaply. The catalog already exposes `getColumnStats()` (value/null counts, size, min/max) if a future consumer needs the non-NDV parts.
+ - [ ] ⛔️ **Column-level `getColumnStatistics`** — deliberately NOT implemented (decision 2026-07-19). DuckLake tracks **no NDV / distinct count anywhere** (`ducklake_file_column_stats` / `ducklake_table_column_stats` carry only value_count / null_count / column_size / min / max — verified). Doris's `PluginDrivenExternalTable.toColumnStatistic` requires an `ndv` and **ignores min/max**, so implementing the SPI method would force fabricating an NDV — and a wrong NDV misleads join/predicate cardinality worse than supplying no column stats at all (the planner already has an exact table row count from `getTableStatistics`). Revisit only if DuckLake grows real distinct-count stats, or if a sketch (HLL) NDV can be computed cheaply. The catalog already exposes `getColumnStats()` (value/null counts, size, min/max) if a future consumer needs the non-NDV parts.
+- [ ] **Nereids-level partition items → unlock the cross-query partition-range cache (future optimization).** At the 2026-07-21 baseline upstream added a two-level cache for external partition derived views (`#65829`, `568c4bb4571`): fe-core's `PluginDrivenMvccExternalTable` now implements `SupportBinarySearchFilteringPartitions`, so a repeated query on a partitioned external table can reuse its pre-built `SortedPartitionRanges` (keyed by the pinned snapshot's frozen partition name-set) via `NereidsSortedPartitionsCacheManager`, plus a below-SPI `ConnectorPartitionViewCache`. **Inert for us today:** that machinery only engages when the table exposes **Nereids-level partition items** (`getNameToPartitionItems` / `SortedPartitionRanges` built from `PartitionItem`s), and our connector prunes at the **file level in `applyFilter`** (column-stats + bucket over `DucklakeDataFile`s), NOT via Nereids partition items — so nothing is cached and nothing breaks. If we ever surface Nereids partition items (identity/temporal partition columns as range/list `PartitionItem`s, so the planner prunes partitions before file pruning), we'd (a) get partition-level pruning in the optimizer AND (b) get this cross-query cache for free. Weigh against our file-level pruning, which is already snapshot-consistent and needs no partition enumeration; only worth it if partition-count is high and repeated-query planning cost shows up. No SPI change needed on the fe-core side — it's a connector-side "expose partitions to Nereids" feature.
 
 ### Step 7 — Position deletes path (FE-side plumbing landed, BE-side blocked)
 - [x] Library: `DucklakeDataFile` already inlines the active delete file path/format via LEFT JOIN in `JdbcDucklakeCatalog#getDataFiles`; catalog enforces at-most-one active delete file per data file per snapshot (`checkDeleteFileOverlap`). No new catalog method needed.
