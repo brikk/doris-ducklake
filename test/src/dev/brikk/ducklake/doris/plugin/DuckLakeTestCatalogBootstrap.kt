@@ -76,7 +76,7 @@ object DuckLakeTestCatalogBootstrap {
                 statement.execute("CREATE TABLE dl.analytics.events (ts TIMESTAMP, kind VARCHAR)")
 
                 // Seed sales.orders so the unpartitioned scan-plan tests have files to
-                // enumerate. Two INSERTs, but DO NOT assume two data files: DuckDB 1.5.4's
+                // enumerate. Two INSERTs, but DO NOT assume two data files: DuckDB 1.5.5's
                 // CHECKPOINT (line 119) can consolidate multiple small INSERTs into ONE
                 // parquet file, and the writer may coalesce regardless. The tests that use
                 // sales.orders assert stability-at-pin — `isNotEmpty()`, or a size relative

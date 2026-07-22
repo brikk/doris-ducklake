@@ -13,7 +13,7 @@
 
 Connector for the DuckLake format using **PostgreSQL** as the catalog metadata
 backend (the shared, multi-process shape a Doris FE+BE cluster needs). Tested
-with DuckDB 1.5.4 for cross-engine compatibility.
+with DuckDB 1.5.5 for cross-engine compatibility.
 
 ## Architecture — why this is read-focused, and different from Trino
 
