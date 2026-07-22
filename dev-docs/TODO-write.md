@@ -344,6 +344,18 @@ Two FE-route gaps surfaced and were fixed to get here (both in
   as a position-free alternative but does not map to DuckLake's position-based delete model
   (`ducklake_delete_file` = file_path + pos).
 - [ ] **W5 — MERGE:** full upsert via the delete+insert fragment path.
+- [ ] **W6 — sorted writes (`ORDER BY` on CREATE TABLE + sorted data files).**
+  DuckLake tracks sort keys (`ducklake_sort_key`, exposed via `DucklakeCatalog.getSortKeys()`),
+  so this maps cleanly. **Gated by a capability since the 2026-07-22 baseline (#65893):**
+  fe-core `CreateTableInfo` now **rejects `CREATE TABLE ... ORDER BY (...)` on a plugin
+  catalog unless the connector declares `ConnectorCapability.SUPPORTS_SORT_ORDER`** — we
+  do NOT declare it today, so ducklake `ORDER BY` CREATE TABLE is cleanly rejected (was
+  accepted-and-ignored under the old ENGINE_ICEBERG padding). To implement: (1) declare
+  `SUPPORTS_SORT_ORDER` in `DuckLakeConnector.getCapabilities()`; (2) consume
+  `ConnectorCreateTableRequest.getSortOrder()` in `DuckLakeConnectorMetadata.createTable`
+  → persist as DuckLake sort keys; (3) engine-built `TSortInfo` stamped on the sink
+  (`getWriteSortColumns()`, per PLAN.md phase W) so INSERT writes sorted files. Until then,
+  not declaring the capability is the correct behavior (reject rather than silently ignore).
 - [x] **Cross-engine round-trip:** ✅ Doris-written `tpch.doris_w` read back by
   DuckDB+DuckLake on the same metadata DB (W2 smoke). The reverse (DuckDB-written
   read by Doris) is the existing read smoke.

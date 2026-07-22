@@ -81,7 +81,7 @@ The upstream Doris checkout and its worktrees live under `~/DEV/OSS/`:
   Doris repo; look here for BE source, base build scripts, upstream history.
 - **`~/DEV/OSS/doris-catalog-spi`** — a **linked git worktree** of that same repo,
   parked (detached HEAD) at the **pinned** connector-SPI commit we build the FE
-  from (`568c4bb4571`, `branch-catalog-spi`). **This is the one we build the plugin
+  from (`d56c8f356c3`, `branch-catalog-spi`). **This is the one we build the plugin
   FE against.** Its `output/fe/` is the FE build below.
 
 (Both are the same `.git`; `git worktree list` from either shows the pair. If a path
@@ -107,8 +107,8 @@ Verify the runtime image actually carries the build you think it does:
 # ⚠️ PINNED COMMIT — build from the SAME commit we last researched + re-diffed the patch against.
 #   `branch-catalog-spi` REBASES CONSTANTLY, so do NOT just `git pull` the branch tip: a newer
 #   tip may move the patch context or add a non-default SPI method that breaks the plugin.
-#   Pin (2026-07-21): 568c4bb4571
-#     subject: "[perf](catalog) two-level cross-query cache for external partition derived views (#65829)"
+#   Pin (2026-07-22): d56c8f356c3
+#     subject: "[fix](catalog) migrate rebased-in PhysicalStorageLayerAggregateTest to PluginDrivenExternalTable"
 #   SHAs churn on rebase — if that SHA is GC'd/gone, check out the commit with that exact SUBJECT,
 #   then RE-VALIDATE before building: re-run the diff in ../dev-docs/REPORT-doris-p6-iceberg-spi-cutover.md
 #   §"upstream re-check" and re-diff ../fe-patches/ducklake-fe.patch (git apply --check must be clean).
@@ -117,7 +117,7 @@ Verify the runtime image actually carries the build you think it does:
 ```bash
 # 1. Build the P-series FE (JDK 17) in the pinned worktree. Apply BOTH FE patches
 #    first — see ../fe-patches/FE-PATCHES.md (reapplyable: git apply --3way ../fe-patches/ducklake-fe.patch):
-cd ~/DEV/OSS/doris-catalog-spi && git checkout 568c4bb4571   # pinned commit worktree (see note above)
+cd ~/DEV/OSS/doris-catalog-spi && git checkout d56c8f356c3   # pinned commit worktree (see note above)
 #   • CatalogFactory.java         : add "ducklake" to SPI_READY_TYPES        (catalog/INSERT route gate)
 #   • CreateTableInfo.java        : pluginCatalogTypeToEngine += "ducklake"→ENGINE_ICEBERG  (CREATE TABLE gate)
 JAVA_HOME=<jdk17> DISABLE_BUILD_UI=ON ./build.sh --fe        # → output/fe  (see doris-fe-build-macos memory)

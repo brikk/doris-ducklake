@@ -64,7 +64,62 @@ section — those are tracked asks, not open research.
   2. FE-synthesize the metadata rows into a temp Parquet and emit a normal
      `FILE_SCAN` (the same shared-storage crutch we use for inlined data — same
      dev/compose-only limitation).
-  Contract to honor if we build the JNI scanner: the FE must project columns in
-  **scan-slot order** and the BE reads rows **positionally** (see friction
-  2026-07-19 for why, and a proposed field-id-bound alternative). Captured
-  2026-07-19 as a "remember this" — well after read-path v1.
+   Contract to honor if we build the JNI scanner: the FE must project columns in
+   **scan-slot order** and the BE reads rows **positionally** (see friction
+   2026-07-19 for why, and a proposed field-id-bound alternative). Captured
+   2026-07-19 as a "remember this" — well after read-path v1.
+
+## Upstream branch watch (surveyed 2026-07-22)
+
+Independent apache/doris branches we scanned for relevance beyond our tracked
+`branch-catalog-spi` baseline. None require action now; recorded so we don't
+re-derive "what is this branch" next time. (SHAs churn — match by subject.)
+
+- 🟡 **`data_lake_reader_refactoring` — WATCH (could move our BE read-path blockers).**
+  A BE-internals overhaul of the data-lake readers (25 commits off ~#62k master):
+  introduces `TableFormatReader` with **auto column-filling**, applies an NVI
+  (non-virtual-interface) template to `init_reader`/`get_next_block`, unifies the
+  standalone Parquet/ORC readers, moves column-fill `GenericReader → TableFormatReader`,
+  **removes `_fill_columns_from_path`**, refactors **count-agg pushdown**, "load query
+  decoupling", and "unify FE default value". This reshapes the exact BE machinery our
+  read path rides — `columns_from_path` hive-partition fill, count pushdown, and the
+  column-DEFAULT backfill fill path — and could plausibly touch our **position-delete
+  nullability blocker**. Staging/WIP branch, not merged. If it lands in our baseline,
+  re-verify: hive-layout partition fill, COUNT pushdown, DEFAULT backfill, delete-file
+  nullability.
+
+- 🟢 **`codex/paimon-jni-write` — reference only (not on our path).** Adds Paimon
+  **write via a BE JNI writer** (`vpaimon_jni_table_writer.cpp` + `PaimonJniWriter` in
+  `be-java-extensions/paimon-scanner` + Nereids `Logical/PhysicalPaimonTableSink` +
+  `PaimonInsertExecutor`), fixed-bucket write, unit + Spark-comparison regression tests.
+  It's the **write-side analogue of the JNI scanner** (Paimon has no native BE writer).
+  We write via `TIcebergTableSink` (BE writes Parquet natively), so we don't need it —
+  but it's the concrete pattern for a plugin write-sink + InsertExecutor, and pairs with
+  the "generic `plugin_driven` JNI" idea above. Hardcoded for paimon (not SPI-generic),
+  on plain master.
+
+- 🟢 **`branch-fs-spi` — parallel SPI track, not consumed yet.** A **FileSystem SPI
+  cutover** (~95 commits), the storage-layer analogue of `branch-catalog-spi`: extracts
+  FE filesystem access (S3/HDFS/Azure/Vault, presigned URLs) into an SPI'd `fe-filesystem`
+  plugin with classloader isolation. We forward `s3.*`/`AWS_*` creds to the BE ourselves
+  and don't compile against `fe-filesystem-spi`, so inert today. Long-term: if FE
+  filesystem access becomes SPI'd, our credential-forwarding / warehouse-path handling
+  could route through it. Watch only.
+
+- ⚪ **`branch-seq_rc_file` / `branch-seq_rc_file_hive` — irrelevant (stale, wrong format).**
+  Old branches (off ~2024 master #41062) adding a TVF + Hive support to read **SequenceFile
+  / RCFile** — legacy Hadoop formats. DuckLake is Parquet-only. No relevance; noted so we
+  don't re-investigate.
+
+### `branch-catalog-spi` learnings from the 2026-07-22 bump (#65893)
+
+The catalog-SPI migration is now **pushing per-source DDL validation OUT of fe-core into
+the connectors** (#65893): `CreateTableInfo` dropped the hardcoded iceberg/paimon
+`DISTRIBUTE BY` rejection, iceberg sort-order checks, and hive `NOT NULL` rejection —
+connectors validate inline in their own `createTable` (throwing `DorisConnectorException`),
+with **no new generic `validateCreateTable` SPI hook** (they mirror MaxCompute's
+`validateColumns`). Direction of travel for us: our own `DuckLakeConnectorMetadata.createTable`
++ `DuckLakeCreatePartitionMapper` are already the validation authority, so this *helps*
+(fe-core stops second-guessing us by engine string). The one behavioral gate to remember:
+**`CREATE TABLE ... ORDER BY` is now capability-gated on `ConnectorCapability.SUPPORTS_SORT_ORDER`**
+— see the TODO-write sorted-writes item.
