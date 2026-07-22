@@ -1,2 +1,5 @@
 build/
 .gradle/
+
+# Kotlin daemon session files (build-cache/kotlin-compiler-*.salive)
+.kotlin/
