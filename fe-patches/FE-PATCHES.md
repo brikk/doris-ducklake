@@ -27,10 +27,30 @@ upstream asks are tracked. See [[doris-fe-build-macos]] + [[doris-compose-smoke-
 
 - **2026-07-22 → tip subject `[fix](catalog) migrate rebased-in PhysicalStorageLayerAggregateTest
   to PluginDrivenExternalTable`** (was `d56c8f356c3`; SHAs churn on rebase — match the subject).
-  Bumped from `568c4bb4571` past 5 new catalog commits (another rebase). **Connector recompiles
-  with zero source changes** — full `check` (compile + tests + detekt) green against the fresh SPI
-  jars; committed `ducklake-fe.patch` applied **`git apply --check` clean** (both anchors survived);
-  overlay rebuilt with jar SHA parity. Per-commit impact:
+  Bumped from `568c4bb4571` past 5 new catalog commits (another rebase). Committed
+  `ducklake-fe.patch` applied **`git apply --check` clean** (both anchors survived); FE built, SPI
+  jars reinstalled, plugin `check` green, overlay rebuilt with jar SHA parity. **Unlike prior bumps,
+  this one required TWO connector source fixes** (both runtime, not compile) + surfaced one upstream
+  blocker — live smoke was essential to catch them:
+  - **FIX 1 (required) — bundle the iceberg SDK in the plugin zip.** `#65893` stripped the iceberg
+    SDK from fe-core, so our INSERT/CTAS hit `NoClassDefFoundError: org.apache.iceberg.types.Types$IntegerType`
+    at write-plan time (our `DuckLakeIcebergSchema`/`DuckLakeWritePlanProvider` use `Types`/`SchemaParser`/
+    `PartitionSpecParser`). Moved iceberg-api/-core from `compileOnly` → `implementation` (child-first,
+    Avro excluded — FE-provided), mirroring how fe-connector-iceberg now owns its SDK. `build.gradle.kts`.
+  - **FIX 2 (correct, insufficient) — `tSink.setCollectColumnStats(true)`.** `#65782` added the
+    `TIcebergTableSink.collect_column_stats` flag (defaults false → BE skips footer column stats).
+    DuckLake always wants them (read-path pruning + `ducklake_file_column_stats`), so we set it true.
+    `DuckLakeWritePlanProvider`. (Does NOT fix the COUNT(col) blocker below.)
+  - **⛔ BLOCKER (upstream, not connector-fixable) — bare `COUNT(<nullable col>)` on a plugin scan is
+    non-deterministic** on this baseline (`4/0/3/…`, want `2`; `COUNT(*)`/`SELECT *`/mixed-agg all
+    correct). Pushed-down single-column count keys per-column stats off the scan slot's `colUniqueId`,
+    which is `-1` for plugin external columns; regressed by the `#65548`/`#65782` count-path port to
+    the plugin-driven scan. Deterministically correct on `568c4bb`. Full writeup + fix options in
+    `../dev-docs/ducklake-doris-friction.md` (2026-07-22); tracked in `../dev-docs/TODO-read.md`. Smoke
+    marks §8b-count KNOWN-BLOCKED. **We adopt d56c8 anyway** — read/write/GC all green; only bare
+    single-column count on a nullable column is affected, and data integrity is intact.
+
+  Per-commit impact:
   - `9a0937651` port #65782 collect_column_stats sink flag + write-metrics → **fe-connector-iceberg
     only** (our writes use our own `DuckLakeWritePlanProvider`, not the iceberg connector — inert;
     the `collect_column_stats` sink flag is worth a later glance if we add write-side stats).

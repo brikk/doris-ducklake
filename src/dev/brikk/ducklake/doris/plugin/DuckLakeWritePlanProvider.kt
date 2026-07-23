@@ -97,6 +97,17 @@ internal class DuckLakeWritePlanProvider(
             setFileType(fileTypeFor(outputPath))
             setHadoopConfig(storageConfig())
             setOverwrite(overwrite)
+            // #65782 (branch-catalog-spi 2026-07-22): the BE now collects per-column
+            // Parquet stats ONLY when the sink sets this flag; it defaults false, so
+            // an unset sink writes files with no/degenerate column stats. DuckLake
+            // ALWAYS wants them — it persists file column stats in
+            // `ducklake_file_column_stats` (our read-path stats/count pruning + the
+            // BE's pushed-down `COUNT(col)` = rowcount − null_count both read them).
+            // Without this, `SELECT COUNT(<nullable col>)` wrongly returns 0. The
+            // native iceberg sink gates this on the table's iceberg metrics policy;
+            // DuckLake has no such policy and collects stats unconditionally, so we
+            // set it true always.
+            setCollectColumnStats(true)
             if (partitionSpec != null) {
                 val nameById = columns.associate { it.columnId to it.columnName }
                 val icebergSpec = DuckLakeIcebergPartitionSpec.of(partitionSpec, schema, nameById)

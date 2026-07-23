@@ -72,11 +72,25 @@ dependencies {
     // build TIcebergFileDesc per sanity-check §2.1 Option A. Stays compileOnly
     // so the plugin jar does NOT ship a second copy of the thrift classes.
     compileOnly("org.apache.doris:fe-thrift:$dorisVersion")
-    // Iceberg schema serialization for the write-sink schema_json (SchemaParser,
-    // mirroring native IcebergTableSink). FE-supplied at runtime via the iceberg
-    // connector libs (like fe-thrift) — compileOnly, version-matched to FE (1.10.1).
-    compileOnly("org.apache.iceberg:iceberg-api:1.10.1")
-    compileOnly("org.apache.iceberg:iceberg-core:1.10.1")
+    // Iceberg schema serialization for the write-sink schema_json (SchemaParser /
+    // PartitionSpecParser / Types, mirroring native IcebergTableSink).
+    //
+    // BUNDLED in the plugin zip (child-first), NOT compileOnly. Until the
+    // 2026-07-22 baseline (branch-catalog-spi #65893 "strip residual iceberg/hive/hudi
+    // deps from fe-core") the FE shipped the iceberg SDK on the shared classpath, so
+    // compileOnly sufficed. #65893 moved the iceberg SDK into fe-connector-iceberg's
+    // OWN plugin classloader, so fe-core no longer supplies it to us → INSERT/CTAS hit
+    // NoClassDefFoundError: org.apache.iceberg.types.Types$IntegerType at write-plan
+    // time. We now own our copy, exactly like fe-connector-iceberg owns its SDK
+    // (child-first, isolated per plugin classloader). Excludes below drop the
+    // transitives fe-core still provides (avro/parquet/guava/slf4j) to avoid shadowing.
+    implementation("org.apache.iceberg:iceberg-api:1.10.1")
+    implementation("org.apache.iceberg:iceberg-core:1.10.1") {
+        // Avro is FE-provided (our parquet-avro inlined-writer path uses the FE's copy);
+        // iceberg's SchemaParser/PartitionSpecParser/Types don't need it. Don't bundle a
+        // second child-first Avro that could shadow the host's across the SPI boundary.
+        exclude(group = "org.apache.avro", module = "avro")
+    }
     // Inlined-data reads (DuckLakeInlinedParquetWriter): the FE synthesizes a
     // temp Parquet from catalog-inlined rows so the BE can scan them. Written
     // with parquet-avro (field_id-carrying), which is FE-supplied at runtime

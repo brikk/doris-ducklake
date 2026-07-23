@@ -47,13 +47,25 @@ audit (full module suite green: 140+ tests + detekt):
      `COUNT(col)`-with-NULLs was a latent over-count on our side with no possible
      connector-side guard. No connector code change — the fix is purely the engine
      gate we depend on.
-   - [ ] **Smoke test (do after the 2026-07-21 FE build lands in the overlay):** add
-     a `compose/smoke.sh` step proving `COUNT(col)` on a nullable column with NULLs
-     returns the non-null count (NOT `record_count`), alongside a `COUNT(*)` that
-     still serves the metadata count. Our headless tests can't cover this (they
-     supply the `countPushdown` boolean themselves and only exercise `COUNT(*)`); the
-     gate lives in fe-core, so only a live BE run through the real Nereids translator
-     exercises the `COUNT(*)`-vs-`COUNT(col)` distinction end-to-end.
+   - [x] **Smoke test added** (`compose/smoke.sh` §8b-count): seeds a clean table with
+     NULLs and checks `COUNT(*)`=4 vs `COUNT(v)`=2. Our headless tests can't cover this
+     (they supply the `countPushdown` boolean and only exercise `COUNT(*)`); the gate
+     lives in fe-core, so only a live BE run exercises the `COUNT(*)`-vs-`COUNT(col)`
+     distinction end-to-end.
+   - [ ] ⛔ **BLOCKED (upstream regression, baseline `d56c8f356c3` / 2026-07-22): bare
+     `COUNT(<nullable col>)` on a plugin scan is non-deterministic.** The smoke's §8b-count
+     surfaced it: `SELECT COUNT(v)` alone returns garbage (`4/0/3/…`, want `2`) while
+     `COUNT(*)`, `SELECT *`, and mixed-agg counts are all correct. The pushed-down
+     single-column count keys per-column stats off the scan slot's `colUniqueId`, which is
+     **`-1`** for plugin external columns (no field id on `ConnectorColumn`). Deterministically
+     correct on `568c4bb`; regressed by the `#65548`/`#65782` count-path port to the
+     plugin-driven scan. **Not connector-fixable** by the `collect_column_stats=true` flag
+     (which we now set, correctly). Data integrity is unaffected (non-count reads are correct);
+     smoke marks it KNOWN-BLOCKED. Full writeup + upstream fix options in
+     [`ducklake-doris-friction.md`](./ducklake-doris-friction.md) (2026-07-22). Candidate
+     connector-side mitigation to try: propagate `DuckLakeColumnHandle.columnId` (the DuckLake
+     field id) onto the scan slot's `colUniqueId` so the count path keys stats correctly —
+     if the plugin scan node exposes a seam for it.
 - **Partition-bearing scan ranges** — `isPartitionBearing()`=true whenever the
   table has an active spec (stops BE hive-path-parsing our layout);
   identity-transform partition values surfaced lowercase-column-name-keyed

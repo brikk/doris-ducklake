@@ -19,6 +19,45 @@ Entry shape: **Symptom** → **Root cause** (file:line) → **Workaround**
 
 ---
 
+## 2026-07-22 · Plugin-driven `COUNT(<nullable col>)` pushdown returns non-deterministic garbage (`colUniqueId=-1`)
+
+**Symptom.** On `branch-catalog-spi` @ `d56c8f356c3`, `SELECT COUNT(v)` (v nullable,
+with NULLs) **alone** on a plugin-driven external table (DuckLake) returns
+**non-deterministic** values across identical consecutive runs on a *stable* table —
+observed `4, 0, 3, 3` where the correct answer is `2`. Everything that reads the actual
+data is correct and stable: `SELECT *`, `SELECT COUNT(*)` (= 4), and the mixed-agg
+`SELECT COUNT(*), COUNT(v), SUM(v)` (= 4, 2, 40). **Deterministically correct on the
+prior baseline `568c4bb`** with byte-identical connector code, so this is a regression
+introduced by this baseline, exposed on the plugin-driven path.
+
+**Root cause.** `EXPLAIN` shows `pushdown agg=COUNT` on the `VPluginDrivenScanNode`, and
+the `v` scan slot carries **`colUniqueId=-1`** (plus a bogus `isAutoIncrement=true`). A
+plugin external `ConnectorColumn` carries no field id, so fe-core assigns the slot
+`colUniqueId=-1`. The single-column `COUNT(col)` pushdown path — reworked by the
+`#65548` external COUNT(*)/COUNT(col) port and `#65782` `collect_column_stats` on this
+baseline — evidently keys per-column null-count stats off that unique id (or reads an
+uninitialized per-column counter when it is `-1`), yielding non-deterministic results
+for the plugin path. Only the **bare single-column count** is affected: mixed-agg and
+`SELECT *` don't take the collapsed count path.
+
+**Workaround.** None reliable connector-side. The correct value is always available via
+any read that isn't a bare single-column count (mixed agg / subquery). We set the sink's
+`collect_column_stats=true` (correct — DuckLake wants footer stats; see the write-plan
+provider) but that does **not** fix this. The compose smoke marks §8b-count
+**KNOWN-BLOCKED** (not a connector failure); data integrity is unaffected.
+
+**Fix (pickable upstream).** Options, in rising order of correctness: (1) the `COUNT(col)`
+pushdown must **not** fire for a plugin/external scan whose slot has no per-column unique
+id (`colUniqueId < 0`) — fall back to counting by reading, like the pre-`568c4bb` path
+did; (2) propagate the connector column's field id (we have `DuckLakeColumnHandle.columnId`
+= the DuckLake field id) through the plugin scan node onto the slot's `colUniqueId` so the
+count path can key stats correctly; (3) the BE count path must zero-init / bounds-check the
+per-column counter when the id is absent. This is almost certainly a regression in the
+`#65548`/`#65782` port to the plugin-driven (`PluginDrivenScanNode`) path — native iceberg
+carries real field ids so it wouldn't surface there. Tracked in `TODO-read.md`.
+
+---
+
 ## 2026-07-19 · Iceberg system-table JNI scanner: FE projection order IS the BE row contract (positional read)
 
 **Symptom.** Not one we hit — an upstream lesson from two `branch-catalog-spi`
