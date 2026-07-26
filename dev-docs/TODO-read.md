@@ -365,6 +365,18 @@ unit test and (where applicable) a live-FE smoke checkpoint.
 - [x] **LIMIT pushdown** — done via the 7-arg `planScan` `limit` param (not the `applyLimit` SPI seam, which stays off). On a clean scan — the exact predicate that makes COUNT(*) servable from metadata (`isCountServableFromMetadata`: no remaining/pushed filter, no pruned file set, no position deletes, no inlined data/deletes, no partial cross-snapshot files, latest snapshot) — `trimFilesToLimit` emits only the minimal PREFIX of data files whose cumulative `record_count` reaches `limit`. Under that gate each file's `record_count` is an exact live-row count, so the kept prefix provably holds ≥ `limit` rows and the BE (which still applies the real LIMIT operator) can never under-return; it just skips scheduling unreachable ranges. Iceberg's file-scan path ignores `limit` entirely and leans on BE early-termination — we go one step further only where metadata makes it provably safe. `limit ≤ 0` (no-limit sentinel, or fe-core's `effectiveSourceLimit` suppression when it strips non-pushable conjuncts) is a no-op. Tests: `DuckLakeScanPlanLimitPushdownTest` (trim-to-prefix, keep-all-when-limit-exceeds-rows, non-positive no-op, refuse-on-remaining-filter, refuse-on-delete-files).
 - ⛔️ **Function / expression pushdown** — out of scope: it would require the `trino_parity` DuckDB bridge, which doesn't fit Doris's BE-native Parquet read path. Do not attempt.
 
+### Step 6.4 — Per-statement memoization (perf, low priority)
+
+- [ ] **Memoize catalog lookups per statement via `ConnectorStatementScopes`.** Our
+  metadata re-resolves schema/table/columns on every SPI call within one statement
+  (getTableSchema, getColumnHandles, applyFilter, planScan each round-trip the
+  catalog). Upstream now ships the sanctioned seam: `ConnectorStatementScopes.resolveInStatement`
+  (added `b68cf015a57` #66029, 2026-07-26) keys a resolve-once memo by
+  `(catalogId, db, table, queryId)` + connector namespace — the same pattern es/hive/
+  hudi/maxcompute adopted. Needs a baseline at/after that commit. Do it on the next
+  natural connector touch; correctness is unaffected either way (our reads pin
+  snapshotId on the handle).
+
 ### Step 6.5 — Planner statistics
 - [x] **Table-level `getTableStatistics`** — done. `DuckLakeConnectorMetadata.getTableStatistics` returns `ConnectorTableStatistics(recordCount, fileSizeBytes)` from `ducklake_table_stats` (`DucklakeCatalog.getTableStats`). Whole-table for now; the planner applies pushed-filter selectivity on top. fe-core also falls back to `dataSize / rowWidth` if only a size is present, but we supply an exact `recordCount`.
  - [ ] ⛔️ **Column-level `getColumnStatistics`** — deliberately NOT implemented (decision 2026-07-19). DuckLake tracks **no NDV / distinct count anywhere** (`ducklake_file_column_stats` / `ducklake_table_column_stats` carry only value_count / null_count / column_size / min / max — verified). Doris's `PluginDrivenExternalTable.toColumnStatistic` requires an `ndv` and **ignores min/max**, so implementing the SPI method would force fabricating an NDV — and a wrong NDV misleads join/predicate cardinality worse than supplying no column stats at all (the planner already has an exact table row count from `getTableStatistics`). Revisit only if DuckLake grows real distinct-count stats, or if a sketch (HLL) NDV can be computed cheaply. The catalog already exposes `getColumnStats()` (value/null counts, size, min/max) if a future consumer needs the non-NDV parts.

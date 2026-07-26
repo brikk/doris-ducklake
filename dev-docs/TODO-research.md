@@ -71,6 +71,22 @@ section — those are tracked asks, not open research.
 
 ## Upstream branch watch (surveyed 2026-07-22)
 
+### branch-catalog-spi scan log (no re-vendor; pin stays d56c8f356c3)
+
+- **2026-07-24** (tip `420483b0c84`, 7 new): all paimon/iceberg/test/FS-minio; no
+  api/spi/thrift changes; patch clean. One to remember: `1afa210221d` hardens the BE —
+  a projected column missing from the table-side schema tree now fails the query
+  instead of SIGABRTing the BE. That's the crash our scalar-only schema dictionary
+  works around; once a BE image carries it, revisiting nested-column omission gets
+  safer. COUNT(col) blocker untouched.
+- **2026-07-26** (tip `1aa5ae9597e`, 3 new): `b68cf015a57` #66029 adds
+  `ConnectorStatementScopes` (additive; see the TODO-read memoization item) + cache
+  renames in fe-connector-cache (we don't link it). `0d88b8dec20` adds a defensive
+  decline-to-prune guard in fe-core `PruneFileScanPartition` (dup/null partition slots
+  scan-all instead of aborting) — inert while we expose no Nereids partition slots, a
+  safety net if we ever do. `1aa5ae9597e` paimon-only. No api/spi/thrift breaks;
+  patch clean; COUNT(col) + delete-nullability blockers untouched.
+
 Independent apache/doris branches we scanned for relevance beyond our tracked
 `branch-catalog-spi` baseline. None require action now; recorded so we don't
 re-derive "what is this branch" next time. (SHAs churn — match by subject.)
