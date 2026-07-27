@@ -18,8 +18,10 @@ import org.apache.doris.connector.api.handle.ConnectorTableHandle
 import org.apache.doris.connector.api.pushdown.ConnectorExpression
 import org.apache.doris.connector.api.scan.ConnectorScanPlanProvider
 import org.apache.doris.connector.api.scan.ConnectorScanRange
-import org.apache.doris.connector.api.scan.ConnectorScanRangeType
+import org.apache.doris.connector.api.scan.ConnectorScanRequest
 import org.apache.doris.thrift.TFileScanRangeParams
+import org.apache.doris.thrift.TIcebergFileDesc
+import org.apache.doris.thrift.TTableFormatFileDesc
 
 /**
  * Splits a DuckLake table read into per-file scan ranges. v1 emits one range
@@ -51,40 +53,57 @@ internal class DuckLakeScanPlanProvider(
     private val catalogProperties: Map<String, String> =
         java.util.Map.copyOf(Objects.requireNonNull(catalogProperties, "catalogProperties"))
 
-    override fun getScanRangeType(): ConnectorScanRangeType = ConnectorScanRangeType.FILE_SCAN
-
-    override fun planScan(
-        session: ConnectorSession?,
-        handle: ConnectorTableHandle,
-        columns: List<ConnectorColumnHandle>,
-        filter: Optional<ConnectorExpression>,
-    ): List<ConnectorScanRange> =
-        planScanInternal(handle, filter, countPushdown = false, limit = LIMIT_NONE)
-
     /**
-     * COUNT(*)- and LIMIT-pushdown-aware scan entry, mirroring the iceberg
-     * connector's 7-arg override (`IcebergScanPlanProvider.planScan` →
-     * `planScanInternal`). `requiredPartitions` is not consumed — file pruning is
-     * predicate-driven via the handle's [DuckLakeTableHandle.prunedFileIds].
+     * Single scan entry point. The SPI collapsed the former four `planScan`
+     * overloads into one `planScan(session, ConnectorScanRequest)` (upstream
+     * #66135-era): the request object carries the table handle, columns, remaining
+     * filter, row limit, pruned partitions and the COUNT(*) signal that used to be
+     * separate parameters. We destructure exactly the fields the two old overrides
+     * consumed — behaviour is identical to the previous 4-arg (countPushdown=false,
+     * no limit) and 7-arg (countPushdown + limit) paths.
+     *
+     * `requiredPartitions` is not consumed — file pruning is predicate-driven via
+     * the handle's [DuckLakeTableHandle.prunedFileIds].
      *
      * `limit` IS consumed: on a clean, unfiltered, latest-snapshot scan (the same
      * gate that makes COUNT(*) exactly servable from metadata) the engine will
      * stop the BE after `limit` rows, so we emit only the minimal prefix of data
      * files whose cumulative `record_count` already covers the limit — a
      * split-scheduling win with no correctness risk (see [trimFilesToLimit]).
-     * Iceberg's file-scan path leans purely on BE early-termination and ignores
-     * `limit`; we go one step further only where metadata makes it provably safe.
      */
     override fun planScan(
         session: ConnectorSession?,
-        handle: ConnectorTableHandle,
-        columns: List<ConnectorColumnHandle>,
-        filter: Optional<ConnectorExpression>,
-        limit: Long,
-        requiredPartitions: List<String>?,
-        countPushdown: Boolean,
+        request: ConnectorScanRequest,
     ): List<ConnectorScanRange> =
-        planScanInternal(handle, filter, countPushdown, limit)
+        planScanInternal(
+            handle = request.tableHandle,
+            filter = request.filter,
+            countPushdown = request.isCountPushdown,
+            limit = request.limit,
+        )
+
+    /**
+     * Read back the delete-file paths one range carries on its `iceberg_params`,
+     * for the VERBOSE per-backend EXPLAIN block (`deleteFileNum`/`deleteSplitNum`).
+     * This face replaced `ConnectorScanRange.getDeleteFiles()` when that method was
+     * removed from the range interface — delete files now travel on the per-range
+     * thrift and are surfaced here. Verbatim shape of `IcebergScanPlanProvider.
+     * getDeleteFiles`: every delete file's path, empty when the range carries no
+     * iceberg params or no delete files.
+     */
+    override fun getDeleteFiles(tableFormatParams: TTableFormatFileDesc?): List<String> {
+        if (tableFormatParams == null || !tableFormatParams.isSetIcebergParams) {
+            return emptyList()
+        }
+        val icebergParams: TIcebergFileDesc = tableFormatParams.icebergParams
+        if (!icebergParams.isSetDeleteFiles) {
+            return emptyList()
+        }
+        return icebergParams.deleteFiles
+            ?.filter { it != null && it.isSetPath }
+            ?.map { it.path }
+            ?: emptyList()
+    }
 
     private fun planScanInternal(
         handle: ConnectorTableHandle,
@@ -974,11 +993,6 @@ internal class DuckLakeScanPlanProvider(
         // The ConnectorScanRange "no precomputed count" sentinel every normal
         // range carries; only the collapsed count-pushdown range differs.
         private const val PUSH_DOWN_COUNT_NONE: Long = -1L
-
-        // The "no LIMIT" sentinel for the 4-arg planScan → planScanInternal path.
-        // Matches the engine's own no-limit convention (limit <= 0), so
-        // trimFilesToLimit is a no-op unless a real positive limit is pushed.
-        private const val LIMIT_NONE: Long = -1L
 
         // Scalar DuckLake types DuckLakeInlinedParquetWriter can encode
         // (decimal(p,s) handled separately). Keep in sync with the writer.

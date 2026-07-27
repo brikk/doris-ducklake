@@ -17,7 +17,9 @@ import org.junit.jupiter.api.Test
 internal class DuckLakeCreatePartitionMapperTest {
 
     private fun transformSpec(vararg fields: ConnectorPartitionField) =
-        ConnectorPartitionSpec(ConnectorPartitionSpec.Style.TRANSFORM, fields.toList(), emptyList())
+        // ConnectorPartitionSpec's 3rd ctor arg changed from a (partition-values) List to a
+        // `hasExplicitPartitionValues: Boolean`; the empty-values case is now `false`.
+        ConnectorPartitionSpec(ConnectorPartitionSpec.Style.TRANSFORM, fields.toList(), false)
 
     @Test
     fun unpartitionedYieldsNull() {
@@ -102,7 +104,7 @@ internal class DuckLakeCreatePartitionMapperTest {
                         ConnectorPartitionField("name", "bucket", listOf(4)),
                         ConnectorPartitionField("d", "day", emptyList()),
                     ),
-                    emptyList(),
+                    false,
                 ),
                 null,
             )!!

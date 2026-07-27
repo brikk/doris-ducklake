@@ -188,6 +188,8 @@ internal class DuckLakeWritePlanProviderTest {
         override fun getTableHandle(): ConnectorTableHandle = table
         override fun getColumns(): List<ConnectorColumn> = emptyList() // provider uses the catalog schema
         override fun isOverwrite(): Boolean = overwrite
-        override fun getWriteContext(): Map<String, String> = emptyMap()
+        // Renamed from getWriteContext() in the SPI write-handle consolidation; same
+        // Map<String, String> shape (static partition spec for a partition-targeted write).
+        override fun getStaticPartitionSpec(): Map<String, String> = emptyMap()
     }
 }

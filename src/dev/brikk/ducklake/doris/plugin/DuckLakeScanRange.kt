@@ -4,9 +4,7 @@ import java.io.Serializable
 import java.util.Locale
 import java.util.Objects
 import java.util.Optional
-import org.apache.doris.connector.api.scan.ConnectorDeleteFile
 import org.apache.doris.connector.api.scan.ConnectorScanRange
-import org.apache.doris.connector.api.scan.ConnectorScanRangeType
 import org.apache.doris.thrift.TFileFormatType
 import org.apache.doris.thrift.TFileRangeDesc
 import org.apache.doris.thrift.TIcebergDeleteFileDesc
@@ -93,7 +91,9 @@ internal class DuckLakeScanRange private constructor(builder: Builder) :
     @JvmName("positionDeletes")
     fun positionDeletes(): List<DuckLakePositionDelete> = positionDeletes
 
-    override fun getRangeType(): ConnectorScanRangeType = ConnectorScanRangeType.FILE_SCAN
+    // getRangeType()/ConnectorScanRangeType was removed from ConnectorScanRange in the
+    // SPI scan-surface consolidation (upstream #66135-era): every range is a file scan
+    // now, so the engine no longer asks. Nothing to override; behaviour unchanged.
 
     override fun getPath(): Optional<String> = Optional.of(path)
 
@@ -146,7 +146,11 @@ internal class DuckLakeScanRange private constructor(builder: Builder) :
      */
     override fun getPushDownRowCount(): Long = pushDownRowCount
 
-    override fun getDeleteFiles(): List<ConnectorDeleteFile> = emptyList()
+    // getDeleteFiles()/ConnectorDeleteFile was removed from ConnectorScanRange. Delete files
+    // now travel on the per-range thrift (iceberg_params.delete_files, populated below) and
+    // are read back for the VERBOSE EXPLAIN by ConnectorScanPlanProvider.getDeleteFiles(
+    // TTableFormatFileDesc) — implemented on DuckLakeScanPlanProvider. Behaviour unchanged:
+    // this range never carried SPI-level delete descriptors (it always returned empty).
 
     override fun populateRangeParams(formatDesc: TTableFormatFileDesc, rangeDesc: TFileRangeDesc) {
         Objects.requireNonNull(formatDesc, "formatDesc")

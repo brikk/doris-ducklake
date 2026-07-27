@@ -118,7 +118,15 @@ internal class DuckLakeSchemaDictionaryTest {
             listOf(
                 handle(1, "id"),
                 DuckLakeColumnHandle(2, "tags", ConnectorType.arrayOf(ConnectorType.of("STRING")), 1),
-                DuckLakeColumnHandle(3, "props", ConnectorType.of("STRUCT"), 2),
+                // ConnectorType.of("STRUCT") now throws — the SPI requires a STRUCT to carry
+                // at least one child. Build a valid one-field struct; the dictionary excludes it
+                // by typeName ("STRUCT"), so the childful shape exercises the same exclusion path.
+                DuckLakeColumnHandle(
+                    3,
+                    "props",
+                    ConnectorType.structOf(listOf("k"), listOf(ConnectorType.of("STRING"))),
+                    2,
+                ),
             ),
             emptyList(),
         )

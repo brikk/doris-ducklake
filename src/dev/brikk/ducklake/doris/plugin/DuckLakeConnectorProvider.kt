@@ -17,10 +17,10 @@ class DuckLakeConnectorProvider : ConnectorProvider {
         // properties (e.g. `enable.mapping.varbinary`) into every CREATE CATALOG
         // regardless of plugin, so a strict unknown-property check would reject
         // valid usage.
-        for (meta in DuckLakeConnectorProperties.catalogProperties()) {
-            if (meta.isRequired && properties[meta.name].isNullOrEmpty()) {
+        for (key in DuckLakeConnectorProperties.REQUIRED_KEYS) {
+            if (properties[key].isNullOrEmpty()) {
                 throw IllegalArgumentException(
-                    "DuckLake catalog property '${meta.name}' is required",
+                    "DuckLake catalog property '$key' is required",
                 )
             }
         }

@@ -10,7 +10,13 @@ import org.apache.doris.connector.api.pushdown.ConnectorIn
 import org.apache.doris.connector.api.pushdown.ConnectorLike
 import org.apache.doris.connector.api.pushdown.ConnectorLiteral
 import org.apache.doris.connector.api.pushdown.ConnectorOr
-import org.apache.doris.connector.api.scan.ConnectorScanRangeType
+import org.apache.doris.connector.api.pushdown.ConnectorExpression
+import org.apache.doris.connector.api.handle.ConnectorColumnHandle
+import org.apache.doris.connector.api.handle.ConnectorTableHandle
+import org.apache.doris.connector.api.scan.ConnectorScanPlanProvider
+import org.apache.doris.connector.api.scan.ConnectorScanRange
+import org.apache.doris.connector.api.scan.ConnectorScanRequest
+import org.apache.doris.connector.api.ConnectorSession
 import org.apache.doris.thrift.TFileFormatType
 import org.apache.doris.thrift.TFileRangeDesc
 import org.apache.doris.thrift.TFileScanRangeParams
@@ -62,7 +68,8 @@ internal class DuckLakeScanPlanProviderTest {
 
             val plan = connector.getScanPlanProvider()
             assertThat(plan).isNotNull()
-            assertThat(plan.scanRangeType).isEqualTo(ConnectorScanRangeType.FILE_SCAN)
+            // getScanRangeType()/ConnectorScanRangeType was removed from the SPI (every
+            // range is a file scan now), so there is no range-type to assert on the provider.
 
             val ranges = plan.planScan(null, handle, listOf(), Optional.empty())
 
@@ -73,13 +80,15 @@ internal class DuckLakeScanPlanProviderTest {
             assertThat(ranges).isNotEmpty()
 
             for (range in ranges) {
-                assertThat(range.rangeType).isEqualTo(ConnectorScanRangeType.FILE_SCAN)
+                // range.rangeType / range.deleteFiles were removed from ConnectorScanRange
+                // (range type is uniform; delete files now travel on the per-range thrift and
+                // are read back via ConnectorScanPlanProvider.getDeleteFiles). This orders-table
+                // scan has no position deletes, so the thrift-level list stays empty regardless.
                 assertThat(range.fileFormat).isEqualTo("parquet")
                 assertThat(range.start).isZero()
                 assertThat(range.fileSize).isPositive()
                 assertThat(range.length).isEqualTo(range.fileSize)
                 assertThat(range.partitionValues).isEmpty()
-                assertThat(range.deleteFiles).isEmpty()
 
                 val path = range.path
                     .orFail("scan range path missing")
@@ -913,3 +922,34 @@ internal class DuckLakeScanPlanCountAndPartitionTest {
             }
     }
 }
+
+// The SPI collapsed planScan's four overloads into a single
+// planScan(session, ConnectorScanRequest). These test-only shims reconstruct the
+// former 4-arg and 7-arg call shapes by packing the args into a ConnectorScanRequest,
+// so every call site stays byte-for-byte the same and exercises the identical inputs.
+private fun ConnectorScanPlanProvider.planScan(
+    session: ConnectorSession?,
+    handle: ConnectorTableHandle,
+    columns: List<ConnectorColumnHandle>,
+    filter: Optional<ConnectorExpression>,
+): List<ConnectorScanRange> =
+    planScan(session, ConnectorScanRequest.builder(handle, columns).filter(filter).build())
+
+private fun ConnectorScanPlanProvider.planScan(
+    session: ConnectorSession?,
+    handle: ConnectorTableHandle,
+    columns: List<ConnectorColumnHandle>,
+    filter: Optional<ConnectorExpression>,
+    limit: Long,
+    requiredPartitions: List<String>?,
+    countPushdown: Boolean,
+): List<ConnectorScanRange> =
+    planScan(
+        session,
+        ConnectorScanRequest.builder(handle, columns)
+            .filter(filter)
+            .limit(limit)
+            .requiredPartitions(requiredPartitions)
+            .countPushdown(countPushdown)
+            .build(),
+    )

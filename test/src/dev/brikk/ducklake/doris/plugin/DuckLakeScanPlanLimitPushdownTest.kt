@@ -5,7 +5,14 @@ import dev.brikk.ducklake.catalog.TestingDucklakePostgreSqlCatalogServer
 import dev.brikk.ducklake.doris.plugin.cache.FakeConnectorContext
 import org.apache.doris.connector.api.pushdown.ConnectorColumnRef
 import org.apache.doris.connector.api.pushdown.ConnectorComparison
+import org.apache.doris.connector.api.pushdown.ConnectorExpression
 import org.apache.doris.connector.api.pushdown.ConnectorLiteral
+import org.apache.doris.connector.api.handle.ConnectorColumnHandle
+import org.apache.doris.connector.api.handle.ConnectorTableHandle
+import org.apache.doris.connector.api.scan.ConnectorScanPlanProvider
+import org.apache.doris.connector.api.scan.ConnectorScanRange
+import org.apache.doris.connector.api.scan.ConnectorScanRequest
+import org.apache.doris.connector.api.ConnectorSession
 import org.apache.doris.thrift.TTableFormatFileDesc
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterAll
@@ -174,3 +181,33 @@ internal class DuckLakeScanPlanLimitPushdownTest {
             }
     }
 }
+
+// The SPI collapsed planScan's four overloads into a single
+// planScan(session, ConnectorScanRequest). These test-only shims reconstruct the
+// former 4-arg and 7-arg call shapes, so every call site stays identical.
+private fun ConnectorScanPlanProvider.planScan(
+    session: ConnectorSession?,
+    handle: ConnectorTableHandle,
+    columns: List<ConnectorColumnHandle>,
+    filter: Optional<ConnectorExpression>,
+): List<ConnectorScanRange> =
+    planScan(session, ConnectorScanRequest.builder(handle, columns).filter(filter).build())
+
+private fun ConnectorScanPlanProvider.planScan(
+    session: ConnectorSession?,
+    handle: ConnectorTableHandle,
+    columns: List<ConnectorColumnHandle>,
+    filter: Optional<ConnectorExpression>,
+    limit: Long,
+    requiredPartitions: List<String>?,
+    countPushdown: Boolean,
+): List<ConnectorScanRange> =
+    planScan(
+        session,
+        ConnectorScanRequest.builder(handle, columns)
+            .filter(filter)
+            .limit(limit)
+            .requiredPartitions(requiredPartitions)
+            .countPushdown(countPushdown)
+            .build(),
+    )

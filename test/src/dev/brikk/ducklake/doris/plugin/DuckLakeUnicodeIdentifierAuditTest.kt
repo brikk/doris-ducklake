@@ -177,7 +177,7 @@ internal class DuckLakeUnicodeIdentifierAuditTest {
             // Cleanup through the same surface (drop is metadata-only), proving
             // unicode names stay addressable for the full lifecycle.
             md.dropTable(null, handle)
-            md.dropDatabase(null, "événements 夏", false)
+            md.dropDatabase(null, "événements 夏", false, false)
             assertThat(md.listDatabaseNames(null)).doesNotContain("événements 夏")
         }
     }

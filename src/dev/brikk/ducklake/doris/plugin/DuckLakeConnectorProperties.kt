@@ -1,11 +1,15 @@
 package dev.brikk.ducklake.doris.plugin
 
-import org.apache.doris.connector.api.ConnectorPropertyMetadata
-
 /**
- * Catalog-level property metadata. Doris's DDL layer reads this for
- * `SHOW CREATE CATALOG`, completion, validation hints — implementing
- * it correctly removes the need for a separate validation class.
+ * Catalog-level property names and the required-key set for this connector.
+ *
+ * The SPI's typed `ConnectorPropertyMetadata` descriptor was removed (upstream
+ * #66135-era connector consolidation): the engine no longer consumes a per-property
+ * metadata list, and required-property validation is done directly by the connector's
+ * `ConnectorProvider.validateProperties`. We therefore keep only the key constants and
+ * the plain set of required keys the provider checks — identical validation behaviour,
+ * no dependency on the deleted descriptor type. (Iceberg's connector likewise validates
+ * with plain code in IcebergConnectorProvider.validateProperties.)
  */
 internal object DuckLakeConnectorProperties {
 
@@ -27,40 +31,15 @@ internal object DuckLakeConnectorProperties {
     // retention_threshold nuking recent time-travel snapshots. Default 7d (see DuckLakeProcedureOps).
     const val MAINTENANCE_MIN_RETENTION = "maintenance.min-retention"
 
-    fun catalogProperties(): List<ConnectorPropertyMetadata<*>> =
-        listOf(
-            ConnectorPropertyMetadata.requiredStringProperty(
-                METADATA_URL,
-                "JDBC URL of the DuckLake metadata database, e.g. " +
-                    "jdbc:postgresql://host:5432/ducklake",
-            ),
-            ConnectorPropertyMetadata.requiredStringProperty(
-                METADATA_USER,
-                "Username for the DuckLake metadata database",
-            ),
-            ConnectorPropertyMetadata.stringProperty(
-                METADATA_PASSWORD,
-                "Password for the DuckLake metadata database. May be empty for trust auth.",
-                "",
-            ),
-            ConnectorPropertyMetadata.requiredStringProperty(
-                STORAGE_WAREHOUSE,
-                "Warehouse root, e.g. s3://bucket/path or file:///local/path",
-            ),
-            ConnectorPropertyMetadata.booleanProperty(
-                ENABLE_MAPPING_TIMESTAMP_TZ,
-                "Map DuckLake timestamptz to zone-aware Doris TIMESTAMPTZ (needs a master/nightly BE — the converter is NOT in any 4.1.x release); " +
-                    "default false maps to naive DATETIMEV2 (correct UTC values).",
-                false,
-            ),
-            ConnectorPropertyMetadata.stringProperty(
-                MAINTENANCE_MIN_RETENTION,
-                "Minimum age floor for expire_snapshots retention mode (protects recent " +
-                    "time-travel snapshots from a too-small retention_threshold). Format " +
-                    "<number><unit> (s/m/h/d), e.g. 7d. Default 7d.",
-                "7d",
-            ),
-        )
+    // The catalog properties that must be present and non-empty on CREATE CATALOG.
+    // Same set the former requiredStringProperty(...) descriptors declared:
+    // metadata.url, metadata.user, storage.warehouse. metadata.password is optional
+    // (trust auth), and the boolean/retention knobs have defaults.
+    val REQUIRED_KEYS: List<String> = listOf(
+        METADATA_URL,
+        METADATA_USER,
+        STORAGE_WAREHOUSE,
+    )
 
     fun requireString(props: Map<String, String>, key: String): String {
         val value = props[key]

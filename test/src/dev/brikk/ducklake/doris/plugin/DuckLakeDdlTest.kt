@@ -108,7 +108,7 @@ internal class DuckLakeDdlTest {
             assertThat(catalog.getTable("w1_schema", "t1", catalog.currentSnapshotId)).isNull()
 
             // DROP DATABASE (now empty)
-            md.dropDatabase(null, "w1_schema", false)
+            md.dropDatabase(null, "w1_schema", false, false)
             assertThat(md.listDatabaseNames(null)).doesNotContain("w1_schema")
         }
     }
@@ -141,7 +141,7 @@ internal class DuckLakeDdlTest {
                     ConnectorPartitionSpec(
                         ConnectorPartitionSpec.Style.TRANSFORM,
                         listOf(ConnectorPartitionField("name", "bucket", listOf(4))),
-                        emptyList(),
+                        false,
                     ),
                 )
                 .build()
@@ -181,7 +181,7 @@ internal class DuckLakeDdlTest {
                             ConnectorPartitionField("d", "year", emptyList()),
                             ConnectorPartitionField("d", "day", emptyList()),
                         ),
-                        emptyList(),
+                        false,
                     ),
                 )
                 .build()
@@ -240,7 +240,7 @@ internal class DuckLakeDdlTest {
                     ConnectorPartitionSpec(
                         ConnectorPartitionSpec.Style.LIST,
                         listOf(ConnectorPartitionField("name", "bucket", listOf(4))),
-                        emptyList(),
+                        false,
                     ),
                 )
                 .build()
@@ -269,7 +269,7 @@ internal class DuckLakeDdlTest {
                     ConnectorPartitionSpec(
                         ConnectorPartitionSpec.Style.TRANSFORM,
                         listOf(ConnectorPartitionField("id", "truncate", listOf(10))),
-                        emptyList(),
+                        false,
                     ),
                 )
                 .build()
@@ -285,7 +285,7 @@ internal class DuckLakeDdlTest {
     fun dropDatabaseIfExistsIsNoOpWhenAbsent() {
         withCatalog { catalog ->
             // ifExists=true on a missing schema must not throw.
-            DuckLakeConnectorMetadata(catalog).dropDatabase(null, "never_existed", true)
+            DuckLakeConnectorMetadata(catalog).dropDatabase(null, "never_existed", true, false)
         }
     }
 

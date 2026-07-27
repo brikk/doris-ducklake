@@ -350,7 +350,7 @@ internal class DuckLakeConnectorMetadata(
     ): Optional<ConnectorMvccSnapshot> {
         // Pin the query to the snapshot already resolved on the table handle.
         val snapshotId = handle.asDuckLakeHandle<DuckLakeTableHandle>().snapshotId
-        return Optional.of(toMvccSnapshot(snapshotId, catalog.getSnapshot(snapshotId)))
+        return Optional.of(toMvccSnapshot(snapshotId))
     }
 
     // The P-series SPI consolidated the former getSnapshotAt(timestampMillis) +
@@ -377,7 +377,7 @@ internal class DuckLakeConnectorMetadata(
             ConnectorTimeTravelSpec.Kind.VERSION_REF -> null // no named refs in DuckLake
             else -> null // TAG / BRANCH / INCREMENTAL: unsupported by DuckLake
         }
-        return if (snap == null) Optional.empty() else Optional.of(toMvccSnapshot(snap.snapshotId, snap))
+        return if (snap == null) Optional.empty() else Optional.of(toMvccSnapshot(snap.snapshotId))
     }
 
     // Derives epoch-millis from a TIMESTAMP spec: a digital value is the raw epoch-millis
@@ -390,12 +390,14 @@ internal class DuckLakeConnectorMetadata(
             Instant.parse(spec.getStringValue()).toEpochMilli()
         }
 
-    private fun toMvccSnapshot(snapshotId: Long, snap: DucklakeSnapshot?): ConnectorMvccSnapshot {
-        val builder = ConnectorMvccSnapshot.builder().snapshotId(snapshotId)
-        if (snap != null) {
-            builder.timestampMillis(snap.snapshotTime.toEpochMilli())
-        }
-        return builder.build()
+    private fun toMvccSnapshot(snapshotId: Long): ConnectorMvccSnapshot {
+        // The SPI's ConnectorMvccSnapshot.Builder dropped timestampMillis (upstream
+        // #66135-era MVCC consolidation): the engine keys the snapshot on snapshotId,
+        // which applySnapshot re-stamps onto the handle. DuckLake's read path resolves
+        // everything by (tableId, snapshotId), so the wall-clock time was never read
+        // back — the pin is fully carried by snapshotId. The former `snap` argument
+        // (only ever read for the now-removed timestamp) is therefore gone.
+        return ConnectorMvccSnapshot.builder().snapshotId(snapshotId).build()
     }
 
     // Threads a resolved MVCC / time-travel snapshot onto the table handle BEFORE planScan,
@@ -442,15 +444,32 @@ internal class DuckLakeConnectorMetadata(
     // so they act unconditionally and let the catalog throw on a real conflict. Each
     // catalog op is its own atomic snapshot — the same primitives trino-ducklake drives.
 
-    override fun supportsCreateDatabase(): Boolean = true
-
+    // supportsCreateDatabase() was removed from the SPI (ConnectorSchemaOps): overriding
+    // createDatabase (whose default throws "CREATE DATABASE not supported") is now itself
+    // the declaration that this connector can create databases — the boolean could only
+    // restate that and drifted out of sync. Behaviour is identical: we still create.
     override fun createDatabase(session: ConnectorSession?, database: String, properties: Map<String, String>?) {
         catalog.createSchema(database)
     }
 
-    override fun dropDatabase(session: ConnectorSession?, database: String, ifExists: Boolean) {
+    // dropDatabase gained a `force` (CASCADE) parameter in the SPI consolidation. DuckLake
+    // never cascades — the catalog refuses to drop a schema that still has tables — so we
+    // reject an explicit FORCE loudly rather than silently perform a non-cascading drop
+    // (the exact failure the SPI note warns the old 3-arg default caused).
+    override fun dropDatabase(
+        session: ConnectorSession?,
+        database: String,
+        ifExists: Boolean,
+        force: Boolean,
+    ) {
         if (ifExists && catalog.getSchema(database, catalog.currentSnapshotId) == null) {
             return
+        }
+        if (force) {
+            throw org.apache.doris.connector.api.DorisConnectorException(
+                "DROP DATABASE ... FORCE (CASCADE) is not supported for DuckLake catalogs; " +
+                    "drop the tables first, then DROP DATABASE.",
+            )
         }
         // No CASCADE: the catalog refuses to drop a schema that still has tables.
         catalog.dropSchema(database)

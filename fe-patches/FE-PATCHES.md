@@ -1,30 +1,51 @@
-# FE patches needed for the DuckLake plugin connector
+# FE patches for the DuckLake plugin connector (OBSOLETE — historical)
 
 The DuckLake connector is a Doris **plugin (SPI) connector**. The Doris FE
 (worktree `~/DEV/OSS/doris-catalog-spi`, branch `branch-catalog-spi`, the
-P-series connector-SPI migration) carries a couple of
-generic guards keyed on a hard-coded catalog-type set, so they don't yet know
-about the `"ducklake"` catalog type. Until these land upstream we apply them as
-working-tree patches to the local FE checkout, build the FE, and overlay it into
-the `doris-fe:pr62767-local` image used by `compose/docker-compose.yml`.
+P-series connector-SPI migration) used to carry two generic guards keyed on a
+hard-coded catalog-type set that didn't know about `"ducklake"`. Upstream #66135
+(`fce5af4e041`, 2026-07-27) removed both: a registered `ConnectorProvider`
+claiming its type is now sufficient, and `ENGINE=` is optional/connector-owned.
+So the FE now builds **PATCH-FREE** — `ducklake-fe.patch` is no longer applied.
 
-These are **not** committed to the OSS Doris checkout — they live here as a
-reapplyable patch (`ducklake-fe.patch`) so the FE build is reproducible and the
-upstream asks are tracked. See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]].
+The patch file stays in-repo only as history (the two asks it tracked are now
+resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]].
 
- > **⚠️ Build from the PINNED commit.** `branch-catalog-spi` rebases constantly.
- > The **current pin** (the commit we last researched, validated the plugin against,
- > and re-diffed this patch to) is the newest entry in the **Re-vendor log** below —
- > as of 2026-07-22: `d56c8f356c3`, subject *"[fix](catalog) migrate rebased-in
- > PhysicalStorageLayerAggregateTest to PluginDrivenExternalTable"*. `compose/README.md`
- > step 1 pins the same commit. **Do not build from a blind branch tip.** If the SHA has been
-> GC'd, check out the commit with that exact subject and re-validate (re-diff this
-> patch — `git apply --check` clean — and re-run the REPORT §"upstream re-check")
-> before building. Keep all three in sync: this note, the Re-vendor log, and
-> `compose/README.md`.
+ > **⚠️ Build from the PINNED commit — PATCH-FREE as of 2026-07-27.** `branch-catalog-spi`
+ > rebases constantly. The **current pin** is the newest entry in the **Re-vendor log**
+ > below — as of 2026-07-27: `a0c10f0672b`, subject *"[chore](handoff) record the
+ > 2026-07-27c rebase onto e7b7f1d1359 (upstream #66004 storage facade)"*. `compose/README.md`
+ > pins the same commit. **`ducklake-fe.patch` is OBSOLETE** — upstream #66135 removed both
+ > anchors, so the FE now builds pristine with NO patch. The patch file is kept in-repo only
+ > as history. **Do not build from a blind branch tip.** If the SHA has been GC'd, check out
+ > the commit with that exact subject and re-validate the SPI surface before building. Keep
+ > this note, the Re-vendor log, and `compose/README.md` in sync.
 
 ### Re-vendor log
 
+- **2026-07-27 → pin `a0c10f0672b`, subject `[chore](handoff) record the 2026-07-27c rebase
+  onto e7b7f1d1359 (upstream #66004 storage facade)`** (SHAs churn on rebase — match the
+  subject). **First PATCH-FREE build.** #66135 (`fce5af4e041`) removed BOTH FE-patch anchors:
+  `CatalogFactory.SPI_READY_TYPES` (a provider claiming its type is enough — "installing a
+  plugin is all it takes") and `CreateTableInfo.pluginCatalogTypeToEngine` (`ENGINE=` is now
+  optional/connector-owned via `ConnectorProvider.acceptedCreateTableEngineNames()`, default
+  empty; PARTITION BY / DISTRIBUTED BY validation is the connector's job; `displayEngineName()`
+  defaults to `getType()`). `ducklake-fe.patch` is now obsolete/history.
+  - **Two behavior wins, both verified live:** (1) no whitelist — `CREATE CATALOG type=ducklake`
+    works on the UNPATCHED FE; (2) no ENGINE padding — W1's bucket-partitioned
+    `CREATE TABLE ... PARTITION BY LIST (bucket(4, name)) ()` (no `ENGINE=`) succeeds on the
+    generic path, transform recorded `bucket(4)`; `SHOW TABLE STATUS` shows `Engine: ducklake`.
+  - **SPI churn our plugin adapted to** (all mechanical, behavior identical): `planScan` overloads
+    collapsed into `ConnectorScanRequest` (+ `getDeleteFiles(TTableFormatFileDesc)`, `getScanRangeType`
+    removed); `ConnectorScanRange` lost `getRangeType`/`getDeleteFiles` overrides;
+    `ConnectorMvccSnapshot.Builder` lost `timestampMillis`; `supportsCreateDatabase` removed,
+    `dropDatabase` gained a `force` arg (rejected — no CASCADE); `ConnectorPropertyMetadata`
+    removed → plain `REQUIRED_KEYS`; tests adapted (planScan shims, `ConnectorPartitionSpec` 3rd
+    arg List→Boolean, `getWriteContext`→`getStaticPartitionSpec`, `ConnectorType.of("STRUCT")`→`structOf`).
+    239 tests + detekt green.
+  - **Smoke: FULL PASS.** Reads green, W1/W2/W2c/W3 green, S3 reads green. **Known-blocked unchanged:**
+    §8b-count `COUNT(<nullable col>)` (colUniqueId=-1) and Step-7 delete nullability — both pre-existing
+    upstream, tracked in `../dev-docs/TODO-read.md`.
 - **2026-07-22 → tip subject `[fix](catalog) migrate rebased-in PhysicalStorageLayerAggregateTest
   to PluginDrivenExternalTable`** (was `d56c8f356c3`; SHAs churn on rebase — match the subject).
   Bumped from `568c4bb4571` past 5 new catalog commits (another rebase). Committed
@@ -145,28 +166,31 @@ upstream asks are tracked. See [[doris-fe-build-macos]] + [[doris-compose-smoke-
   to `~/.m2` (`-P flatten`), plugin zip + `doris-fe:pr62767-local` overlay image rebuilt,
   module suite + detekt + checkAbi green.
 
-## Apply + rebuild
+## Build + rebuild (PATCH-FREE)
+
+No patch step — `ducklake-fe.patch` is historical (see the warning box). Just check out
+the pin and build pristine.
 
 ```bash
-# ⚠️ PIN to the commit we last researched + re-diffed against (branch-catalog-spi REBASES —
-#    don't build from a blind branch tip). Pin (2026-07-22): d56c8f356c3
-#    subject "[fix](catalog) migrate rebased-in PhysicalStorageLayerAggregateTest to PluginDrivenExternalTable".
-#    SHA gone (GC'd)? check out the commit with that exact subject, then re-diff this patch
-#    (git apply --check must be clean) and re-run the REPORT §"upstream re-check" before building.
-cd ~/DEV/OSS/doris-catalog-spi && git checkout d56c8f356c3   # branch-catalog-spi @ pinned commit
-git apply --3way /path/to/jvm/doris-ducklake/fe-patches/ducklake-fe.patch   # --3way tolerates line-offset drift
+# ⚠️ PIN (branch-catalog-spi REBASES — don't build from a blind branch tip). Pin (2026-07-27):
+#    a0c10f0672b, subject "[chore](handoff) record the 2026-07-27c rebase onto e7b7f1d1359
+#    (upstream #66004 storage facade)". SHA GC'd? check out the commit with that exact subject.
+cd ~/DEV/OSS/doris-catalog-spi && git checkout -- . && git checkout a0c10f0672b   # pristine, NO PATCH
 JAVA_HOME=<jdk17> DISABLE_BUILD_UI=ON ./build.sh --fe                 # ~2 min incremental
 # then re-install the SPI artifacts our gradle build compiles against (mavenLocal):
-#   cd fe && <mvn> install -pl fe-connector/fe-connector-api,fe-connector/fe-connector-spi,fe-thrift -DskipTests
+#   cd fe && <mvn> install -P flatten -pl fe-connector/fe-connector-api,fe-connector/fe-connector-spi,fe-thrift -DskipTests
 # (stale ~/.m2 SPI jars => connector compiles against old API, NoSuchMethodError at FE load)
 # re-image the overlay (FROM apache/doris:fe-4.1.0, COPY ./output/fe):
-podman build -f docker/runtime/doris-fe-overlay/Dockerfile \
+docker build -f compose/fe-overlay/Dockerfile \
   -t doris-fe:pr62767-local \
   --build-arg BASE_IMAGE=apache/doris:fe-4.1.0 --build-arg OUTPUT_PATH=./output <staging>
 # then tear the cluster down (-v) and rerun compose/smoke.sh so the fresh FE loads.
 ```
 
-## The patches (`ducklake-fe.patch`)
+## The patches (`ducklake-fe.patch`) — HISTORICAL, no longer applied
+
+Both anchors below were removed by upstream #66135 (2026-07-27); the FE builds patch-free.
+Kept for the record of what the two asks were.
 
 ### 1. `CatalogFactory.SPI_READY_TYPES` += `"ducklake"`  — the route/write gate
 `fe/fe-core/src/main/java/org/apache/doris/datasource/CatalogFactory.java`

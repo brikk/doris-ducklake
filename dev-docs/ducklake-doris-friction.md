@@ -476,6 +476,12 @@ capability/engine instead of a hardcoded per-type `switch`, so a new
 CREATE-TABLE-capable SPI full-adopter doesn't need an FE edit. As a minimal
 interim, add `case "ducklake": return ENGINE_ICEBERG;`.
 
+**FIXED UPSTREAM (2026-07-27, #66135).** `pluginCatalogTypeToEngine` removed —
+`ENGINE=` is now optional/connector-owned (`ConnectorProvider.acceptedCreateTableEngineNames()`,
+default empty) and `displayEngineName()` defaults to `getType()`. Verified live: a
+bucket-partitioned no-`ENGINE=` `CREATE TABLE` succeeds on the generic path and tables
+display engine `ducklake`.
+
 ---
 
 ## 2026-06-10 · External partitioned `CREATE TABLE` arrives as `Style.LIST`/`RANGE`, never `Style.TRANSFORM`
@@ -739,6 +745,10 @@ on every Doris release we deploy.
   wins.
 - Until then: log a warning when discovery skips a registered provider.
   The silent drop is the worst part.
+
+**FIXED UPSTREAM (2026-07-27, #66135).** `SPI_READY_TYPES` removed — a registered
+`ConnectorProvider` claiming its type is now sufficient. Verified live patch-free
+(`CREATE CATALOG type=ducklake` works unpatched).
 
 ---
 
