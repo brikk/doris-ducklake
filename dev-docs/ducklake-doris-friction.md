@@ -433,57 +433,6 @@ rather than the source Doris column type. (BE-side; separate from the FE/connect
 
 ---
 
-## 2026-06-10 · `CreateTableInfo.pluginCatalogTypeToEngine` only knows `"max_compute"` → plugin `CREATE TABLE` rejected
-
-**Symptom.** On the live FE, `CREATE DATABASE` on the `dl` (ducklake) plugin
-catalog succeeds, but `CREATE TABLE` is rejected before the connector is ever
-called:
-
-```
-ERROR 1105 (HY000) at line 4: errCode = 2,
-detailMessage = Current catalog does not support create table: dl
-```
-
-(W2/W2c INSERT and CREATE/DROP DATABASE were already routed fine — only
-table-level CREATE/DROP failed.)
-
-**Root cause.** `CreateTableInfo.paddingEngineName` pads a legacy engine name for
-a no-ENGINE `CREATE TABLE` on a plugin catalog by calling
-`pluginCatalogTypeToEngine()`, whose `switch` only maps `"max_compute"` →
-`ENGINE_MAXCOMPUTE`; every other plugin type (incl. `"ducklake"`) hits
-`default → null`, so the `else` branch throws
-(`CreateTableInfo.java:928`, switch at `:942`). The rejection is purely FE
-engine-padding — `PluginDrivenExternalCatalog.createTable()` is generic (it
-converts the request and calls `metadata.createTable`), and the connector mapping
-is headless-green (`DuckLakeDdlTest`). The catalog-engine consistency check
-(`checkEngineWithCatalog`, `:396`) calls the *same* function, so it stays
-consistent automatically.
-
-**Workaround.** Pad `ENGINE_ICEBERG` for `"ducklake"` (working-tree patch on the
-local FE; tracked in `jvm/doris-ducklake/fe-patches/ducklake-fe.patch`). Iceberg
-is the right engine: DuckLake is Iceberg-shaped (TIcebergTableSink, Iceberg
-transform partitioning), `checkEngineName` accepts `ENGINE_ICEBERG`, and the
-iceberg path is the one that accepts `PARTITION BY (bucket(N,col))` and rejects
-`DISTRIBUTE BY` — matching the connector's own DDL contract. Routing is by catalog
-*instance* (a `PluginDrivenExternalCatalog`), not the engine string, so the pad
-never diverts CREATE TABLE to the native Iceberg DDL handler. Read-side engine
-display (`PluginDrivenExternalTable.getEngine`) is left generic so the shipped
-read path is untouched. **Validated GREEN** in `compose/smoke.sh` W1 DDL step.
-
-**Fix.** Generalize `pluginCatalogTypeToEngine` (and the read-side switches in
-`PluginDrivenExternalTable`) to consult the connector's declared
-capability/engine instead of a hardcoded per-type `switch`, so a new
-CREATE-TABLE-capable SPI full-adopter doesn't need an FE edit. As a minimal
-interim, add `case "ducklake": return ENGINE_ICEBERG;`.
-
-**FIXED UPSTREAM (2026-07-27, #66135).** `pluginCatalogTypeToEngine` removed —
-`ENGINE=` is now optional/connector-owned (`ConnectorProvider.acceptedCreateTableEngineNames()`,
-default empty) and `displayEngineName()` defaults to `getType()`. Verified live: a
-bucket-partitioned no-`ENGINE=` `CREATE TABLE` succeeds on the generic path and tables
-display engine `ducklake`.
-
----
-
 ## 2026-06-10 · External partitioned `CREATE TABLE` arrives as `Style.LIST`/`RANGE`, never `Style.TRANSFORM`
 
 **Symptom.** With the engine-padding fix above in place, an unpartitioned
@@ -717,38 +666,6 @@ out.put("AWS_ENDPOINT", "http://minio:9000");  // BE-form (the one that actually
 - Make `convert_properties_to_s3_conf` accept both (~5-line BE switch), OR
 - Document the contract in `populateScanLevelParams` javadoc:
   *"S3 creds must be `AWS_*`, HDFS `dfs.*`, …"*
-
----
-
-## 2026-05-19 · `SPI_READY_TYPES` whitelist silently drops unknown ConnectorProviders
-
-**Symptom.** Provider correctly registered via
-`META-INF/services/org.apache.doris.connector.spi.ConnectorProvider`,
-`getType()` returns `"ducklake"`, jar on classpath. `CREATE CATALOG`
-still fails:
-
-```
-ERROR: Unknown catalog type: ducklake
-```
-
-No FE log line saying the provider was discovered-but-rejected.
-
-**Root cause.** `CatalogFactory.java` hardcodes
-`SPI_READY_TYPES = {"jdbc", "es", "iceberg"}`. Providers outside that
-set fall through to the legacy switch.
-
-**Workaround.** One-line worktree patch (`+ "ducklake"`) re-applied
-on every Doris release we deploy.
-
-**Fix.**
-- End state: drop the whitelist; any registered `ConnectorProvider`
-  wins.
-- Until then: log a warning when discovery skips a registered provider.
-  The silent drop is the worst part.
-
-**FIXED UPSTREAM (2026-07-27, #66135).** `SPI_READY_TYPES` removed — a registered
-`ConnectorProvider` claiming its type is now sufficient. Verified live patch-free
-(`CREATE CATALOG type=ducklake` works unpatched).
 
 ---
 
