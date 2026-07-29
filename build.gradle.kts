@@ -173,6 +173,23 @@ tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
 }
 
+// #66211 (doris branch-catalog-spi 88abe41a4e3, "replace the always-true connector apiVersion()
+// with a manifest-carried API version gate for all four plugin families"): the FE's ApiVersionGate
+// now REJECTS any directory-loaded connector plugin whose factory-defining jar does not declare a
+// matching Doris-Connector-Plugin-Api-Version MANIFEST main attribute (fail-closed — absent ==
+// rejected). The gate reads this attribute from the jar that defines our ConnectorProvider factory
+// class (DirectoryPluginRuntimeManager.readManifestMainAttribute via ManifestVersions.jarOf), i.e.
+// THIS jar, and compares MAJOR only against the kernel resource
+// /META-INF/doris/connector-plugin-api-version.properties (api.version) baked into fe-connector-spi.
+// Both sides currently ship "1.0" (fe/fe-connector/pom.xml <connector.plugin.api.version>). We stamp
+// the same value here so our plugin jar declares major 1, exactly like the reference
+// doris-fe-connector-iceberg.jar. Bump this when the SPI baseline's major changes.
+tasks.jar {
+    manifest {
+        attributes("Doris-Connector-Plugin-Api-Version" to "1.0")
+    }
+}
+
 // Plugin zip mirroring fe-connector-iceberg/src/main/assembly/plugin-zip.xml.
 // Produces a flat lib/ layout containing this jar + every runtime dep that
 // the FE parent classloader doesn't already supply. The excludes track the

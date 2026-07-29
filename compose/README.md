@@ -33,8 +33,10 @@ One-time `~20 min` cluster build (FE image, image pulls); `~2–3 min` per re-ru
 ### Prereqs
 - The **FE image** `doris-fe:pr62767-local` must exist locally (see *Building the FE
   image* below). Built from a P-series FE (`branch-catalog-spi`) pinned at
-  `a0c10f0672b` (2026-07-27) — builds **PATCH-FREE** since upstream #66135 (a registered
+  `0da96f1ad3e` (2026-07-29) — builds **PATCH-FREE** since upstream #66135 (a registered
   `ConnectorProvider` claiming `type=ducklake` is enough; no `SPI_READY_TYPES` whitelist).
+  Since #66211 the plugin jar must carry the `Doris-Connector-Plugin-Api-Version` manifest
+  attribute (stamped by our `jar` task) or the FE refuses to load it.
 - The stock BE image `apache/doris:be-4.1.0` (pulled automatically).
 - Docker **or** podman (see *Running under podman* ).
 
@@ -80,7 +82,7 @@ The upstream Doris checkout and its worktrees live under `~/DEV/OSS/`:
   Doris repo; look here for BE source, base build scripts, upstream history.
 - **`~/DEV/OSS/doris-catalog-spi`** — a **linked git worktree** of that same repo,
   parked (detached HEAD) at the **pinned** connector-SPI commit we build the FE
-  from (`a0c10f0672b`, `branch-catalog-spi`). **This is the one we build the plugin
+  from (`0da96f1ad3e`, `branch-catalog-spi`). **This is the one we build the plugin
   FE against.** Its `output/fe/` is the FE build below.
 
 (Both are the same `.git`; `git worktree list` from either shows the pair. If a path
@@ -106,15 +108,15 @@ Verify the runtime image actually carries the build you think it does:
 # ⚠️ PINNED COMMIT — build from the SAME commit we last researched against.
 #   `branch-catalog-spi` REBASES CONSTANTLY, so do NOT just `git pull` the branch tip: a newer
 #   tip may add a non-default SPI method that breaks the plugin.
-#   Pin (2026-07-27): a0c10f0672b
-#     subject: "[chore](handoff) record the 2026-07-27c rebase onto e7b7f1d1359 (upstream #66004 storage facade)"
+#   Pin (2026-07-29): 0da96f1ad3e
+#     subject: "[chore](handoff) record the 2026-07-30 rebase onto 794d514479e (upstream #65991)"
 #   SHAs churn on rebase — if that SHA is GC'd/gone, check out the commit with that exact SUBJECT.
 #   Builds PATCH-FREE since upstream #66135 removed both former FE-patch anchors — NO patch to apply.
 #   The current pin is recorded in ../fe-patches/FE-PATCHES.md → "Re-vendor log" (keep both in sync).
 
 ```bash
 # 1. Build the P-series FE (JDK 17) in the pinned worktree — PATCH-FREE (no patch step):
-cd ~/DEV/OSS/doris-catalog-spi && git checkout -- . && git checkout a0c10f0672b   # pristine, NO PATCH
+cd ~/DEV/OSS/doris-catalog-spi && git checkout -- . && git checkout 0da96f1ad3e   # pristine, NO PATCH
 JAVA_HOME=<jdk17> DISABLE_BUILD_UI=ON ./build.sh --fe        # → output/fe  (see doris-fe-build-macos memory)
 # Also reinstall the SPI compile jars our gradle build needs (see the artifacts table above):
 cd fe && <mvn> install -P flatten -pl fe-connector/fe-connector-api,fe-connector/fe-connector-spi,fe-thrift -DskipTests
@@ -150,8 +152,9 @@ or plugin changes so the fresh FE reloads everything.
 | `FE never came up` but FE log shows SQL | The FE *is* up; the health-check `SELECT 1` needs a **live BE** (Nereids assigns even constant queries to a backend). Check `SHOW BACKENDS\G` → `Alive`. |
 | BE `Exited (0)`, `ErrMsg: NoRouteToHost`, FE `No backend available as scan node` | BE crashed. On x86_64 this is the **arm64-under-emulation** crash — set `DORIS_BE_PLATFORM=linux/amd64` + re-pull the amd64 BE. |
 | FE exits 255; `fe.log` shows BDB JE `NoClassDefFoundError: …JVMSystemUtils` → `NullPointerException … CgroupV2Subsystem.getInstance … anyController is null` | The base FE image's bundled **JDK 17 is too old for this host's cgroup v2** (NPEs during container-resource detection). Native-Linux/cgroup-v2 boxes hit this; the old Docker-Desktop VM didn't. Fix: `fe.conf` `JAVA_OPTS_FOR_JDK_17` carries `-XX:-UseContainerSupport` (safe — heap is pinned `-Xmx2g`). |
-| `Unknown catalog type: ducklake` on `CREATE CATALOG` | FE built from a pin older than #66135, or a stale image. Rebuild the FE from pin `a0c10f0672b`+ (patch-free) and re-image. |
-| `Current catalog does not support create table: dl` on `CREATE TABLE` | FE built from a pin older than #66135 (pre-`acceptedCreateTableEngineNames`). Rebuild from pin `a0c10f0672b`+ and re-image. |
+| `Unknown catalog type: ducklake` on `CREATE CATALOG` | FE built from a pin older than #66135, or a stale image. Rebuild the FE from pin `0da96f1ad3e`+ (patch-free) and re-image. |
+| `Current catalog does not support create table: dl` on `CREATE TABLE` | FE built from a pin older than #66135 (pre-`acceptedCreateTableEngineNames`). Rebuild from pin `0da96f1ad3e`+ and re-image. |
+| Plugin load `failureCount>0` / `STAGE_API_VERSION` refusal | FE built at/after #66211 but the plugin jar lacks the `Doris-Connector-Plugin-Api-Version` manifest attribute. Our `jar` task stamps `1.0`; rebuild the plugin zip. |
 | INSERT: `Unsupported compress type UNKNOWN with parquet` | (fixed) sink must set a compression — we use `ZSTD`. |
 | Read-back path doubled (`…/doris_w/s3%3A//…`) | (fixed) the BE returns an absolute path; the connector relativizes it against the table data dir. |
 
@@ -171,4 +174,4 @@ or plugin changes so the fresh FE reloads everything.
 - **The FE builds PATCH-FREE** since upstream #66135 (2026-07-27) removed both former
   FE-patch anchors (`SPI_READY_TYPES` whitelist + `pluginCatalogTypeToEngine`). The old
   `ducklake-fe.patch` is kept only as history — see [`../fe-patches/FE-PATCHES.md`](../fe-patches/FE-PATCHES.md).
-  Build from pin `a0c10f0672b`+, then re-image the FE.
+  Build from pin `0da96f1ad3e`+, then re-image the FE.

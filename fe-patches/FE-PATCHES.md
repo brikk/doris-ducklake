@@ -11,18 +11,41 @@ So the FE now builds **PATCH-FREE** — `ducklake-fe.patch` is no longer applied
 The patch file stays in-repo only as history (the two asks it tracked are now
 resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]].
 
- > **⚠️ Build from the PINNED commit — PATCH-FREE as of 2026-07-27.** `branch-catalog-spi`
- > rebases constantly. The **current pin** is the newest entry in the **Re-vendor log**
- > below — as of 2026-07-27: `a0c10f0672b`, subject *"[chore](handoff) record the
- > 2026-07-27c rebase onto e7b7f1d1359 (upstream #66004 storage facade)"*. `compose/README.md`
- > pins the same commit. **`ducklake-fe.patch` is OBSOLETE** — upstream #66135 removed both
- > anchors, so the FE now builds pristine with NO patch. The patch file is kept in-repo only
- > as history. **Do not build from a blind branch tip.** If the SHA has been GC'd, check out
- > the commit with that exact subject and re-validate the SPI surface before building. Keep
- > this note, the Re-vendor log, and `compose/README.md` in sync.
+ > **⚠️ Build from the PINNED commit — PATCH-FREE.** `branch-catalog-spi` rebases
+ > constantly. The **current pin** is the newest entry in the **Re-vendor log** below —
+ > as of 2026-07-29: `0da96f1ad3e`, subject *"[chore](handoff) record the 2026-07-30
+ > rebase onto 794d514479e (upstream #65991)"*. `compose/README.md` pins the same commit.
+ > **`ducklake-fe.patch` is OBSOLETE** — upstream #66135 removed both anchors, so the FE
+ > builds pristine with NO patch. The patch file is kept in-repo only as history.
+ > **Plugin jars must now carry the `Doris-Connector-Plugin-Api-Version` manifest attribute
+ > (#66211) or the FE refuses to load them** — see the 2026-07-29 log entry. **Do not build
+ > from a blind branch tip.** If the SHA has been GC'd, check out the commit with that exact
+ > subject and re-validate the SPI surface before building. Keep this note, the Re-vendor
+ > log, and `compose/README.md` in sync.
 
 ### Re-vendor log
 
+- **2026-07-29 → pin `0da96f1ad3e`, subject `[chore](handoff) record the 2026-07-30 rebase
+  onto 794d514479e (upstream #65991)`** (SHAs churn on rebase — match the subject). Bumped
+  from `a0c10f0672b`. Still PATCH-FREE (unchanged since #66135). Driver: the Doris team is
+  about to use this connector as their first external SPI test case, so we want to be current.
+  - **⚠️ #66211 (`88abe41a4e3`) — fail-closed plugin API-version gate. Every plugin author
+    hits this.** The FE now rejects any directory-loaded connector plugin whose factory JAR
+    does not declare a `Doris-Connector-Plugin-Api-Version` MANIFEST main attribute. The
+    kernel expects major version 1; the SPI ships `1.0` in
+    `META-INF/doris/connector-plugin-api-version.properties`. Absent = refused at load
+    (`STAGE_API_VERSION`). We added the attribute to our `jar` task (`build.gradle.kts`);
+    verified in the zip and live (FE load summary `failureCount=0`, ducklake registered).
+    Bump the stamped value when the SPI baseline's major changes.
+  - **Other commits checked, no action:** `3d88dcb32db` CTAS-atomicity port (admission now
+    checks connector `getWritePlanProvider()` + INSERT — we satisfy both; fe-core-internal
+    otherwise); `486ce433609` dead storage/credential surface deletion (our `s3.*`/`AWS_*`
+    forwarding untouched); iceberg/hive/paimon-only fixes; plugin system-table pin fixes (we
+    have no system tables).
+  - **Zero source (`.kt`) changes this bump.**
+  - **Smoke: FULL PASS.** All green incl. bucket-partitioned no-`ENGINE=` CREATE TABLE,
+    W2/W2c/W3, DEFAULT backfill, GC. Known-blocked unchanged: §8b-count `COUNT(v)`
+    (`colUniqueId=-1`) and Step-7 delete nullability.
 - **2026-07-27 → pin `a0c10f0672b`, subject `[chore](handoff) record the 2026-07-27c rebase
   onto e7b7f1d1359 (upstream #66004 storage facade)`** (SHAs churn on rebase — match the
   subject). **First PATCH-FREE build.** #66135 (`fce5af4e041`) removed BOTH FE-patch anchors:
@@ -172,10 +195,10 @@ No patch step — `ducklake-fe.patch` is historical (see the warning box). Just 
 the pin and build pristine.
 
 ```bash
-# ⚠️ PIN (branch-catalog-spi REBASES — don't build from a blind branch tip). Pin (2026-07-27):
-#    a0c10f0672b, subject "[chore](handoff) record the 2026-07-27c rebase onto e7b7f1d1359
-#    (upstream #66004 storage facade)". SHA GC'd? check out the commit with that exact subject.
-cd ~/DEV/OSS/doris-catalog-spi && git checkout -- . && git checkout a0c10f0672b   # pristine, NO PATCH
+# ⚠️ PIN (branch-catalog-spi REBASES — don't build from a blind branch tip). Pin (2026-07-29):
+#    0da96f1ad3e, subject "[chore](handoff) record the 2026-07-30 rebase onto 794d514479e
+#    (upstream #65991)". SHA GC'd? check out the commit with that exact subject.
+cd ~/DEV/OSS/doris-catalog-spi && git checkout -- . && git checkout 0da96f1ad3e   # pristine, NO PATCH
 JAVA_HOME=<jdk17> DISABLE_BUILD_UI=ON ./build.sh --fe                 # ~2 min incremental
 # then re-install the SPI artifacts our gradle build compiles against (mavenLocal):
 #   cd fe && <mvn> install -P flatten -pl fe-connector/fe-connector-api,fe-connector/fe-connector-spi,fe-thrift -DskipTests
