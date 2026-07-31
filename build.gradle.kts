@@ -46,13 +46,15 @@ kotlin {
 // test tasks below reorder parquet-format-structures ahead of fe-thrift so the
 // real classes win — see prependParquetFormat.
 
-// The Doris fe-connector-api / spi artifacts come from a custom branch (PR #62767,
-// branch-catalog-spi) installed into ~/.m2 — see fe-patches/FE-PATCHES.md. We scope
-// mavenLocal to org.apache.doris via exclusiveContent so it can't shadow other deps.
+// The Doris fe-connector-api / spi artifacts are built from apache/doris `master` (the
+// connector SPI merged upstream via #64304) and installed into ~/.m2 — see
+// fe-patches/FE-PATCHES.md "Re-vendor log". Master's <revision> is 1.2-SNAPSHOT, so the
+// coordinates below are unchanged. We scope mavenLocal to org.apache.doris via
+// exclusiveContent so it can't shadow other deps.
 // dev.brikk.house (brikk-sql transpiler) resolves from the Central Portal snapshots repo,
 // wired centrally by the buildlogic.kotlin.brikk convention plugin (applied above).
 repositories {
-    // org.apache.doris: FE SPI from the PR #62767 branch, installed into ~/.m2.
+    // org.apache.doris: FE SPI built from apache/doris master, installed into ~/.m2.
     exclusiveContent {
         forRepository { mavenLocal() }
         filter { includeGroup("org.apache.doris") }

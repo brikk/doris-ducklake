@@ -102,29 +102,29 @@ another machine / agent / CI won't have them until reproduced or copied:
 | **SPI compile jars** (`fe-connector-api`, `fe-connector-spi`, `fe-thrift`, `1.2-SNAPSHOT`) | `~/.m2/repository/org/apache/doris/…` (installed via `mvn install -P flatten`) | the gradle plugin build (`build.gradle.kts` → `mavenLocal()`, `org.apache.doris` only) | re-run the flatten install (below) on that box, or copy the `~/.m2/.../1.2-SNAPSHOT` trees over |
 
 Verify the runtime image actually carries the build you think it does:
-`sha256sum ~/DEV/OSS/doris-catalog-spi/output/fe/lib/doris-fe.jar` should equal
+`sha256sum ~/DEV/OSS/doris/output/fe/lib/doris-fe.jar` should equal
 `docker run --rm --entrypoint sha256sum doris-fe:pr62767-local /opt/apache-doris/fe/lib/doris-fe.jar`.
 
-# ⚠️ PINNED COMMIT — build from the SAME commit we last researched against.
-#   `branch-catalog-spi` REBASES CONSTANTLY, so do NOT just `git pull` the branch tip: a newer
-#   tip may add a non-default SPI method that breaks the plugin.
-#   Pin (2026-07-29): 0da96f1ad3e
-#     subject: "[chore](handoff) record the 2026-07-30 rebase onto 794d514479e (upstream #65991)"
-#   SHAs churn on rebase — if that SHA is GC'd/gone, check out the commit with that exact SUBJECT.
+# ⚠️ SOURCE = apache/doris `master` (the SPI is upstream now — the brikk fork is retired).
+#   The connector SPI landed in apache master (#64304 + the fe/fe-connector tree), so build the FE
+#   from the REAL apache/doris, not the old fork branch `branch-catalog-spi`.
+#   Pin (2026-07-31): ded91fb9fb3  ([fix](ci) Skip usage-limited Codex review accounts (#66319))
+#   Master's <revision> is still 1.2-SNAPSHOT → ~/.m2 coordinates unchanged.
 #   Builds PATCH-FREE since upstream #66135 removed both former FE-patch anchors — NO patch to apply.
 #   The current pin is recorded in ../fe-patches/FE-PATCHES.md → "Re-vendor log" (keep both in sync).
 
 ```bash
-# 1. Build the P-series FE (JDK 17) in the pinned worktree — PATCH-FREE (no patch step):
-cd ~/DEV/OSS/doris-catalog-spi && git checkout -- . && git checkout 0da96f1ad3e   # pristine, NO PATCH
-JAVA_HOME=<jdk17> DISABLE_BUILD_UI=ON ./build.sh --fe        # → output/fe  (see doris-fe-build-macos memory)
+# 1. Build the FE (JDK 17) from apache/doris master — PATCH-FREE (no patch step).
+#    DORIS_THIRDPARTY can point at any doris thirdparty that has thrift+protoc installed.
+cd ~/DEV/OSS/doris && git checkout master && git merge --ff-only origin/master   # apache master tip
+JAVA_HOME=<jdk17> DORIS_THIRDPARTY=<doris thirdparty> DISABLE_BUILD_UI=ON ./build.sh --fe   # → output/fe
 # Also reinstall the SPI compile jars our gradle build needs (see the artifacts table above):
-cd fe && <mvn> install -P flatten -pl fe-connector/fe-connector-api,fe-connector/fe-connector-spi,fe-thrift -DskipTests
+cd fe && <mvn> install -P flatten -pl fe-connector/fe-connector-api,fe-connector/fe-connector-spi,fe-thrift -am -DskipTests
 
 # 2. Image it with the TRACKED overlay Dockerfile (jvm/doris-ducklake/compose/fe-overlay/Dockerfile),
 #    staging a minimal context so podman/docker isn't sent the multi-GB repo:
 S=/tmp/feimg; rm -rf $S; mkdir -p $S/output
-cp -r ~/DEV/OSS/doris-catalog-spi/output/fe $S/output/fe
+cp -r ~/DEV/OSS/doris/output/fe $S/output/fe
 # run -f relative to THIS integrations repo root (adjust the path if your CWD differs):
 podman build -f jvm/doris-ducklake/compose/fe-overlay/Dockerfile \
   -t doris-fe:pr62767-local \

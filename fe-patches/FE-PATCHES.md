@@ -1,29 +1,46 @@
 # FE patches for the DuckLake plugin connector (OBSOLETE — historical)
 
-The DuckLake connector is a Doris **plugin (SPI) connector**. The Doris FE
-(worktree `~/DEV/OSS/doris-catalog-spi`, branch `branch-catalog-spi`, the
-P-series connector-SPI migration) used to carry two generic guards keyed on a
-hard-coded catalog-type set that didn't know about `"ducklake"`. Upstream #66135
-(`fce5af4e041`, 2026-07-27) removed both: a registered `ConnectorProvider`
-claiming its type is now sufficient, and `ENGINE=` is optional/connector-owned.
-So the FE now builds **PATCH-FREE** — `ducklake-fe.patch` is no longer applied.
+The DuckLake connector is a Doris **plugin (SPI) connector**. The Doris FE used
+to carry two generic guards keyed on a hard-coded catalog-type set that didn't
+know about `"ducklake"`. Upstream #66135 (`fce5af4e041`, 2026-07-27) removed
+both: a registered `ConnectorProvider` claiming its type is now sufficient, and
+`ENGINE=` is optional/connector-owned. So the FE builds **PATCH-FREE** —
+`ducklake-fe.patch` is no longer applied.
 
 The patch file stays in-repo only as history (the two asks it tracked are now
 resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]].
 
- > **⚠️ Build from the PINNED commit — PATCH-FREE.** `branch-catalog-spi` rebases
- > constantly. The **current pin** is the newest entry in the **Re-vendor log** below —
- > as of 2026-07-29: `0da96f1ad3e`, subject *"[chore](handoff) record the 2026-07-30
- > rebase onto 794d514479e (upstream #65991)"*. `compose/README.md` pins the same commit.
- > **`ducklake-fe.patch` is OBSOLETE** — upstream #66135 removed both anchors, so the FE
- > builds pristine with NO patch. The patch file is kept in-repo only as history.
- > **Plugin jars must now carry the `Doris-Connector-Plugin-Api-Version` manifest attribute
- > (#66211) or the FE refuses to load them** — see the 2026-07-29 log entry. **Do not build
- > from a blind branch tip.** If the SHA has been GC'd, check out the commit with that exact
- > subject and re-validate the SPI surface before building. Keep this note, the Re-vendor
- > log, and `compose/README.md` in sync.
+ > **⚠️ THE SPI IS NOW IN APACHE `master` — BUILD FROM THE REAL apache/doris, NOT THE FORK.**
+ > As of 2026-07-31 the connector-SPI landed upstream (`#64304` *decouple external catalogs
+ > from FE core into loadable connector plugins* + the whole `fe/fe-connector` tree, incl.
+ > `fe-connector-api` / `fe-connector-spi`). We now vendor from **`~/DEV/OSS/doris`, branch
+ > `master`** (apache/doris), **not** the retired brikk fork `branch-catalog-spi`. Current
+ > pin: **`ded91fb9fb3`** (apache/doris master, 2026-08-01). Master's `<revision>` is still
+ > `1.2-SNAPSHOT`, so the installed `~/.m2` coordinates are unchanged.
+ > **The plugin needed ZERO source changes** to compile against master's evolved SPI (it only
+ > uses the stable SPI subset). Still **PATCH-FREE** (unchanged since #66135), and the
+ > `Doris-Connector-Plugin-Api-Version` manifest gate (#66211) is still `1.0` on both sides.
+ > Keep this note, the Re-vendor log, and `compose/README.md` in sync.
 
 ### Re-vendor log
+
+- **2026-07-31 → MIGRATED TO apache/doris `master`, pin `ded91fb9fb3`** (`[fix](ci) Skip
+  usage-limited Codex review accounts (#66319)`). The connector SPI was merged upstream, so we
+  retired the brikk fork branch `branch-catalog-spi` and now build the FE + the `~/.m2` compile
+  jars straight from **apache/doris master** (`~/DEV/OSS/doris`). Master is +316 commits over the
+  old fork merge-base (#65299); the fork's 13-commit P0–P6 series is now redundant (upstream
+  landed its own SPI). **Zero plugin `.kt` changes** — main + test compile clean against master's
+  SPI; the ~7k-line api/spi surface churn (ConnectorScanRangeType→ConnectorScanRequest/Profile,
+  ConnectorContext refactor, new ConnectorStorageContext/ForwardingConnectorContext,
+  ScanNodePropertyKeys) doesn't touch the subset the plugin uses. Still PATCH-FREE; api.version
+  still `1.0`.
+  - **Build:** `JAVA_HOME=<jdk17> DORIS_THIRDPARTY=<any doris thirdparty w/ thrift+protoc>
+    DISABLE_BUILD_UI=ON ./build.sh --fe`, then
+    `cd fe && <mvn> install -P flatten -pl fe-connector/fe-connector-api,fe-connector/fe-connector-spi,fe-thrift -am -DskipTests`.
+  - **Smoke: FULL PASS** on the master-built FE overlay (reads, W1 DDL, W2/W2c/W3 INSERT/CTAS/bucket,
+    §12b DEFAULT backfill, §13 GC) + `corpusReplayTest` green. Known-blocked unchanged (both
+    pre-existing, upstream/BE — NOT connector): §8b-count bare `COUNT(v)` (`colUniqueId=-1`) and
+    Step-7 delete BE parquet-nullability (`Not nullable column has null values`).
 
 - **2026-07-29 → pin `0da96f1ad3e`, subject `[chore](handoff) record the 2026-07-30 rebase
   onto 794d514479e (upstream #65991)`** (SHAs churn on rebase — match the subject). Bumped

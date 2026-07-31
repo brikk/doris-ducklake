@@ -2,13 +2,16 @@
 
 > ⚠️ **Pre-alpha. Do not use in production.** This is an out-of-tree Doris
 > catalog **SPI plugin** for the [DuckLake](https://ducklake.select) open
-> table format (spec v1.0). It targets the unreleased `fe-connector` catalog
-> SPI on Apache Doris's `branch-catalog-spi` (baseline `8b391c7`, the P6
-> iceberg SPI cutover) and depends on a two-line FE patch
-> ([`fe-patches/`](fe-patches/)) not present in any Doris release, so a stock
-> Doris build cannot load it. The connector is **read-focused today** — the
-> write path is nascent (basic INSERT/CTAS/DDL work; DELETE/UPDATE/MERGE do
-> not). If you want a working DuckLake adapter for an OLAP engine today, use
+> table format (spec v1.0). It targets the `fe-connector` catalog SPI, which
+> **merged into Apache Doris `master`** (`#64304` *decouple external catalogs
+> from FE core into loadable connector plugins*, + the `fe/fe-connector` tree);
+> we build the FE from apache/doris `master` (pin `ded91fb9fb3`), **not** the
+> now-retired brikk fork `branch-catalog-spi`. The SPI is not in any tagged
+> Doris *release* yet, so a stock released Doris build still can't load it —
+> build the FE from master (see [`fe-patches/`](fe-patches/); PATCH-FREE). The
+> connector is **read-focused today** — the write path is nascent (basic
+> INSERT/CTAS/DDL work; DELETE/UPDATE/MERGE do not). If you want a working
+> DuckLake adapter for an OLAP engine today, use
 > [`trino-ducklake`](../trino-ducklake/) instead.
 
 Connector for the DuckLake format using **PostgreSQL** as the catalog metadata
