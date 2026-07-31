@@ -1,7 +1,8 @@
 # DuckLake-on-Doris — Friction log
 
 Running log of SPI / FE / BE surprises hit while implementing the DuckLake
-`fe-connector` plugin against [apache/doris#62767](https://github.com/apache/doris/pull/62767).
+`fe-connector` plugin. The connector now targets **apache/doris `master`** (the
+catalog SPI merged upstream — see [`../fe-patches/FE-PATCHES.md`](../fe-patches/FE-PATCHES.md)).
 
 For Doris fe-connector maintainers — each entry has a pickable upstream
 fix. For future plugin authors — read top-to-bottom before starting; saves
@@ -17,101 +18,64 @@ feature is deployment-ready).
 Entry shape: **Symptom** → **Root cause** (file:line) → **Workaround**
 → **Fix** (small, pickable). Newest first.
 
----
-
-## 2026-07-22 · Plugin-driven `COUNT(<nullable col>)` pushdown returns non-deterministic garbage (`colUniqueId=-1`)
-
-**Symptom.** On `branch-catalog-spi` @ `d56c8f356c3`, `SELECT COUNT(v)` (v nullable,
-with NULLs) **alone** on a plugin-driven external table (DuckLake) returns
-**non-deterministic** values across identical consecutive runs on a *stable* table —
-observed `4, 0, 3, 3` where the correct answer is `2`. Everything that reads the actual
-data is correct and stable: `SELECT *`, `SELECT COUNT(*)` (= 4), and the mixed-agg
-`SELECT COUNT(*), COUNT(v), SUM(v)` (= 4, 2, 40). **Deterministically correct on the
-prior baseline `568c4bb`** with byte-identical connector code, so this is a regression
-introduced by this baseline, exposed on the plugin-driven path.
-
-**Root cause.** `EXPLAIN` shows `pushdown agg=COUNT` on the `VPluginDrivenScanNode`, and
-the `v` scan slot carries **`colUniqueId=-1`** (plus a bogus `isAutoIncrement=true`). A
-plugin external `ConnectorColumn` carries no field id, so fe-core assigns the slot
-`colUniqueId=-1`. The single-column `COUNT(col)` pushdown path — reworked by the
-`#65548` external COUNT(*)/COUNT(col) port and `#65782` `collect_column_stats` on this
-baseline — evidently keys per-column null-count stats off that unique id (or reads an
-uninitialized per-column counter when it is `-1`), yielding non-deterministic results
-for the plugin path. Only the **bare single-column count** is affected: mixed-agg and
-`SELECT *` don't take the collapsed count path.
-
-**Workaround.** None reliable connector-side. The correct value is always available via
-any read that isn't a bare single-column count (mixed agg / subquery). We set the sink's
-`collect_column_stats=true` (correct — DuckLake wants footer stats; see the write-plan
-provider) but that does **not** fix this. The compose smoke marks §8b-count
-**KNOWN-BLOCKED** (not a connector failure); data integrity is unaffected.
-
-**Fix (pickable upstream).** Options, in rising order of correctness: (1) the `COUNT(col)`
-pushdown must **not** fire for a plugin/external scan whose slot has no per-column unique
-id (`colUniqueId < 0`) — fall back to counting by reading, like the pre-`568c4bb` path
-did; (2) propagate the connector column's field id (we have `DuckLakeColumnHandle.columnId`
-= the DuckLake field id) through the plugin scan node onto the slot's `colUniqueId` so the
-count path can key stats correctly; (3) the BE count path must zero-init / bounds-check the
-per-column counter when the id is absent. This is almost certainly a regression in the
-`#65548`/`#65782` port to the plugin-driven (`PluginDrivenScanNode`) path — native iceberg
-carries real field ids so it wouldn't surface there. Tracked in `TODO-read.md`.
+**Resolved & removed (2026-07-31, verified on apache/doris `master` FE + a
+master-built BE).** These are gone from this log — see git history:
+- Plugin-driven `COUNT(<nullable col>)` pushdown garbage (`colUniqueId=-1`) —
+  now correct on master (`COUNT(*)=4`, `COUNT(v)=2`).
+- DuckLake position-delete OPTIONAL-column `[CORRUPTION]Not nullable column has
+  null values` — master BE reads the delete file; Step-7 DELETE now returns the
+  right count end-to-end.
+- `LOCAL_EXCHANGE_NODE` (38) FE/BE thrift skew — moot on a master-line BE (the
+  enum exists), so the `enable_local_shuffle_planner=false` shim is no longer
+  load-bearing.
+- Iceberg sys-table positional-read contract — landed upstream on the SPI line;
+  our plugin never used it.
 
 ---
 
-## 2026-07-19 · Iceberg system-table JNI scanner: FE projection order IS the BE row contract (positional read)
+## 2026-07-31 · apache/doris `master` BE crashes on a DEFAULT-backfill / schema-evolution read (new `format_v2::TableReader`)
 
-**Symptom.** Not one we hit — an upstream lesson from two `branch-catalog-spi`
-commits worth banking BEFORE we build any BE JNI scanner (DuckLake system tables,
-or the generic `plugin_driven` sys-table dispatch proposed in the 2026-07-06
-"No SPI path…" entry below). Upstream `$snapshots`/`$history`/`$refs` queries that
-projected a column SUBSET failed on the BE with
-`[JNI_ERROR]ArrayIndexOutOfBoundsException: Index N out of bounds for length M`
-(`IcebergSysTableJniScanner.getNext` → `StructProjection.get`).
+**Symptom.** Running the smoke against a BE **built from apache/doris `master`**
+(`ded91fb9fb3`; FE also master) — the move that fixes the position-delete and
+`COUNT(col)` blockers above — the §12b column-DEFAULT read **takes the whole BE
+down** (SIGSEGV). On `be-4.1.3` this exact read was green. Repro: DuckDB seeds
+pre-ADD rows, `ALTER TABLE … ADD COLUMN b INT DEFAULT 42`, then read it back
+through Doris (`SELECT … FROM default_probe`). The BE logs the real error, then
+segfaults:
 
-**Root cause.** The iceberg sys-table JNI scanner reads row values
-**positionally** (`row.get(i)`), but the rows come from a metadata
-`StaticDataTask` whose `FileScanTask.schema()` returns the FULL table schema
-while `rows()` yields a NARROWED `StructProjection`. A full-schema ordinal (e.g.
-`snapshot_id` at 2) then overruns a projected row of length 2 — iceberg's own
-#65262 comment warns exactly this: "`FileScanTask.schema()` is not the row schema
-for every `DataTask` implementation." Compounded on the branch by an FE change
-that added `scan.select(projectedColumns)` to narrow the materialized rows:
-`scan.select(ids)` routes ids through a `Set` and re-emits them in **table-schema
-order** (`TypeUtil.project`), so even the surviving columns arrive in the wrong
-order for a positional read.
+```
+[INTERNAL_ERROR]Column type Const(INT) is not compatible with data type Nullable(INT)
+  doris::DataTypeNullable::check_column                   core/data_type/data_type_nullable.cpp:147
+  doris::VExprContext::execute
+  doris::format::TableReader::_evaluate_constant_filters  format_v2/table_reader.h:561
+  doris::format::TableReader::open_reader                 format_v2/table_reader.h
+  doris::FileScannerV2::_get_block_impl                   exec/scan/file_scanner_v2.cpp:655
+# then, fatal (signal handler → JVM):
+  doris::is_column_const(doris::IColumn const&)           core/column/column.cpp:226   ← SIGSEGV
+```
 
-**Workaround.** None needed on our side — this is iceberg-internal. Recorded as a
-contract, not a bug we route around.
+**Root cause.** master routes external-table (DuckLake / iceberg-shaped) scans
+through the **new `format_v2::TableReader` + `FileScannerV2`** framework; 4.1.x
+used the older `format` reader, which handled this case. `_evaluate_constant_filters`
+executes a `VExpr` over a column the reader materialised as a **`Const(INT)`**
+(the DEFAULT / absent-column fill for the pre-ADD rows) while the target slot's
+data type is **`Nullable(INT)`**. `DataTypeNullable::check_column` rejects the
+const wrapper (`Const(INT)` is not `Nullable(INT)`), and the follow-on
+`is_column_const` path then dereferences a null column → SIGSEGV that aborts the
+BE process (clean-looking `exit 0`, but it's a signal abort). Any plugin/external
+scan that supplies a constant column for a nullable slot — schema-evolution
+DEFAULT backfill, or a missing column read as a constant — can hit it.
 
-**Fix (upstream, already landed on `branch-catalog-spi`).** `61a8b380` (add
-sys-table projection) + `5f009592` (BE reads positionally against the *projected*
-row via `row.get(i, Object.class)`; FE uses `scan.project(schema)` built from the
-requested columns **in scan-slot order**, which preserves order — unlike
-`scan.select`). No SPI-surface change; our plugin is unaffected (we compile
-against `fe-connector-api`/`-spi`/`-thrift` only, and use `FILE_SCAN`/parquet, no
-JNI, no system tables).
+**Workaround.** None connector-side yet — it crashes the BE. The old `be-4.1.3`
+reader handled it, but 4.1.3 is not an option once you need master for the
+delete-file / `COUNT(col)` fixes above, so this is a hard blocker on master.
 
-**Why it matters to us.** The "smallest fix" this log proposes for FE-computed
-rows (2026-07-06 entry) is a generic `table_format_type == "plugin_driven"`
-`FORMAT_JNI` dispatch that "mirrors the iceberg sys-table path." If we take that
-route (DuckLake `$snapshots`/`$history`, or serving inlined rows without a temp
-file), this positional contract becomes a load-bearing invariant we inherit: the
-FE must emit column projections in scan-slot order and the BE scanner must read by
-ordinal against the *projected* (not table) schema — a mismatch is a silent index
-overrun, not a clean type error.
-
-**Opinion (design).** The positional FE↔BE row contract is fragile: it couples two
-codebases across a JNI boundary through an unstated ordinal convention, and the
-failure mode is an AIOOBE deep in the BE rather than a plan-time validation error.
-A generic `plugin_driven` JNI scanner should instead carry the projected field
-schema (names + field-ids + order) IN the serialized split and have the BE bind by
-**field-id/name**, not bare ordinal — the same field-id robustness we already lean
-on for data-file reads (the schema dictionary, see 2026-07-06 per-file mapping
-entry). That converts a whole class of silent overruns into explicit binds and
-lets FE and BE evolve projection independently. If positional stays for cost
-reasons, the scanner should at minimum assert `row.size() == requested.size()` and
-put the projected-vs-table schema in the error. Tracked in
-[`TODO-research.md`](./TODO-research.md) (DuckLake system tables).
+**Fix (BE, pickable).** In `format_v2::TableReader::_evaluate_constant_filters`,
+const-fold / wrap the constant column into the **target nullable type** before
+`VExprContext::execute` (or unwrap the `Const` for `check_column`); and make the
+`is_column_const` / null path null-safe so a type mismatch surfaces as a clean
+`INTERNAL_ERROR` instead of a segfault. This lives squarely in the new
+`format_v2` reader that the connector-SPI reference implementation exercises.
 
 ---
 
@@ -173,7 +137,9 @@ conversion (`be/src/format/parquet/parquet_column_convert.{h,cpp}`
 `Int64ToTimestampTz`/`Int96toTimestampTz` → `ColumnTimeStampTz`) is **master-only**:
 **verified that be-4.1.2 STILL errors** `DateTimeV2 => TimeStampTz` (bumped the
 compose BE 4.1.0 → 4.1.2 and re-tested). So it is NOT in any 4.0.x/4.1.x
-release; needs a master/nightly BE.
+release; needs a master/nightly BE. (A master BE now exists — the ON path is
+plausibly readable there but is **unverified**; the smoke still runs the naive
+`DATETIMEV2` default below.)
 
 The in-tree `fe-connector-iceberg` already models this: catalog property
 `enable.mapping.timestamp_tz` (default OFF → naive `DATETIMEV2`; ON →
@@ -181,8 +147,7 @@ The in-tree `fe-connector-iceberg` already models this: catalog property
 mirror it exactly** (`DuckLakeConnectorProperties.ENABLE_MAPPING_TIMESTAMP_TZ`,
 threaded through `DuckLakeConnectorMetadata` → `DuckLakeTypeMapping`), so our
 DATETIMEV2 default matches Doris's own connector default and users on a
-master/nightly BE can opt into zone-aware reads. The ON path can't be validated
-on our compose BE (4.1.2) — deferred to a nightly-BE bump. Original entry below.
+master/nightly BE can opt into zone-aware reads. Original entry below.
 
 ---
 
@@ -357,43 +322,6 @@ Until one of those lands, the temp-Parquet workaround is the plan; tracked in
 
 ---
 
-## 2026-07-05 · P6-baseline FE plans `LOCAL_EXCHANGE_NODE` (38); 4.1.0 BE rejects the fragment
-
-**Symptom.** On the P6 iceberg-cutover FE baseline (`branch-catalog-spi` @
-`8b391c7`), the first aggregate query of the smoke —
-`SELECT COUNT(*) FROM dl.tpch.step7_orders` — dies with
-
-```
-(be)[INTERNAL_ERROR]Unsupported exec type in pipeline: Invalid plan node type
-```
-
-while plain `SELECT … LIMIT 5` scans work fine. `EXPLAIN` shows a perfectly
-ordinary plan (`VPluginDrivenScanNode` → partial agg → exchange → merge agg),
-because the offending node is inserted *after* explain rendering.
-
-**Root cause.** The rebased P-series line is based on a newer master whose
-planner does FE-side within-fragment local exchange:
-`NereidsPlanner.addLocalExchangeAfterDistribute()` → `AddLocalExchange` inserts
-`LocalExchangeNode` (`TPlanNodeType.LOCAL_EXCHANGE_NODE = 38`) into agg
-fragments (gated by session var `enable_local_shuffle_planner`, default
-**true**). The stock `apache/doris:be-4.1.0` image's thrift enum tops out at
-`REC_CTE_SCAN_NODE = 36`; `pipeline_fragment_context.cpp` hits its `default:`
-arm and `print_plan_node_type()` can't even name the value → "Invalid plan node
-type". Pure FE/BE version skew — nothing ducklake- or P6-specific (P6 itself
-touches zero thrift).
-
-**Workaround.** `SET GLOBAL enable_local_shuffle_planner = false;` — the BE
-then plans local exchange itself (`runtime_state.h::plan_local_shuffle()`),
-which is exactly the pre-38 behavior 4.1.0 implements. The FE and BE paths are
-mutually exclusive by design, so this is behaviorally safe. `compose/smoke.sh`
-now sets it right after FE health (§6b).
-
-**Fix.** Use a BE image built from the same line as the FE (once one exists),
-then drop the shim. Not upstream-pickable — it's an artifact of running a
-master-based FE against a release BE.
-
----
-
 ## 2026-06-10 · Narrow-int (TINYINT/SMALLINT) write crashes the BE Iceberg writer
 
 **Symptom.** A `CREATE TABLE … AS SELECT 1 AS id, 'alice' AS name` (CTAS) takes the
@@ -419,7 +347,7 @@ serializer by the **source Doris column type** (TINYINT), and
 direct `INSERT` into a `TINYINT`/`SMALLINT` column through the Iceberg sink crashes
 identically. (Our connector's type mapping is fine: TINYINT→`int8` on create,
 `int8`→iceberg `int` on read are both correct; the bug is purely the BE writer's
-serde-vs-builder type pick.)
+serde-vs-builder type pick.) Verified only against 4.1.x; **unverified on master**.
 
 **Workaround.** Use `INT`/`BIGINT` (32/64-bit) columns when writing through the
 sink; cast narrow ints (`CAST(x AS INT)`) in the SELECT. The compose smoke's W3
@@ -476,71 +404,6 @@ uses `PARTITION BY LIST (bucket(4, name)) ()`. **Validated GREEN** (W1 DDL recor
 expression is a transform/identity function even under the `LIST`/`RANGE` keyword
 (the keyword is grammar boilerplate for external tables, not list/range
 semantics) — then connectors need only handle `IDENTITY`/`TRANSFORM`.
-
----
-
-## 2026-05-19 · DuckLake position-delete files use OPTIONAL columns; Doris BE rejects them
-
-**UPDATE (2026-07-18):** re-verified against **`apache/doris:be-4.1.3`**
-(`doris-4.1.3-rc02-7126cf65d96`, the current 4.1.x release) — the Step-7 delete
-path **still fails identically** (`[CORRUPTION]Not nullable column has null
-values in parquet file`). So the fix is NOT in 4.1.3-rc02; upstream is preparing
-it for us (ETA unknown). Everything else in the smoke stayed green on 4.1.3
-(read, W1 DDL, W2/W2c INSERT, W3 CTAS, §12b backfill, §13 GC), no regressions vs
-4.1.2, so the compose BE was bumped 4.1.2 → 4.1.3. Original entry below.
-
-**Symptom.** Step 7 smoke: DuckDB issues DELETE on `tpch.orders` (with
-`data_inlining_row_limit = 0` so the DELETE materialises as a
-`ducklake_delete_file` row + a position-delete parquet file). The FE plugin
-correctly packs the delete file into `iceberg_params.delete_files`. BE
-errors on read:
-
-```
-[INTERNAL_ERROR]Read parquet file s3://…/orders/…-delete.parquet failed,
-reason = [CORRUPTION]Not nullable column has null values in parquet file
-```
-
-The delete file has zero actual nulls; the error is about parquet schema
-nullability metadata, not row content.
-
-**Root cause.** Two-layer schema mismatch between DuckLake's delete-file
-parquet and what the BE iceberg reader expects:
-
-1. **Column shape matches.** DuckLake writes `(file_path: VARCHAR, pos:
-   BIGINT)` — same column names + types as the Iceberg
-   [position-delete spec](https://iceberg.apache.org/spec/#position-delete-files).
-2. **Nullability disagrees.** DuckLake writes both columns as
-   `repetition_type = OPTIONAL`. Iceberg's spec marks them `required`,
-   and Doris's BE parquet reader (`ScalarColumnReader<false, false>`,
-   the not-nullable fast path) trusts the schema's NOT-NULL contract.
-   The DuckLake-written parquet declares the columns as nullable, so
-   the reader's NOT-NULL fast path raises rather than fall back to the
-   nullable path.
-
-Confirmed via `parquet_schema()`:
-
-```
-('file_path', 'BYTE_ARRAY', None, 'OPTIONAL', None, None, 'UTF8')
-('pos',       'INT64',      None, 'OPTIONAL', None, None, 'INT_64')
-```
-
-**Workaround.** None on the FE side. Three honest options:
-- Patch DuckDB to write `REQUIRED` repetition_type on DuckLake delete files.
-- Patch the BE iceberg reader to widen the nullability contract on the
-  Iceberg-spec'd delete-file columns (treat OPTIONAL-but-no-nulls as
-  REQUIRED, falling through to the nullable path).
-- Rewrite the delete file FE-side before handing it to the BE.
-  Cost-prohibitive (per-query parquet rewrite).
-
-**Fix (pickable, upstream coordination).**
-- **DuckDB / DuckLake**: write delete-file parquet with `REQUIRED`
-  columns for `file_path` + `pos`. The schema matches Iceberg's spec by
-  intent (column names + types); nullability is the only deviation.
-  One-line fix at the parquet writer for delete files.
-- **Doris BE** (`ParquetReader` / `ScalarColumnReader`): treat
-  OPTIONAL columns whose definition levels are all `1` as effectively
-  required, OR explicitly route Iceberg-spec'd delete files through the
-  nullable column path.
 
 ---
 
@@ -851,3 +714,5 @@ When you hit the next one:
 4. **Workaround** — code snippet or config line on our side.
 5. **Fix** — bullet list of pickable upstream changes. Keep each one
    small enough to be a single PR.
+</content>
+</invoke>
