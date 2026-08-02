@@ -15,7 +15,7 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
  > from FE core into loadable connector plugins* + the whole `fe/fe-connector` tree, incl.
  > `fe-connector-api` / `fe-connector-spi`). We now vendor from **`~/DEV/OSS/doris`, branch
  > `master`** (apache/doris), **not** the retired brikk fork `branch-catalog-spi`. Current
- > pin: **`ded91fb9fb3`** (apache/doris master, 2026-08-01). Master's `<revision>` is still
+ > pin: **`0c01156be7f`** (apache/doris master, 2026-08-02). Master's `<revision>` is still
  > `1.2-SNAPSHOT`, so the installed `~/.m2` coordinates are unchanged.
  > **The plugin needed ZERO source changes** to compile against master's evolved SPI (it only
  > uses the stable SPI subset). Still **PATCH-FREE** (unchanged since #66135), and the
@@ -23,6 +23,18 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
  > Keep this note, the Re-vendor log, and `compose/README.md` in sync.
 
 ### Re-vendor log
+
+- **2026-08-02 → pin `0c01156be7f`** (`[feat](thirdparty) add arrow-adbc to the thirdparty build
+  (#66358)`). Routine bump from `ded91fb9fb3` (+9 upstream commits). **Zero plugin `.kt` changes**
+  — main + test compile clean. The one SPI-touching commit is **#66347 `[feat](connector) give each
+  connector plugin its own conf file`**: adds `ConnectorConf`/`ConnectorConfFile`, a **default**
+  `ConnectorContext.getConnectorConfig()` (reads `<pluginDir>/<name>.conf`), and a **default**
+  `ConnectorProvider.name()` (= `getType()`). Both are `default` methods and we only *consume*
+  `ConnectorContext`, so **non-breaking** — no adaptation needed. Optional future use: park
+  deployment-level settings (e.g. a default warehouse root) in `ducklake.conf` instead of catalog
+  properties. Still PATCH-FREE; api.version still `1.0`. (Adjacent, not our path: #66344 fixes the
+  TIMESTAMPTZ *arrow*/Flight-SQL reader — NOT the BE parquet reader, so the timestamptz friction
+  stands.) Compile-verified only; not re-smoked (no SPI-surface change vs the 2026-07-31 full pass).
 
 - **2026-07-31 → MIGRATED TO apache/doris `master`, pin `ded91fb9fb3`** (`[fix](ci) Skip
   usage-limited Codex review accounts (#66319)`). The connector SPI was merged upstream, so we

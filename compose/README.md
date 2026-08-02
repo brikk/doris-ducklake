@@ -108,7 +108,7 @@ Verify the runtime image actually carries the build you think it does:
 # ⚠️ SOURCE = apache/doris `master` (the SPI is upstream now — the brikk fork is retired).
 #   The connector SPI landed in apache master (#64304 + the fe/fe-connector tree), so build the FE
 #   from the REAL apache/doris, not the old fork branch `branch-catalog-spi`.
-#   Pin (2026-07-31): ded91fb9fb3  ([fix](ci) Skip usage-limited Codex review accounts (#66319))
+#   Pin (2026-08-02): 0c01156be7f  ([feat](thirdparty) add arrow-adbc to the thirdparty build (#66358))
 #   Master's <revision> is still 1.2-SNAPSHOT → ~/.m2 coordinates unchanged.
 #   Builds PATCH-FREE since upstream #66135 removed both former FE-patch anchors — NO patch to apply.
 #   The current pin is recorded in ../fe-patches/FE-PATCHES.md → "Re-vendor log" (keep both in sync).
