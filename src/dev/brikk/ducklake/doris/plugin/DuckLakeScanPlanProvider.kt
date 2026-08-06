@@ -11,14 +11,14 @@ import dev.brikk.ducklake.catalog.DucklakeFilePartitionValue
 import dev.brikk.ducklake.catalog.DucklakePartitionSpec
 import dev.brikk.ducklake.catalog.DucklakePartitionTransform
 
-import org.apache.doris.connector.api.ConnectorSession
-import org.apache.doris.connector.api.DorisConnectorException
-import org.apache.doris.connector.api.handle.ConnectorColumnHandle
-import org.apache.doris.connector.api.handle.ConnectorTableHandle
-import org.apache.doris.connector.api.pushdown.ConnectorExpression
-import org.apache.doris.connector.api.scan.ConnectorScanPlanProvider
-import org.apache.doris.connector.api.scan.ConnectorScanRange
-import org.apache.doris.connector.api.scan.ConnectorScanRequest
+import org.apache.doris.connector.spi.ConnectorSession
+import org.apache.doris.connector.spi.DorisConnectorException
+import org.apache.doris.connector.spi.handle.ConnectorColumnHandle
+import org.apache.doris.connector.spi.handle.ConnectorTableHandle
+import org.apache.doris.connector.spi.pushdown.ConnectorExpression
+import org.apache.doris.connector.spi.scan.ConnectorScanPlanProvider
+import org.apache.doris.connector.spi.scan.ConnectorScanRange
+import org.apache.doris.connector.spi.scan.ConnectorScanRequest
 import org.apache.doris.thrift.TFileScanRangeParams
 import org.apache.doris.thrift.TIcebergFileDesc
 import org.apache.doris.thrift.TTableFormatFileDesc

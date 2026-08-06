@@ -5,9 +5,9 @@ import dev.brikk.ducklake.catalog.DucklakeWriteFragment
 import dev.brikk.ducklake.catalog.JdbcDucklakeCatalog
 import dev.brikk.ducklake.catalog.TableColumnSpec
 import dev.brikk.ducklake.catalog.TestingDucklakePostgreSqlCatalogServer
-import org.apache.doris.connector.api.ConnectorColumn
-import org.apache.doris.connector.api.ConnectorType
-import org.apache.doris.connector.api.ddl.ConnectorCreateTableRequest
+import org.apache.doris.connector.spi.ConnectorColumn
+import org.apache.doris.connector.spi.ConnectorType
+import org.apache.doris.connector.spi.ddl.ConnectorCreateTableRequest
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.BeforeAll

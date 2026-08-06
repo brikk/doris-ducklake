@@ -6,7 +6,7 @@ import java.time.Instant
 import dev.brikk.ducklake.catalog.DucklakeCatalog
 import dev.brikk.ducklake.catalog.DucklakeScheduledFile
 
-import org.apache.doris.connector.api.DorisConnectorException
+import org.apache.doris.connector.spi.DorisConnectorException
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test

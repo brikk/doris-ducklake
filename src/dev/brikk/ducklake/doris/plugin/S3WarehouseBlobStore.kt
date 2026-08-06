@@ -4,7 +4,7 @@ import io.minio.ListObjectsArgs
 import io.minio.MinioClient
 import io.minio.RemoveObjectArgs
 
-import org.apache.doris.connector.api.DorisConnectorException
+import org.apache.doris.connector.spi.DorisConnectorException
 
 /**
  * [WarehouseBlobStore] backed by the MinIO Java client, which speaks the S3 API to MinIO, AWS S3,

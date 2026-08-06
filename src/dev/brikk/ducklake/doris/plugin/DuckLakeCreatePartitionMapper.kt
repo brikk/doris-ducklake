@@ -2,10 +2,10 @@ package dev.brikk.ducklake.doris.plugin
 
 import dev.brikk.ducklake.catalog.DucklakePartitionTransform
 import dev.brikk.ducklake.catalog.PartitionFieldSpec
-import org.apache.doris.connector.api.DorisConnectorException
-import org.apache.doris.connector.api.ddl.ConnectorBucketSpec
-import org.apache.doris.connector.api.ddl.ConnectorPartitionField
-import org.apache.doris.connector.api.ddl.ConnectorPartitionSpec
+import org.apache.doris.connector.spi.DorisConnectorException
+import org.apache.doris.connector.spi.ddl.ConnectorBucketSpec
+import org.apache.doris.connector.spi.ddl.ConnectorPartitionField
+import org.apache.doris.connector.spi.ddl.ConnectorPartitionSpec
 
 /**
  * Maps a Doris `CREATE TABLE`'s partition / bucket clauses onto DuckLake

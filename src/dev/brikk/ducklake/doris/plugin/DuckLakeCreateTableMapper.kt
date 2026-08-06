@@ -1,6 +1,6 @@
 package dev.brikk.ducklake.doris.plugin
 
-import org.apache.doris.connector.api.ConnectorType
+import org.apache.doris.connector.spi.ConnectorType
 
 /**
  * Maps a Doris [ConnectorType] (a CREATE TABLE column type) to the DuckLake catalog

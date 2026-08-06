@@ -1,7 +1,7 @@
 package dev.brikk.ducklake.doris.plugin
 
-import org.apache.doris.connector.api.handle.ConnectorTableHandle
-import org.apache.doris.connector.api.pushdown.ConnectorExpression
+import org.apache.doris.connector.spi.handle.ConnectorTableHandle
+import org.apache.doris.connector.spi.pushdown.ConnectorExpression
 
 /**
  * Opaque DuckLake table handle. FE passes this back to us for every per-table

@@ -67,8 +67,11 @@ repositories {
 val dorisVersion = "1.2-SNAPSHOT"
 
 dependencies {
-    // FE supplies these via the parent classloader at runtime — compile-only.
-    compileOnly("org.apache.doris:fe-connector-api:$dorisVersion")
+    // FE supplies this via the parent classloader at runtime — compile-only.
+    // #66407 merged fe-connector-api INTO fe-connector-spi (the whole plugin contract —
+    // types a plugin implements AND the engine services it consumes — now lives in one
+    // module, Trino-style; the `org.apache.doris.connector.api.*` packages were renamed to
+    // `…spi.*`). So the single fe-connector-spi artifact carries everything now.
     compileOnly("org.apache.doris:fe-connector-spi:$dorisVersion")
     // fe-thrift is also FE-supplied; we touch it from populateRangeParams to
     // build TIcebergFileDesc per sanity-check §2.1 Option A. Stays compileOnly
@@ -136,7 +139,7 @@ dependencies {
 
     // SPI types are compileOnly above; tests instantiate the plugin so they need them too.
     // (junit/assertj/kotlin-test come from buildlogic.kotlin.common.)
-    testImplementation("org.apache.doris:fe-connector-api:$dorisVersion")
+    // fe-connector-spi now carries the whole contract (#66407 merged fe-connector-api in).
     testImplementation("org.apache.doris:fe-connector-spi:$dorisVersion")
     // Parity test serializes TFileRangeDesc with TSerializer, so thrift classes
     // must be on the test runtime classpath.

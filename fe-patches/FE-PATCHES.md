@@ -15,14 +15,40 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
  > from FE core into loadable connector plugins* + the whole `fe/fe-connector` tree, incl.
  > `fe-connector-api` / `fe-connector-spi`). We now vendor from **`~/DEV/OSS/doris`, branch
  > `master`** (apache/doris), **not** the retired brikk fork `branch-catalog-spi`. Current
- > pin: **`0c01156be7f`** (apache/doris master, 2026-08-02). Master's `<revision>` is still
+ > pin: **`a82564ced5d`** (apache/doris master, 2026-08-06). Master's `<revision>` is still
  > `1.2-SNAPSHOT`, so the installed `~/.m2` coordinates are unchanged.
- > **The plugin needed ZERO source changes** to compile against master's evolved SPI (it only
- > uses the stable SPI subset). Still **PATCH-FREE** (unchanged since #66135), and the
- > `Doris-Connector-Plugin-Api-Version` manifest gate (#66211) is still `1.0` on both sides.
- > Keep this note, the Re-vendor log, and `compose/README.md` in sync.
+ > **SPI-surface note:** #66407 merged `fe-connector-api` INTO `fe-connector-spi` and renamed the
+ > `org.apache.doris.connector.api.*` packages to `…spi.*`. We now depend on **only** the
+ > `fe-connector-spi` artifact and our imports moved `api.` → `spi.` (mechanical). Still
+ > **PATCH-FREE** (unchanged since #66135), and the `Doris-Connector-Plugin-Api-Version` manifest
+ > gate (#66211) is still `1.0` on both sides. Keep this note, the Re-vendor log, and
+ > `compose/README.md` in sync.
 
 ### Re-vendor log
+
+- **2026-08-06 → pin `a82564ced5d`** (`[fix](iceberg) Fix MVCC and nested schema evolution edge
+  cases (#66345)`). Bump from `0c01156be7f` (+74 upstream commits). **BREAKING SPI change, adapted:**
+  **#66407 `[refactor](fe) Merge fe-connector-api into fe-connector-spi`** collapsed the two-module
+  split into one (`fe-connector-api` module deleted) and renamed the whole
+  `org.apache.doris.connector.api.*` package tree to `…spi.*` (Trino-style single-module contract).
+  Adaptation: dropped the `fe-connector-api` artifact from `build.gradle.kts` (both compileOnly and
+  test), rewrote `connector.api.` → `connector.spi.` across 34 plugin files (imports only — no logic
+  change). main + test compile clean; unit tests green. Still PATCH-FREE; api.version still `1.0`.
+  Compile/unit-verified; **not re-smoked** (needs a fresh master FE+BE build — see the candidate BE
+  fixes below).
+  - **⭐ Candidate fixes for our open BE blockers landed in this window — re-smoke to confirm:**
+    - **#66345** `Fix MVCC and nested schema evolution edge cases` — edits `be/src/format_v2/table_reader.h`,
+      the exact file our §12b crash sits in (`_evaluate_constant_filters`).
+    - **#65851** `Support Iceberg V3 default values` — new `iceberg_default_value.h` + `table_schema_change_helper`
+      + `format_v2/column_mapper`: the DEFAULT-value read path our §12b DEFAULT-backfill crash exercises.
+    - **#65446** `Fix Parquet timestamp decoding and export defaults` — `format_v2/parquet/parquet_reader.cpp`
+      + `column.cpp`: our timestamptz-in-parquet friction (and the crash's `is_column_const` SIGSEGV site).
+  - **Other SPI-window commits (no action):** #66331 ADBC catalog (new, not our path); #66403/#66247
+    paimon fixes; #65126 external metadata-cache refactor.
+
+- **2026-08-02 → pin `0c01156be7f`** (`[feat](thirdparty) add arrow-adbc to the thirdparty build
+  (#66358)`). Routine bump from `ded91fb9fb3` (+9 upstream commits). **Zero plugin `.kt` changes**
+  — main + test compile clean. The one SPI-touching commit is **#66347 `[feat](connector) give each
 
 - **2026-08-02 → pin `0c01156be7f`** (`[feat](thirdparty) add arrow-adbc to the thirdparty build
   (#66358)`). Routine bump from `ded91fb9fb3` (+9 upstream commits). **Zero plugin `.kt` changes**

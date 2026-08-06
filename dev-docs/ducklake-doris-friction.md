@@ -35,6 +35,15 @@ master-built BE).** These are gone from this log — see git history:
 
 ## 2026-07-31 · apache/doris `master` BE crashes on a DEFAULT-backfill / schema-evolution read (new `format_v2::TableReader`)
 
+**UPDATE (2026-08-06) — candidate fixes landed upstream; RE-SMOKE PENDING.** Three commits in the
+`0c01156be7f..a82564ced5d` window land directly on this path: **#66345** (`Fix MVCC and nested
+schema evolution edge cases`) rewrites `be/src/format_v2/table_reader.h` — the file this crash is
+in; **#65851** (`Support Iceberg V3 default values`) adds `iceberg_default_value.h` +
+`table_schema_change_helper` + `format_v2/column_mapper` — the DEFAULT-value read path; **#65446**
+(`Fix Parquet timestamp decoding and export defaults`) touches `format_v2/parquet/parquet_reader.cpp`
++ `core/column/column.cpp` (the `is_column_const` SIGSEGV site). Not yet verified — needs a fresh
+master-BE re-smoke. If green, this entry is resolved. Original entry below.
+
 **Symptom.** Running the smoke against a BE **built from apache/doris `master`**
 (`ded91fb9fb3`; FE also master) — the move that fixes the position-delete and
 `COUNT(col)` blockers above — the §12b column-DEFAULT read **takes the whole BE

@@ -1,6 +1,6 @@
 package dev.brikk.ducklake.doris.plugin
 
-import org.apache.doris.connector.api.ConnectorType
+import org.apache.doris.connector.spi.ConnectorType
 import org.apache.doris.thrift.TFileScanRangeParams
 
 import org.junit.jupiter.api.Test

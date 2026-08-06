@@ -3,8 +3,8 @@ package dev.brikk.ducklake.doris.plugin
 import dev.brikk.ducklake.catalog.DucklakeCatalogConfig
 import dev.brikk.ducklake.catalog.JdbcDucklakeCatalog
 import dev.brikk.ducklake.catalog.TestingDucklakePostgreSqlCatalogServer
-import org.apache.doris.connector.api.mvcc.ConnectorMvccSnapshot
-import org.apache.doris.connector.api.mvcc.ConnectorTimeTravelSpec
+import org.apache.doris.connector.spi.mvcc.ConnectorMvccSnapshot
+import org.apache.doris.connector.spi.mvcc.ConnectorTimeTravelSpec
 import org.apache.doris.thrift.TIcebergColumnStats
 import org.apache.doris.thrift.TIcebergCommitData
 import org.apache.thrift.TSerializer

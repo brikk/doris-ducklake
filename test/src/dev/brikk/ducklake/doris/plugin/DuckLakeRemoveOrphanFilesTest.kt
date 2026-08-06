@@ -9,7 +9,7 @@ import dev.brikk.ducklake.catalog.DucklakeFilePathRef
 import dev.brikk.ducklake.catalog.DucklakeSchema
 import dev.brikk.ducklake.catalog.DucklakeTable
 
-import org.apache.doris.connector.api.DorisConnectorException
+import org.apache.doris.connector.spi.DorisConnectorException
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test

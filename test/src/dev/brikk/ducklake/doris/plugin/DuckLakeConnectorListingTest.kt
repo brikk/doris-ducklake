@@ -2,7 +2,7 @@ package dev.brikk.ducklake.doris.plugin
 
 import dev.brikk.ducklake.catalog.TestingDucklakePostgreSqlCatalogServer
 import dev.brikk.ducklake.doris.plugin.cache.FakeConnectorContext
-import org.apache.doris.connector.api.ConnectorColumn
+import org.apache.doris.connector.spi.ConnectorColumn
 import org.apache.doris.connector.spi.ConnectorContext
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy

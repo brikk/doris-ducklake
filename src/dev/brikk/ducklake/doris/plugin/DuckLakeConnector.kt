@@ -6,13 +6,13 @@ import java.util.EnumSet
 import dev.brikk.ducklake.catalog.DucklakeCatalogConfig
 import dev.brikk.ducklake.catalog.JdbcDucklakeCatalog
 
-import org.apache.doris.connector.api.Connector
-import org.apache.doris.connector.api.ConnectorCapability
-import org.apache.doris.connector.api.ConnectorMetadata
-import org.apache.doris.connector.api.ConnectorSession
-import org.apache.doris.connector.api.procedure.ConnectorProcedureOps
-import org.apache.doris.connector.api.scan.ConnectorScanPlanProvider
-import org.apache.doris.connector.api.write.ConnectorWritePlanProvider
+import org.apache.doris.connector.spi.Connector
+import org.apache.doris.connector.spi.ConnectorCapability
+import org.apache.doris.connector.spi.ConnectorMetadata
+import org.apache.doris.connector.spi.ConnectorSession
+import org.apache.doris.connector.spi.procedure.ConnectorProcedureOps
+import org.apache.doris.connector.spi.scan.ConnectorScanPlanProvider
+import org.apache.doris.connector.spi.write.ConnectorWritePlanProvider
 import org.apache.doris.connector.spi.ConnectorContext
 
 /**

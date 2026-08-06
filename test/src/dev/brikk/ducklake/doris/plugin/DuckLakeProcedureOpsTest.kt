@@ -7,8 +7,8 @@ import dev.brikk.ducklake.catalog.DucklakeCatalog
 import dev.brikk.ducklake.catalog.ExpireSnapshotsResult
 import dev.brikk.ducklake.catalog.TransactionConflictException
 
-import org.apache.doris.connector.api.DorisConnectorException
-import org.apache.doris.connector.api.procedure.ProcedureExecutionMode
+import org.apache.doris.connector.spi.DorisConnectorException
+import org.apache.doris.connector.spi.procedure.ProcedureExecutionMode
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test

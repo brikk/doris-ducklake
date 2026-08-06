@@ -1,7 +1,7 @@
 package dev.brikk.ducklake.doris.plugin
 
-import org.apache.doris.connector.api.ConnectorType
-import org.apache.doris.connector.api.handle.ConnectorColumnHandle
+import org.apache.doris.connector.spi.ConnectorType
+import org.apache.doris.connector.spi.handle.ConnectorColumnHandle
 
 /**
  * Opaque DuckLake column handle. [columnId] is the stable DuckLake

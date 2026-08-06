@@ -7,25 +7,25 @@ import dev.brikk.ducklake.catalog.DucklakePartitionField
 import dev.brikk.ducklake.catalog.DucklakePartitionTransform
 import dev.brikk.ducklake.catalog.DucklakeSnapshot
 import dev.brikk.ducklake.catalog.TableColumnSpec
-import org.apache.doris.connector.api.ConnectorColumn
-import org.apache.doris.connector.api.ConnectorDatabaseMetadata
-import org.apache.doris.connector.api.ConnectorMetadata
-import org.apache.doris.connector.api.ConnectorSession
-import org.apache.doris.connector.api.ConnectorTableSchema
-import org.apache.doris.connector.api.ConnectorTableStatistics
-import org.apache.doris.connector.api.ddl.ConnectorCreateTableRequest
-import org.apache.doris.connector.api.handle.ConnectorColumnHandle
-import org.apache.doris.connector.api.handle.ConnectorTableHandle
-import org.apache.doris.connector.api.handle.ConnectorTransaction
-import org.apache.doris.connector.api.mvcc.ConnectorMvccSnapshot
-import org.apache.doris.connector.api.mvcc.ConnectorTimeTravelSpec
-import org.apache.doris.connector.api.pushdown.ConnectorAnd
-import org.apache.doris.connector.api.pushdown.ConnectorColumnAssignment
-import org.apache.doris.connector.api.pushdown.ConnectorColumnRef
-import org.apache.doris.connector.api.pushdown.ConnectorExpression
-import org.apache.doris.connector.api.pushdown.ConnectorFilterConstraint
-import org.apache.doris.connector.api.pushdown.FilterApplicationResult
-import org.apache.doris.connector.api.pushdown.ProjectionApplicationResult
+import org.apache.doris.connector.spi.ConnectorColumn
+import org.apache.doris.connector.spi.ConnectorDatabaseMetadata
+import org.apache.doris.connector.spi.ConnectorMetadata
+import org.apache.doris.connector.spi.ConnectorSession
+import org.apache.doris.connector.spi.ConnectorTableSchema
+import org.apache.doris.connector.spi.ConnectorTableStatistics
+import org.apache.doris.connector.spi.ddl.ConnectorCreateTableRequest
+import org.apache.doris.connector.spi.handle.ConnectorColumnHandle
+import org.apache.doris.connector.spi.handle.ConnectorTableHandle
+import org.apache.doris.connector.spi.handle.ConnectorTransaction
+import org.apache.doris.connector.spi.mvcc.ConnectorMvccSnapshot
+import org.apache.doris.connector.spi.mvcc.ConnectorTimeTravelSpec
+import org.apache.doris.connector.spi.pushdown.ConnectorAnd
+import org.apache.doris.connector.spi.pushdown.ConnectorColumnAssignment
+import org.apache.doris.connector.spi.pushdown.ConnectorColumnRef
+import org.apache.doris.connector.spi.pushdown.ConnectorExpression
+import org.apache.doris.connector.spi.pushdown.ConnectorFilterConstraint
+import org.apache.doris.connector.spi.pushdown.FilterApplicationResult
+import org.apache.doris.connector.spi.pushdown.ProjectionApplicationResult
 import java.time.Instant
 import java.util.Optional
 
@@ -466,7 +466,7 @@ internal class DuckLakeConnectorMetadata(
             return
         }
         if (force) {
-            throw org.apache.doris.connector.api.DorisConnectorException(
+            throw org.apache.doris.connector.spi.DorisConnectorException(
                 "DROP DATABASE ... FORCE (CASCADE) is not supported for DuckLake catalogs; " +
                     "drop the tables first, then DROP DATABASE.",
             )

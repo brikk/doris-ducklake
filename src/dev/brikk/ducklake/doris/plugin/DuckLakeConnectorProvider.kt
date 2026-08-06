@@ -1,6 +1,6 @@
 package dev.brikk.ducklake.doris.plugin
 
-import org.apache.doris.connector.api.Connector
+import org.apache.doris.connector.spi.Connector
 import org.apache.doris.connector.spi.ConnectorContext
 import org.apache.doris.connector.spi.ConnectorProvider
 

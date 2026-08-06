@@ -1,11 +1,11 @@
 package dev.brikk.ducklake.doris.plugin
 
-import org.apache.doris.connector.api.pushdown.ConnectorColumnRef
-import org.apache.doris.connector.api.pushdown.ConnectorComparison
-import org.apache.doris.connector.api.pushdown.ConnectorExpression
-import org.apache.doris.connector.api.pushdown.ConnectorIn
-import org.apache.doris.connector.api.pushdown.ConnectorLiteral
-import org.apache.doris.connector.api.pushdown.ConnectorOr
+import org.apache.doris.connector.spi.pushdown.ConnectorColumnRef
+import org.apache.doris.connector.spi.pushdown.ConnectorComparison
+import org.apache.doris.connector.spi.pushdown.ConnectorExpression
+import org.apache.doris.connector.spi.pushdown.ConnectorIn
+import org.apache.doris.connector.spi.pushdown.ConnectorLiteral
+import org.apache.doris.connector.spi.pushdown.ConnectorOr
 
 /**
  * Recognizes **membership** predicates — those constraining a *single* column to

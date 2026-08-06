@@ -1,16 +1,16 @@
 package dev.brikk.ducklake.doris.plugin
 
 import dev.brikk.ducklake.catalog.ColumnRangePredicate
-import org.apache.doris.connector.api.pushdown.ConnectorAnd
-import org.apache.doris.connector.api.pushdown.ConnectorBetween
-import org.apache.doris.connector.api.pushdown.ConnectorColumnRef
-import org.apache.doris.connector.api.pushdown.ConnectorComparison
-import org.apache.doris.connector.api.pushdown.ConnectorExpression
-import org.apache.doris.connector.api.pushdown.ConnectorFunctionCall
-import org.apache.doris.connector.api.pushdown.ConnectorIn
-import org.apache.doris.connector.api.pushdown.ConnectorLike
-import org.apache.doris.connector.api.pushdown.ConnectorLiteral
-import org.apache.doris.connector.api.pushdown.ConnectorOr
+import org.apache.doris.connector.spi.pushdown.ConnectorAnd
+import org.apache.doris.connector.spi.pushdown.ConnectorBetween
+import org.apache.doris.connector.spi.pushdown.ConnectorColumnRef
+import org.apache.doris.connector.spi.pushdown.ConnectorComparison
+import org.apache.doris.connector.spi.pushdown.ConnectorExpression
+import org.apache.doris.connector.spi.pushdown.ConnectorFunctionCall
+import org.apache.doris.connector.spi.pushdown.ConnectorIn
+import org.apache.doris.connector.spi.pushdown.ConnectorLike
+import org.apache.doris.connector.spi.pushdown.ConnectorLiteral
+import org.apache.doris.connector.spi.pushdown.ConnectorOr
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 

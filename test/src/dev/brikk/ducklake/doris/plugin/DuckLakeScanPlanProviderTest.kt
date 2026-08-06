@@ -3,20 +3,20 @@ package dev.brikk.ducklake.doris.plugin
 import java.util.Optional
 import dev.brikk.ducklake.catalog.TestingDucklakePostgreSqlCatalogServer
 import dev.brikk.ducklake.doris.plugin.cache.FakeConnectorContext
-import org.apache.doris.connector.api.pushdown.ConnectorColumnRef
-import org.apache.doris.connector.api.pushdown.ConnectorComparison
-import org.apache.doris.connector.api.pushdown.ConnectorFilterConstraint
-import org.apache.doris.connector.api.pushdown.ConnectorIn
-import org.apache.doris.connector.api.pushdown.ConnectorLike
-import org.apache.doris.connector.api.pushdown.ConnectorLiteral
-import org.apache.doris.connector.api.pushdown.ConnectorOr
-import org.apache.doris.connector.api.pushdown.ConnectorExpression
-import org.apache.doris.connector.api.handle.ConnectorColumnHandle
-import org.apache.doris.connector.api.handle.ConnectorTableHandle
-import org.apache.doris.connector.api.scan.ConnectorScanPlanProvider
-import org.apache.doris.connector.api.scan.ConnectorScanRange
-import org.apache.doris.connector.api.scan.ConnectorScanRequest
-import org.apache.doris.connector.api.ConnectorSession
+import org.apache.doris.connector.spi.pushdown.ConnectorColumnRef
+import org.apache.doris.connector.spi.pushdown.ConnectorComparison
+import org.apache.doris.connector.spi.pushdown.ConnectorFilterConstraint
+import org.apache.doris.connector.spi.pushdown.ConnectorIn
+import org.apache.doris.connector.spi.pushdown.ConnectorLike
+import org.apache.doris.connector.spi.pushdown.ConnectorLiteral
+import org.apache.doris.connector.spi.pushdown.ConnectorOr
+import org.apache.doris.connector.spi.pushdown.ConnectorExpression
+import org.apache.doris.connector.spi.handle.ConnectorColumnHandle
+import org.apache.doris.connector.spi.handle.ConnectorTableHandle
+import org.apache.doris.connector.spi.scan.ConnectorScanPlanProvider
+import org.apache.doris.connector.spi.scan.ConnectorScanRange
+import org.apache.doris.connector.spi.scan.ConnectorScanRequest
+import org.apache.doris.connector.spi.ConnectorSession
 import org.apache.doris.thrift.TFileFormatType
 import org.apache.doris.thrift.TFileRangeDesc
 import org.apache.doris.thrift.TFileScanRangeParams
@@ -30,7 +30,7 @@ import org.junit.jupiter.api.Test
 /**
  * Step 3 of the roadmap: scan-plan provider returning one range per active
  * data file. Goes through the public SPI surface
- * ([DuckLakeConnectorProvider.create] -> [org.apache.doris.connector.api.Connector.getScanPlanProvider])
+ * ([DuckLakeConnectorProvider.create] -> [org.apache.doris.connector.spi.Connector.getScanPlanProvider])
  * so regressions in the connector-side wiring show up here.
  */
 internal class DuckLakeScanPlanProviderTest {

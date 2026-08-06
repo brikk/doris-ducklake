@@ -2,8 +2,8 @@ package dev.brikk.ducklake.doris.plugin
 
 import dev.brikk.ducklake.catalog.TestingDucklakePostgreSqlCatalogServer
 import dev.brikk.ducklake.doris.plugin.cache.FakeConnectorContext
-import org.apache.doris.connector.api.ConnectorMetadata
-import org.apache.doris.connector.api.ConnectorType
+import org.apache.doris.connector.spi.ConnectorMetadata
+import org.apache.doris.connector.spi.ConnectorType
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.BeforeAll

@@ -1,10 +1,10 @@
 package dev.brikk.ducklake.doris.plugin
 
 import dev.brikk.ducklake.catalog.DucklakePartitionTransform
-import org.apache.doris.connector.api.DorisConnectorException
-import org.apache.doris.connector.api.ddl.ConnectorBucketSpec
-import org.apache.doris.connector.api.ddl.ConnectorPartitionField
-import org.apache.doris.connector.api.ddl.ConnectorPartitionSpec
+import org.apache.doris.connector.spi.DorisConnectorException
+import org.apache.doris.connector.spi.ddl.ConnectorBucketSpec
+import org.apache.doris.connector.spi.ddl.ConnectorPartitionField
+import org.apache.doris.connector.spi.ddl.ConnectorPartitionSpec
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test

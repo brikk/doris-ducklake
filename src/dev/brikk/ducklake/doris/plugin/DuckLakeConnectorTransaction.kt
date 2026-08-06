@@ -1,8 +1,8 @@
 package dev.brikk.ducklake.doris.plugin
 
 import dev.brikk.ducklake.catalog.DucklakeCatalog
-import org.apache.doris.connector.api.DorisConnectorException
-import org.apache.doris.connector.api.handle.ConnectorTransaction
+import org.apache.doris.connector.spi.DorisConnectorException
+import org.apache.doris.connector.spi.handle.ConnectorTransaction
 import org.apache.doris.thrift.TIcebergCommitData
 import org.apache.thrift.TDeserializer
 import org.apache.thrift.TException

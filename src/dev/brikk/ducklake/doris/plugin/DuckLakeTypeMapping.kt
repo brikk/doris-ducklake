@@ -2,7 +2,7 @@ package dev.brikk.ducklake.doris.plugin
 
 import java.util.regex.Pattern
 
-import org.apache.doris.connector.api.ConnectorType
+import org.apache.doris.connector.spi.ConnectorType
 
 /**
  * Maps DuckLake catalog type strings (as they appear in `ducklake_column.column_type`)

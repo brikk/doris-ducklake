@@ -4,8 +4,8 @@ import java.util.EnumSet
 
 import dev.brikk.ducklake.doris.plugin.cache.FakeConnectorContext
 
-import org.apache.doris.connector.api.Connector
-import org.apache.doris.connector.api.ConnectorCapability
+import org.apache.doris.connector.spi.Connector
+import org.apache.doris.connector.spi.ConnectorCapability
 import org.junit.jupiter.api.Test
 
 import org.assertj.core.api.Assertions.assertThat
