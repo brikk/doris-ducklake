@@ -35,14 +35,15 @@ master-built BE).** These are gone from this log — see git history:
 
 ## 2026-07-31 · apache/doris `master` BE crashes on a DEFAULT-backfill / schema-evolution read (new `format_v2::TableReader`)
 
-**UPDATE (2026-08-06) — candidate fixes landed upstream; RE-SMOKE PENDING.** Three commits in the
-`0c01156be7f..a82564ced5d` window land directly on this path: **#66345** (`Fix MVCC and nested
-schema evolution edge cases`) rewrites `be/src/format_v2/table_reader.h` — the file this crash is
-in; **#65851** (`Support Iceberg V3 default values`) adds `iceberg_default_value.h` +
-`table_schema_change_helper` + `format_v2/column_mapper` — the DEFAULT-value read path; **#65446**
-(`Fix Parquet timestamp decoding and export defaults`) touches `format_v2/parquet/parquet_reader.cpp`
-+ `core/column/column.cpp` (the `is_column_const` SIGSEGV site). Not yet verified — needs a fresh
-master-BE re-smoke. If green, this entry is resolved. Original entry below.
+**UPDATE (2026-08-06) — RE-SMOKED on a fresh master BE (`a82564ced5d`): STILL BROKEN.** Candidate
+fixes in the `0c01156be7f..a82564ced5d` window (**#66345** MVCC/nested-schema-evolution, rewrites
+`format_v2/table_reader.h`; **#65851** Iceberg V3 default values; **#65446** parquet timestamp decode)
+touched adjacent code but **did NOT** fix this. A full-master (FE+BE both `a82564ced5d`) smoke crashes
+identically at §12b: `[INTERNAL_ERROR]Column type Const(INT) is not compatible with data type
+Nullable(INT)` → SIGSEGV in `format::TableReader::_evaluate_constant_filters` (`table_reader.h:576`),
+now via `ColumnNullable::get_null_map_state` (`column_nullable.cpp:685`). Everything else on that same
+run was green (reads, §8b-count, Step-7 delete, W1/W2/W2c/W3, corpus-replay). This remains the one
+hard read blocker on master. Original entry below.
 
 **Symptom.** Running the smoke against a BE **built from apache/doris `master`**
 (`ded91fb9fb3`; FE also master) — the move that fixes the position-delete and

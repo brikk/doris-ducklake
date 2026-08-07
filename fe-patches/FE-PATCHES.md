@@ -33,16 +33,20 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
   `org.apache.doris.connector.api.*` package tree to `…spi.*` (Trino-style single-module contract).
   Adaptation: dropped the `fe-connector-api` artifact from `build.gradle.kts` (both compileOnly and
   test), rewrote `connector.api.` → `connector.spi.` across 34 plugin files (imports only — no logic
-  change). main + test compile clean; unit tests green. Still PATCH-FREE; api.version still `1.0`.
-  Compile/unit-verified; **not re-smoked** (needs a fresh master FE+BE build — see the candidate BE
-  fixes below).
-  - **⭐ Candidate fixes for our open BE blockers landed in this window — re-smoke to confirm:**
-    - **#66345** `Fix MVCC and nested schema evolution edge cases` — edits `be/src/format_v2/table_reader.h`,
-      the exact file our §12b crash sits in (`_evaluate_constant_filters`).
-    - **#65851** `Support Iceberg V3 default values` — new `iceberg_default_value.h` + `table_schema_change_helper`
-      + `format_v2/column_mapper`: the DEFAULT-value read path our §12b DEFAULT-backfill crash exercises.
-    - **#65446** `Fix Parquet timestamp decoding and export defaults` — `format_v2/parquet/parquet_reader.cpp`
-      + `column.cpp`: our timestamptz-in-parquet friction (and the crash's `is_column_const` SIGSEGV site).
+  change).
+  - **⚠️ API-VERSION MAJOR BUMPED 1 → 5.** The breaking merge also bumped
+    `fe/fe-connector/pom.xml <connector.plugin.api.version>` to **`5.0`**, so the fail-closed gate
+    now **rejects** a major-1 plugin at load (`incompatible Doris-Connector-Plugin-Api-Version='1.0':
+    major 1 but this FE serves CONNECTOR plugin API 5.0`). We updated the `jar` manifest stamp to
+    `5.0` (`build.gradle.kts`). Without this the plugin compiles but the FE refuses to load it — the
+    first re-smoke attempt hit exactly this (`No connector plugin claimed catalog type 'ducklake'`).
+  - **FULL SMOKE re-run (FE+BE both `a82564ced5d`, BE freshly built + baked `doris-be:master-local`):**
+    catalog load ✅, reads ✅, **§8b-count `COUNT(v)=2` GREEN**, EXPLAIN ✅, **Step-7 DELETE GREEN**
+    (93 rows), W1 DDL ✅, W2/W2c/W3 INSERT/CTAS/bucket ✅, **`corpusReplayTest` GREEN**. Still PATCH-FREE.
+  - **❌ Still-open blocker re-confirmed:** §12b DEFAULT-backfill read still crashes the BE
+    (`Const(INT)` vs `Nullable(INT)` in `format_v2::TableReader::_evaluate_constant_filters`) — #66345/
+    #65851/#65446 did **not** fix it (adjacent code only). §13 GC + timestamptz remain unverified on
+    master because §12b crashes the BE first. See the §12b friction entry.
   - **Other SPI-window commits (no action):** #66331 ADBC catalog (new, not our path); #66403/#66247
     paimon fixes; #65126 external metadata-cache refactor.
 

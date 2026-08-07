@@ -186,12 +186,13 @@ tasks.withType<JavaCompile>().configureEach {
 // class (DirectoryPluginRuntimeManager.readManifestMainAttribute via ManifestVersions.jarOf), i.e.
 // THIS jar, and compares MAJOR only against the kernel resource
 // /META-INF/doris/connector-plugin-api-version.properties (api.version) baked into fe-connector-spi.
-// Both sides currently ship "1.0" (fe/fe-connector/pom.xml <connector.plugin.api.version>). We stamp
-// the same value here so our plugin jar declares major 1, exactly like the reference
-// doris-fe-connector-iceberg.jar. Bump this when the SPI baseline's major changes.
+// Master bumped this to "5.0" (fe/fe-connector/pom.xml <connector.plugin.api.version>) — the major
+// jumped 1 -> 5 to signal the breaking #66407 api-into-spi merge. The gate compares MAJOR only, so we
+// stamp a matching major-5 value; a major mismatch is a fail-closed load rejection ("major 1 but this
+// FE serves CONNECTOR plugin API 5.0"). Bump this whenever the SPI baseline's major changes.
 tasks.jar {
     manifest {
-        attributes("Doris-Connector-Plugin-Api-Version" to "1.0")
+        attributes("Doris-Connector-Plugin-Api-Version" to "5.0")
     }
 }
 
