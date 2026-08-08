@@ -33,59 +33,38 @@ master-built BE).** These are gone from this log — see git history:
 
 ---
 
-## 2026-07-31 · apache/doris `master` BE crashes on a DEFAULT-backfill / schema-evolution read (new `format_v2::TableReader`)
+## 2026-08-08 · Schema-evolution column DEFAULT not backfilled on master's `format_v2` read (reads 0, not the DEFAULT)
 
-**UPDATE (2026-08-06) — RE-SMOKED on a fresh master BE (`a82564ced5d`): STILL BROKEN.** Candidate
-fixes in the `0c01156be7f..a82564ced5d` window (**#66345** MVCC/nested-schema-evolution, rewrites
-`format_v2/table_reader.h`; **#65851** Iceberg V3 default values; **#65446** parquet timestamp decode)
-touched adjacent code but **did NOT** fix this. A full-master (FE+BE both `a82564ced5d`) smoke crashes
-identically at §12b: `[INTERNAL_ERROR]Column type Const(INT) is not compatible with data type
-Nullable(INT)` → SIGSEGV in `format::TableReader::_evaluate_constant_filters` (`table_reader.h:576`),
-now via `ColumnNullable::get_null_map_state` (`column_nullable.cpp:685`). Everything else on that same
-run was green (reads, §8b-count, Step-7 delete, W1/W2/W2c/W3, corpus-replay). This remains the one
-hard read blocker on master. Original entry below.
+**Status.** The earlier BE **crash** on this path is **RESOLVED** on `b42e1ab294b` — the full smoke
+now completes end-to-end (§13 GC reached + green for the first time on master). What remains is a
+**data-correctness** miss: pre-ADD rows do not read the column DEFAULT.
 
-**Symptom.** Running the smoke against a BE **built from apache/doris `master`**
-(`ded91fb9fb3`; FE also master) — the move that fixes the position-delete and
-`COUNT(col)` blockers above — the §12b column-DEFAULT read **takes the whole BE
-down** (SIGSEGV). On `be-4.1.3` this exact read was green. Repro: DuckDB seeds
-pre-ADD rows, `ALTER TABLE … ADD COLUMN b INT DEFAULT 42`, then read it back
-through Doris (`SELECT … FROM default_probe`). The BE logs the real error, then
-segfaults:
+**Symptom.** Repro (§12b): DuckDB seeds pre-ADD rows, `ALTER TABLE … ADD COLUMN b INT DEFAULT 42`,
+plus one explicit `b=99` row. DuckLake's own read is correct — `[(1,42),(2,42),(3,42),(4,99)]`. Via
+Doris on master (`SELECT … FROM default_probe`): the explicit row reads `b=99` ✅ and there are no
+spurious NULLs, but the three pre-ADD rows read **`b=0`, not `42`** (`b=42 rows=0/3`). So the missing
+column is zero-filled instead of DEFAULT-filled. On `be-4.1.3` this same read returned `42`.
 
-```
-[INTERNAL_ERROR]Column type Const(INT) is not compatible with data type Nullable(INT)
-  doris::DataTypeNullable::check_column                   core/data_type/data_type_nullable.cpp:147
-  doris::VExprContext::execute
-  doris::format::TableReader::_evaluate_constant_filters  format_v2/table_reader.h:561
-  doris::format::TableReader::open_reader                 format_v2/table_reader.h
-  doris::FileScannerV2::_get_block_impl                   exec/scan/file_scanner_v2.cpp:655
-# then, fatal (signal handler → JVM):
-  doris::is_column_const(doris::IColumn const&)           core/column/column.cpp:226   ← SIGSEGV
-```
+**Root cause (working theory).** master reads external tables through the new
+`format_v2::TableReader` + the Iceberg-V3 default-value machinery (`iceberg_default_value.h`,
+`table_schema_change_helper`; #65851). For a column absent from a pre-ADD file, the reader fills the
+type zero-value rather than the column's **initial-default**. The DuckLake DEFAULT (42) lives in the
+catalog metadata; the new path likely expects it as the Iceberg field **`initial-default`** in the
+schema handed to the BE — which the connector does not yet emit (the V3 default surface is brand new).
+So this is plausibly a **connector-side follow-up** (map the DuckLake column default → Iceberg
+`initial-default` in the schema/scan params), possibly with a BE component if the field is honored
+only on the write path today.
 
-**Root cause.** master routes external-table (DuckLake / iceberg-shaped) scans
-through the **new `format_v2::TableReader` + `FileScannerV2`** framework; 4.1.x
-used the older `format` reader, which handled this case. `_evaluate_constant_filters`
-executes a `VExpr` over a column the reader materialised as a **`Const(INT)`**
-(the DEFAULT / absent-column fill for the pre-ADD rows) while the target slot's
-data type is **`Nullable(INT)`**. `DataTypeNullable::check_column` rejects the
-const wrapper (`Const(INT)` is not `Nullable(INT)`), and the follow-on
-`is_column_const` path then dereferences a null column → SIGSEGV that aborts the
-BE process (clean-looking `exit 0`, but it's a signal abort). Any plugin/external
-scan that supplies a constant column for a nullable slot — schema-evolution
-DEFAULT backfill, or a missing column read as a constant — can hit it.
+**Workaround.** None yet. Data is not corrupted (explicit values + non-evolved reads are correct;
+crash is gone) — only the backfilled DEFAULT for pre-existing rows is wrong (0 vs 42).
 
-**Workaround.** None connector-side yet — it crashes the BE. The old `be-4.1.3`
-reader handled it, but 4.1.3 is not an option once you need master for the
-delete-file / `COUNT(col)` fixes above, so this is a hard blocker on master.
-
-**Fix (BE, pickable).** In `format_v2::TableReader::_evaluate_constant_filters`,
-const-fold / wrap the constant column into the **target nullable type** before
-`VExprContext::execute` (or unwrap the `Const` for `check_column`); and make the
-`is_column_const` / null path null-safe so a type mismatch surfaces as a clean
-`INTERNAL_ERROR` instead of a segfault. This lives squarely in the new
-`format_v2` reader that the connector-SPI reference implementation exercises.
+**Fix (investigate).** (1) Connector: emit each column's DuckLake default as the Iceberg V3
+`initial-default` (and `write-default`) in the schema/`ConnectorColumn` surface the FE hands the BE,
+so `format_v2`'s default machinery backfills it. (2) Confirm the BE read path (`iceberg_default_value.h`
+/ `table_schema_change_helper`) actually consults `initial-default` on **read** for a missing column,
+not only on write. Tracked in `TODO-read.md`. (Was previously a hard BE crash in
+`format_v2::TableReader::_evaluate_constant_filters` — `Const(INT)` vs `Nullable(INT)` SIGSEGV — fixed
+in the `a82564ced5d..b42e1ab294b` window, alongside #66589 FileScannerV2 reader-lifecycle cleanup.)
 
 ---
 

@@ -15,7 +15,7 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
  > from FE core into loadable connector plugins* + the whole `fe/fe-connector` tree, incl.
  > `fe-connector-api` / `fe-connector-spi`). We now vendor from **`~/DEV/OSS/doris`, branch
  > `master`** (apache/doris), **not** the retired brikk fork `branch-catalog-spi`. Current
- > pin: **`a82564ced5d`** (apache/doris master, 2026-08-06). Master's `<revision>` is still
+ > pin: **`b42e1ab294b`** (apache/doris master, 2026-08-08). Master's `<revision>` is still
  > `1.2-SNAPSHOT`, so the installed `~/.m2` coordinates are unchanged.
  > **SPI-surface note:** #66407 merged `fe-connector-api` INTO `fe-connector-spi` and renamed the
  > `org.apache.doris.connector.api.*` packages to `…spi.*`. We now depend on **only** the
@@ -25,6 +25,20 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
  > `compose/README.md` in sync.
 
 ### Re-vendor log
+
+- **2026-08-08 → pin `b42e1ab294b`** (`[refactor](be) Remove FileScannerV2's per-range table reader
+  rebuild (#66589)`). Routine bump from `a82564ced5d` (+15 commits). **Non-breaking:** the only
+  `fe-connector-spi` change (#66507 "same property layout / one reader per key") touched `package-info.java`
+  only; plugin main+test compile clean, api.version still `5.0` (stamp unchanged). **FULL SMOKE now
+  COMPLETES end-to-end** (FE+BE both `b42e1ab294b`): reads, §8b-count `COUNT(v)=2`, Step-7 DELETE (93),
+  W1/W2/W2c/W3, **§13 GC (expire/cleanup/orphan) — all GREEN**, `corpusReplayTest` GREEN.
+  - **✅ §12b BE CRASH RESOLVED.** The `format_v2::TableReader::_evaluate_constant_filters` `Const(INT)`
+    vs `Nullable(INT)` SIGSEGV is gone (fixed in the `a82564..b42e1ab` window; #66589 reworked the
+    FileScannerV2 reader lifecycle). §13 GC + full completion reached on master for the first time.
+  - **❌ New (lesser) §12b issue — DEFAULT value not backfilled:** pre-ADD rows read `b=0`, not the
+    DEFAULT `42` (explicit `b=99` row is correct; no NULLs; `be-4.1.3` returned `42`). Likely the
+    connector must emit the DuckLake column default as the Iceberg V3 `initial-default` for master's
+    new default machinery (#65851). Not a crash, not corruption — see the §12b friction entry.
 
 - **2026-08-06 → pin `a82564ced5d`** (`[fix](iceberg) Fix MVCC and nested schema evolution edge
   cases (#66345)`). Bump from `0c01156be7f` (+74 upstream commits). **BREAKING SPI change, adapted:**
@@ -43,10 +57,9 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
   - **FULL SMOKE re-run (FE+BE both `a82564ced5d`, BE freshly built + baked `doris-be:master-local`):**
     catalog load ✅, reads ✅, **§8b-count `COUNT(v)=2` GREEN**, EXPLAIN ✅, **Step-7 DELETE GREEN**
     (93 rows), W1 DDL ✅, W2/W2c/W3 INSERT/CTAS/bucket ✅, **`corpusReplayTest` GREEN**. Still PATCH-FREE.
-  - **❌ Still-open blocker re-confirmed:** §12b DEFAULT-backfill read still crashes the BE
+  - **❌ Still-open blocker (at this pin):** §12b DEFAULT-backfill read still crashed the BE
     (`Const(INT)` vs `Nullable(INT)` in `format_v2::TableReader::_evaluate_constant_filters`) — #66345/
-    #65851/#65446 did **not** fix it (adjacent code only). §13 GC + timestamptz remain unverified on
-    master because §12b crashes the BE first. See the §12b friction entry.
+    #65851/#65446 did **not** fix it. (Crash later resolved at `b42e1ab294b` — see the 2026-08-08 entry.)
   - **Other SPI-window commits (no action):** #66331 ADBC catalog (new, not our path); #66403/#66247
     paimon fixes; #65126 external metadata-cache refactor.
 
