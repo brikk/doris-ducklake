@@ -31,6 +31,15 @@ master-built BE).** These are gone from this log — see git history:
 - Iceberg sys-table positional-read contract — landed upstream on the SPI line;
   our plugin never used it.
 
+**Resolved & removed (2026-08-08, verified on master `b42e1ab294b`):**
+- **timestamptz-in-parquet** (both entries) — master's BE parquet reader now converts
+  `INT64 TIMESTAMP_MICROS, isAdjustedToUTC=1` into a zone-aware `TIMESTAMPTZ` slot (the
+  `Int64ToTimestampTz` converter, master-only, #65446). Probed live: `enable.mapping.timestamp_tz=true`
+  reads `2024-03-10 12:00:00+00` / `17:00:00+00` at session UTC (4.1.x threw `DateTimeV2 => TimeStampTz`),
+  and the same instants render `08:00-04:00` / `13:00-04:00` under `America/New_York` — genuinely
+  zone-aware. The connector default stays naive `DATETIMEV2` (opt-in tz, mirroring fe-connector-iceberg);
+  both are correct, so nothing left to track.
+
 ---
 
 ## 2026-08-08 · Schema-evolution column DEFAULT not backfilled on master's `format_v2` read (reads 0, not the DEFAULT)
@@ -131,69 +140,6 @@ inlined reads must remain gated off there.
 
 Until one lands, inlined-data reads work only where FE and BE share storage;
 tracked in `TODO-read.md`.
-
----
-
-## 2026-07-07 · timestamptz-in-parquet unreadable until a MASTER/nightly BE (not any 4.1.x)
-
-**UPDATE (2026-07-07):** `TIMESTAMPTZ` is a real, supported Doris type (4.1.2
-release note: "Support TIMESTAMPTZ in multiple aggregate and array functions"
-#62756 — but that's compute-side, not the parquet reader). The parquet-reader
-conversion (`be/src/format/parquet/parquet_column_convert.{h,cpp}`
-`Int64ToTimestampTz`/`Int96toTimestampTz` → `ColumnTimeStampTz`) is **master-only**:
-**verified that be-4.1.2 STILL errors** `DateTimeV2 => TimeStampTz` (bumped the
-compose BE 4.1.0 → 4.1.2 and re-tested). So it is NOT in any 4.0.x/4.1.x
-release; needs a master/nightly BE. (A master BE now exists — the ON path is
-plausibly readable there but is **unverified**; the smoke still runs the naive
-`DATETIMEV2` default below.)
-
-The in-tree `fe-connector-iceberg` already models this: catalog property
-`enable.mapping.timestamp_tz` (default OFF → naive `DATETIMEV2`; ON →
-`TIMESTAMPTZ`) — `IcebergTypeMapping` / `IcebergConnectorProperties`. **We now
-mirror it exactly** (`DuckLakeConnectorProperties.ENABLE_MAPPING_TIMESTAMP_TZ`,
-threaded through `DuckLakeConnectorMetadata` → `DuckLakeTypeMapping`), so our
-DATETIMEV2 default matches Doris's own connector default and users on a
-master/nightly BE can opt into zone-aware reads. Original entry below.
-
----
-
-## 2026-07-07 · BE parquet reader can't read timestamptz into a TimeStampTz slot
-
-**Symptom.** A DuckLake `timestamptz` column mapped to Doris `TIMESTAMPTZ`
-(`ScalarType.createTimeStampTzType`) fails at read time on the BE — for a real
-DuckLake-written file AND a connector-synthesized one:
-
-```
-[INTERNAL_ERROR]The column type of 'ts' is not supported: Unsupported type
-change: Nullable(DateTimeV2(6)) => Nullable(TimeStampTz(6)),
-src_logical_type: Nullable(DateTimeV2(6)), dst_logical_type: Nullable(TimeStampTz(6))
-```
-
-(There is also an FE-side prerequisite: the connector must emit the type name
-`TIMESTAMPTZ`, not `TIMESTAMPTZV2` — the latter falls through
-`ConnectorColumnConverter` to `UNSUPPORTED` and Nereids `CheckDataTypes`
-rejects the plan with "type UNSUPPORTED is unsupported for Nereids". Fixed on
-our side.)
-
-**Root cause.** DuckLake writes `timestamptz` as parquet `INT64` /
-`TIMESTAMP_MICROS` with `isAdjustedToUtc=true` (verified via
-`parquet_schema`). The 4.1.0 BE parquet reader surfaces that column's logical
-type as `DateTimeV2` and has no conversion path to a `TimeStampTz` scan slot
-(`be/src/vec/exec/format/parquet/...` "Unsupported type change"). So a
-zone-aware Doris slot over a UTC-micros parquet column is unreadable, whether
-the file was written by DuckDB or by our inlined-data synthesizer.
-
-**Workaround.** Map `timestamptz` → naive `DATETIMEV2(6)`
-(`DuckLakeTypeMapping`). The stored micros are already UTC, so the wall-clock
-values are correct; only the zone-aware TYPING is lost (a documented
-degradation — trino keeps it zone-aware via its own reader). The inlined
-writer writes the column as `isAdjustedToUtc=false` micros to match, so the BE
-sees `DateTimeV2 => DateTimeV2`.
-
-**Fix (BE).** Add a `DateTimeV2 -> TimeStampTz` conversion to the parquet
-reader's type-change handling for `isAdjustedToUtc` timestamp columns (read
-the UTC micros into the tz slot). Then the connector can restore the
-`TIMESTAMPTZ` mapping for zone-aware semantics. Tracked in `TODO-read.md`.
 
 ---
 
@@ -328,9 +274,17 @@ Until one of those lands, the temp-Parquet workaround is the plan; tracked in
 
 ---
 
-## 2026-06-10 · Narrow-int (TINYINT/SMALLINT) write crashes the BE Iceberg writer
+## 2026-06-10 · Narrow-int (TINYINT/SMALLINT) write fails in the BE Iceberg writer
 
-**Symptom.** A `CREATE TABLE … AS SELECT 1 AS id, 'alice' AS name` (CTAS) takes the
+**UPDATE (2026-08-08) — re-probed on master `b42e1ab294b`: still FAILS, but no longer
+crashes.** `CREATE TABLE dl.tpch.ni_probe AS SELECT CAST(1 AS TINYINT) t, CAST(2 AS SMALLINT) s`
+returns a clean query error and the **BE stays alive** (`Alive: true`, `HeartbeatFailureCounter: 0`)
+— the whole-process abort is gone. Same root cause and message, now surfaced as `[INTERNAL_ERROR]`:
+`Fail to convert block data to arrow data, type: TINYINT … Bad cast from arrow::NumericBuilder<Int32Type>
+to arrow::NumericBuilder<Int8Type>`. So the severity dropped (crash → recoverable error) but narrow-int
+writes still don't work; workaround unchanged. Original entry below.
+
+**Symptom (on 4.1.x).** A `CREATE TABLE … AS SELECT 1 AS id, 'alice' AS name` (CTAS) takes the
 **BE down** mid-write. `SHOW BACKENDS` → `Alive: false`,
 `ErrMsg: java.net.SocketTimeoutException: Read timed out`; the BE log shows an
 `assert_cast` abort:
