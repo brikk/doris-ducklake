@@ -45,26 +45,43 @@ Doris on master (`SELECT … FROM default_probe`): the explicit row reads `b=99`
 spurious NULLs, but the three pre-ADD rows read **`b=0`, not `42`** (`b=42 rows=0/3`). So the missing
 column is zero-filled instead of DEFAULT-filled. On `be-4.1.3` this same read returned `42`.
 
-**Root cause (working theory).** master reads external tables through the new
-`format_v2::TableReader` + the Iceberg-V3 default-value machinery (`iceberg_default_value.h`,
-`table_schema_change_helper`; #65851). For a column absent from a pre-ADD file, the reader fills the
-type zero-value rather than the column's **initial-default**. The DuckLake DEFAULT (42) lives in the
-catalog metadata; the new path likely expects it as the Iceberg field **`initial-default`** in the
-schema handed to the BE — which the connector does not yet emit (the V3 default surface is brand new).
-So this is plausibly a **connector-side follow-up** (map the DuckLake column default → Iceberg
-`initial-default` in the schema/scan params), possibly with a BE component if the field is honored
-only on the write path today.
+**Root cause (traced, 2026-08-08).** The FE side is intact: `FileScanNode.setDefaultValueExprs`
+parses `Column.getDefaultValueSql()` (fed by our `ConnectorColumn.defaultValue` → the scalar-safe
+DuckLake `initial_default`) and emits it on **both** `TFileScanSlotInfo.default_value_expr` **and**
+`TFileScanRangeParams.default_value_of_src_slot`. The new BE reader even reads it —
+`FileScannerV2::_build_default_expr` (`file_scanner_v2.cpp:818`) consumes `default_value_expr` and
+sets `column.default_expr` (`:787`). But for our scan the value is then lost: `IcebergTableReader::`
+`annotate_projected_column` (`format_v2/table/iceberg_reader.cpp:769`) runs next and, for an
+iceberg-semantics scan, makes the **Iceberg schema column authoritative** — it overwrites
+`column->initial_default_value`/`default_expr` from `context->schema_column` and can clear the FE
+`default_expr`. `context->schema_column` is the Iceberg schema, which for a plugin scan carries no
+`initial-default`, so the fill falls to the type zero-value. (We dispatch as `table_format_type =
+"iceberg"`, so we always take this iceberg path.)
 
-**Workaround.** None yet. Data is not corrupted (explicit values + non-evolved reads are correct;
-crash is gone) — only the backfilled DEFAULT for pre-existing rows is wrong (0 vs 42).
+**Workaround — TESTED, does NOT work (connector-only is insufficient).** We tried emitting the
+DuckLake default as the Iceberg field `initial_default_value` on the scan-time **schema dictionary**
+`TField` (`ExternalTableSchema.thrift:58`, which `format_v2/table_reader.cpp:403` reads into
+`ColumnDefinition.initial_default_value`; scalars parse via `SerDe::from_fe_string`, so `"42"` is the
+right form). Rebuilt the plugin, re-smoked on master FE+BE: **still `b=0`.** The schema-dictionary
+`TField` is **not** the `context->schema_column` the iceberg reader consults, and the FE
+`default_value_expr` we already feed is overridden — so with today's surface a connector cannot inject
+the read-time default for an iceberg-dispatched plugin scan. (Change reverted; kept out of the tree.)
+Not corruption — explicit values + non-evolved reads are correct; only pre-ADD rows read 0 vs 42.
 
-**Fix (investigate).** (1) Connector: emit each column's DuckLake default as the Iceberg V3
-`initial-default` (and `write-default`) in the schema/`ConnectorColumn` surface the FE hands the BE,
-so `format_v2`'s default machinery backfills it. (2) Confirm the BE read path (`iceberg_default_value.h`
-/ `table_schema_change_helper`) actually consults `initial-default` on **read** for a missing column,
-not only on write. Tracked in `TODO-read.md`. (Was previously a hard BE crash in
-`format_v2::TableReader::_evaluate_constant_filters` — `Const(INT)` vs `Nullable(INT)` SIGSEGV — fixed
-in the `a82564ced5d..b42e1ab294b` window, alongside #66589 FileScannerV2 reader-lifecycle cleanup.)
+**Report to the Doris team (the regression to un-regress).** The legacy 4.1.x `format/` reader
+honored the FE-supplied `TFileScanSlotInfo.default_value_expr` for missing-column backfill; master's
+`format_v2` path drops it for external/plugin (iceberg-dispatched) scans, so
+`ALTER TABLE … ADD COLUMN … DEFAULT` old-row backfill regressed (reads type-zero). Concretely:
+`IcebergTableReader::annotate_projected_column` should **fall back to** the already-built FE
+`column.default_expr` (from `FileScannerV2::_build_default_expr`) when `context->schema_column`
+supplies no `initial-default`/typed `default_expr`, instead of clearing it — i.e. treat the FE
+`default_value_expr` as the backfill of last resort. Alternatively/additionally, expose a
+plugin-reachable channel to populate the Iceberg reader's per-column `initial-default` (the scan-time
+schema dictionary `TField.initial_default_value` is the natural spot, but the iceberg reader ignores
+it today). Tracked in `TODO-read.md`. (Previously a hard BE **crash** in
+`format_v2::TableReader::_evaluate_constant_filters` — `Const(INT)` vs `Nullable(INT)` SIGSEGV —
+resolved in the `a82564ced5d..b42e1ab294b` window, alongside #66589's FileScannerV2 reader-lifecycle
+cleanup.)
 
 ---
 
