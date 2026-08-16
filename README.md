@@ -5,7 +5,7 @@
 > table format (spec v1.0). It targets the `fe-connector` catalog SPI, which
 > **merged into Apache Doris `master`** (`#64304` *decouple external catalogs
 > from FE core into loadable connector plugins*, + the `fe/fe-connector` tree);
-> we build the FE from apache/doris `master` (pin `b42e1ab294b`), **not** the
+> we build the FE from apache/doris `master` (pin `b119273e3f0`), **not** the
 > now-retired brikk fork `branch-catalog-spi`. The SPI is not in any tagged
 > Doris *release* yet, so a stock released Doris build still can't load it —
 > build the FE from master (see [`fe-patches/`](fe-patches/); PATCH-FREE). The

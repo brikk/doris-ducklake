@@ -15,7 +15,7 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
  > from FE core into loadable connector plugins* + the whole `fe/fe-connector` tree, incl.
  > `fe-connector-api` / `fe-connector-spi`). We now vendor from **`~/DEV/OSS/doris`, branch
  > `master`** (apache/doris), **not** the retired brikk fork `branch-catalog-spi`. Current
- > pin: **`b42e1ab294b`** (apache/doris master, 2026-08-08). Master's `<revision>` is still
+ > pin: **`b119273e3f0`** (apache/doris master, 2026-08-16). Master's `<revision>` is still
  > `1.2-SNAPSHOT`, so the installed `~/.m2` coordinates are unchanged.
  > **SPI-surface note:** #66407 merged `fe-connector-api` INTO `fe-connector-spi` and renamed the
  > `org.apache.doris.connector.api.*` packages to `…spi.*`. We now depend on **only** the
@@ -25,6 +25,20 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
  > `compose/README.md` in sync.
 
 ### Re-vendor log
+
+- **2026-08-16 → pin `b119273e3f0`** (`[fix](load) Keep graceful BE stop bounded when an audit stream
+  load is in flight (#66797)`). Routine "stay-ready" bump from `b42e1ab294b` (+44 commits).
+  **Non-breaking:** no `fe-connector-spi` surface change; plugin main+test compile clean; api.version
+  still `5.0`. **FULL SMOKE + corpus GREEN** (FE+BE both `b119273e3f0`, freshly built): reads,
+  §8b-count `COUNT(v)=2`, Step-7 DELETE (93), W1/W2/W2c/W3, §13 GC, `corpusReplayTest`. **§12b DEFAULT
+  backfill unchanged** (still reads `0`, no fix in window). Timestamptz stays resolved.
+  - **On our path this window:** #66628 `[fix](fe) Normalize connector table errors` edits
+    `PluginDrivenScanNode` (our scans flow through it) — smoke shows no behavior regression.
+  - **BE build notes:** #66783 bumped `HADOOP_LIBS_3_4 → hadoop-3.4.2.3-for-doris` (thirdparty) — use a
+    build-env image **≥ 2026-08-15** (the one used here) or the thirdparty guard fails; several
+    unity-build enablements (#66712/#66776/#66789) landed (ccache mostly cold this round, ~full rebuild).
+  - **In-tree iceberg churn (reference, not our code):** #66348 harden external-write lifecycle/OCC,
+    #66627 reject unsafe iceberg column drops, #66567 Alibaba OSS Tables REST catalog.
 
 - **2026-08-08 → pin `b42e1ab294b`** (`[refactor](be) Remove FileScannerV2's per-range table reader
   rebuild (#66589)`). Routine bump from `a82564ced5d` (+15 commits). **Non-breaking:** the only
