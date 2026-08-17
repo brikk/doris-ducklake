@@ -15,16 +15,30 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
  > from FE core into loadable connector plugins* + the whole `fe/fe-connector` tree, incl.
  > `fe-connector-api` / `fe-connector-spi`). We now vendor from **`~/DEV/OSS/doris`, branch
  > `master`** (apache/doris), **not** the retired brikk fork `branch-catalog-spi`. Current
- > pin: **`b119273e3f0`** (apache/doris master, 2026-08-16). Master's `<revision>` is still
+ > pin: **`168d0777833`** (apache/doris master, 2026-08-17). Master's `<revision>` is still
  > `1.2-SNAPSHOT`, so the installed `~/.m2` coordinates are unchanged.
  > **SPI-surface note:** #66407 merged `fe-connector-api` INTO `fe-connector-spi` and renamed the
  > `org.apache.doris.connector.api.*` packages to `…spi.*`. We now depend on **only** the
  > `fe-connector-spi` artifact and our imports moved `api.` → `spi.` (mechanical). Still
- > **PATCH-FREE** (unchanged since #66135), and the `Doris-Connector-Plugin-Api-Version` manifest
- > gate (#66211) is still `1.0` on both sides. Keep this note, the Re-vendor log, and
- > `compose/README.md` in sync.
+ > **PATCH-FREE** (unchanged since #66135). The `Doris-Connector-Plugin-Api-Version` gate (#66211) has
+ > stepped **1 → 5 (#66407) → 6 (#66413)**; we stamp **`6.0`** in `build.gradle.kts` to match this pin.
+ > Keep this note, the Re-vendor log, and `compose/README.md` in sync.
 
 ### Re-vendor log
+
+- **2026-08-17 → pin `168d0777833`** (`[fix](build) Unbreak master: stale unity-skip entry (BE) and
+  dropped count probe (FE) (#66831)`). Bump from `b119273e3f0` (+18 commits; pinned to the tip because
+  master was briefly un-buildable mid-window — #66831 is the fix). **api-version bumped 5 → 6** (#66413):
+  compiles fine (the SPI change was additive `default` methods — `isWritesDataFiles`, `getBeExecVersion`,
+  `canServeMetadataOnlyCount`), but the load gate rejects a major mismatch, so we bumped the manifest
+  stamp to **`6.0`**. Still PATCH-FREE. **Smoke: mostly GREEN** (catalog load, reads, §8b-count
+  `COUNT(v)=2`, Step-7 DELETE, W1/W2/W2c/W3, `corpusReplayTest`) —
+  **but §12b REGRESSED to a BE crash** (see the §12b friction entry): #66413's `column_mapper.cpp`
+  rewrite re-introduced the `Const(INT)` vs `Nullable(INT)` SIGSEGV in `_evaluate_constant_filters`
+  (was a mere correctness-miss since #66589). §13 GC didn't run (BE down at §12b) but is unaffected by
+  the cause.
+  - **New opportunity:** `canServeMetadataOnlyCount(...)` (#66413/#66778 count-from-live-manifests) is a
+    connector hook to serve `COUNT(*)` from DuckLake metadata — a future §8b-count optimization.
 
 - **2026-08-16 → pin `b119273e3f0`** (`[fix](load) Keep graceful BE stop bounded when an audit stream
   load is in flight (#66797)`). Routine "stay-ready" bump from `b42e1ab294b` (+44 commits).

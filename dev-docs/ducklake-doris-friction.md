@@ -42,11 +42,25 @@ master-built BE).** These are gone from this log — see git history:
 
 ---
 
-## 2026-08-08 · Schema-evolution column DEFAULT not backfilled on master's `format_v2` read (reads 0, not the DEFAULT)
+## 2026-08-08 · Schema-evolution column DEFAULT read on master's `format_v2` — REGRESSED to a BE crash at 168d0777833
 
-**Status.** The earlier BE **crash** on this path is **RESOLVED** on `b42e1ab294b` — the full smoke
-now completes end-to-end (§13 GC reached + green for the first time on master). What remains is a
-**data-correctness** miss: pre-ADD rows do not read the column DEFAULT.
+**⚠️ UPDATE (2026-08-17, pin `168d0777833`) — the crash is BACK.** `#66413` ("forward-port Parquet and
+external Variant fixes") rewrote `be/src/format_v2/column_mapper.cpp` (+630) and **re-introduced the
+original SIGSEGV** on this path. Identical signature to the pre-`b42e1ab294b` crash:
+`[INTERNAL_ERROR]Column type Const(INT) is not compatible with data type Nullable(INT)` →
+`DataTypeNullable::check_column` (`data_type_nullable.cpp:147`) → SIGSEGV in
+`format::TableReader::_evaluate_constant_filters` (`table_reader.h:576`) via
+`ColumnWithTypeAndName::get_nullable_column_info`. The §12b read takes the BE down again; the rest of
+the smoke (reads, §8b-count, Step-7 delete, W1/W2/W2c/W3, corpus-replay) stays green, so the blast
+radius is only the schema-evolution DEFAULT / constant-filter path. **Regression timeline:** crash
+(≤`a82564ced5d`) → fixed to correctness-miss by #66589 (`b42e1ab294b`) → **crash again (#66413,
+`168d0777833`)**. Report to Doris: the `_evaluate_constant_filters` const-vs-nullable guard needs the
+same hardening #66589 gave it; the column_mapper rewrite dropped it. Everything below (the
+correctness-era analysis + the un-regress recommendation) still applies.
+
+**Status (b42e1ab294b .. before 168d0777833).** The earlier BE **crash** on this path was **RESOLVED**
+— the full smoke completed end-to-end (§13 GC green). What remained was a **data-correctness** miss:
+pre-ADD rows did not read the column DEFAULT.
 
 **Symptom.** Repro (§12b): DuckDB seeds pre-ADD rows, `ALTER TABLE … ADD COLUMN b INT DEFAULT 42`,
 plus one explicit `b=99` row. DuckLake's own read is correct — `[(1,42),(2,42),(3,42),(4,99)]`. Via
