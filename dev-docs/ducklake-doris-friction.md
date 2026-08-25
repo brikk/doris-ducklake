@@ -3,6 +3,10 @@
 Open items from implementing the DuckLake `fe-connector` plugin against apache/doris `master`.
 **Ordered by priority for a 4.2 ship** (top = fix first); each has a pickable upstream fix. Full
 detail on the top items, papercuts kept short. Pin / build: [`../fe-patches/FE-PATCHES.md`](../fe-patches/FE-PATCHES.md).
+
+> **Current as of apache/doris `master` @ `1731787677f`** — commit dated **2026-08-25 22:36:06 +0800**
+> (`[chore](lance) update lance version to tag 0.1.7 (#67115)`). Findings below built + full-smoke
+> validated against that commit (connector plugin API 6.0). No `branch-4.2` yet.
 Sister docs: [`ducklake-doris-integration-spi-plan.md`](./ducklake-doris-integration-spi-plan.md),
 [`ducklake-doris-sanity-check.md`](./ducklake-doris-sanity-check.md), [`TODO-read.md`](./TODO-read.md).
 
