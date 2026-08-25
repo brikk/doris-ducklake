@@ -15,7 +15,7 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
  > from FE core into loadable connector plugins* + the whole `fe/fe-connector` tree, incl.
  > `fe-connector-api` / `fe-connector-spi`). We now vendor from **`~/DEV/OSS/doris`, branch
  > `master`** (apache/doris), **not** the retired brikk fork `branch-catalog-spi`. Current
- > pin: **`168d0777833`** (apache/doris master, 2026-08-17). Master's `<revision>` is still
+ > pin: **`1731787677f`** (apache/doris master, 2026-08-25). Master's `<revision>` is still
  > `1.2-SNAPSHOT`, so the installed `~/.m2` coordinates are unchanged.
  > **SPI-surface note:** #66407 merged `fe-connector-api` INTO `fe-connector-spi` and renamed the
  > `org.apache.doris.connector.api.*` packages to `…spi.*`. We now depend on **only** the
@@ -25,6 +25,16 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
  > Keep this note, the Re-vendor log, and `compose/README.md` in sync.
 
 ### Re-vendor log
+
+- **2026-08-25 → pin `1731787677f`** (`[chore](lance) update lance version to tag 0.1.7 (#67115)`).
+  "Stay-current" bump from `168d0777833` (+~130 commits over ~8 days). **Non-breaking:** no
+  `fe-connector-spi` surface change; plugin main+test compile clean; api.version still `6.0` (stamp
+  unchanged). **FULL SMOKE + corpus GREEN** (FE+BE both `1731787677f`, freshly built): catalog load,
+  reads, §8b-count `COUNT(v)=2`, Step-7 DELETE (93), W1/W2/W2c/W3, §13 GC, `corpusReplayTest`.
+  - **✅ §12b BE crash RE-FIXED.** The `#66413` regression (SIGSEGV in `_evaluate_constant_filters`) is
+    gone again — smoke completes end-to-end, BE stays alive. Back to the **correctness miss** (old rows
+    read `0` not the DEFAULT); only `format_v2` touch in the window was `#66819`. See §12b friction entry.
+  - No branch-4.2 yet; api.version steady at 6.0.
 
 - **2026-08-17 → pin `168d0777833`** (`[fix](build) Unbreak master: stale unity-skip entry (BE) and
   dropped count probe (FE) (#66831)`). Bump from `b119273e3f0` (+18 commits; pinned to the tip because

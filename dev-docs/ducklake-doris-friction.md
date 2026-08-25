@@ -17,31 +17,29 @@ Also green on master: reads, DDL (CREATE/DROP DB+TABLE, bucket-partition), INSER
 
 ---
 
-## P0 — BE crash, regressed pre-4.2: schema-evolution column DEFAULT read SIGSEGVs
+## P0 — silent wrong data: schema-evolution column DEFAULT reads 0 instead of the DEFAULT
 
-**A read of any external-table column added with a `DEFAULT` over pre-existing rows crashes the BE.**
-Fresh regression: `#66413` ("forward-port Parquet/Variant fixes") rewrote `format_v2/column_mapper.cpp`
-(+630) and re-introduced a SIGSEGV that `#66589` had fixed. **If 4.2 ships with `#66413` as-is, it ships
-this crash.**
+**A read of an external-table column added with a `DEFAULT` over pre-existing rows returns `0`, not the
+DEFAULT** — silent wrong values on a supported operation. (The BE **crash** this path used to throw is
+gone again as of `1731787677f`; see timeline. What remains is the correctness miss.)
 
 - **Repro:** `ALTER TABLE t ADD COLUMN b INT DEFAULT 42` over rows written before `b` existed, then
-  `SELECT b FROM t`. (DuckLake stores the value in `ducklake_column.initial_default`.)
-- **Signature:** `[INTERNAL_ERROR]Column type Const(INT) is not compatible with data type Nullable(INT)`
-  → `DataTypeNullable::check_column` (`data_type_nullable.cpp:147`) → SIGSEGV in
-  `format::TableReader::_evaluate_constant_filters` (`table_reader.h:576`).
-- **Timeline:** crash (≤`a82564ced5d`) → fixed to a mere correctness-miss by `#66589` (`b42e1ab294b`)
-  → **crash again** via `#66413` (`168d0777833`).
-- **Fix (two layers, both wanted):**
-  1. **Un-regress the crash:** restore the const-vs-nullable guard in `_evaluate_constant_filters` that
-     `#66589` added and the `column_mapper` rewrite dropped (a type mismatch must be a clean error, not
-     a segfault).
-  2. **Then the correctness:** even pre-`#66413` the value was wrong (old rows read `0`, not `42`). The
-     FE already sends the default on `TFileScanSlotInfo.default_value_expr`, and
-     `FileScannerV2::_build_default_expr` reads it — but `IcebergTableReader::annotate_projected_column`
-     (`format_v2/table/iceberg_reader.cpp`) makes the Iceberg `schema_column` authoritative and clears
-     it (a plugin scan supplies no iceberg `initial-default`). **Fall back to the FE `default_expr`
-     when the schema supplies none.** (Connector-only can't fix this — we tried injecting the Iceberg
-     `initial_default_value` via the scan-time schema dictionary; the iceberg reader ignores it.)
+  `SELECT b FROM t` → old rows read `b=0` (DuckLake truth: `42`, stored in `ducklake_column.initial_default`);
+  the post-ADD explicit row reads correctly, and there are no spurious NULLs.
+- **Root cause.** The FE sends the default on `TFileScanSlotInfo.default_value_expr` and
+  `FileScannerV2::_build_default_expr` reads it — but `IcebergTableReader::annotate_projected_column`
+  (`format_v2/table/iceberg_reader.cpp`) makes the Iceberg `schema_column` authoritative and clears it
+  (a plugin scan supplies no iceberg `initial-default`), so the fill falls to the type zero-value.
+- **Fix.** In `annotate_projected_column`, **fall back to the FE-built `default_expr` when the iceberg
+  `schema_column` supplies no `initial-default`**, instead of clearing it. (Connector-only can't fix
+  this — we tried injecting the iceberg `initial_default_value` via the scan-time schema dictionary; the
+  reader ignores it.)
+- **Crash timeline (now resolved):** SIGSEGV (`Const(INT)` vs `Nullable(INT)` in
+  `_evaluate_constant_filters`, `table_reader.h`) ≤`a82564ced5d` → fixed by `#66589` (`b42e1ab294b`) →
+  regressed by `#66413`'s `column_mapper` rewrite (`168d0777833`) → **fixed again at `1731787677f`**
+  (only `format_v2` touch in that window was `#66819`). Re-verified: full smoke completes, BE stays
+  alive. Note for hardening: the const-vs-nullable guard has now regressed once — worth a permanent
+  test so it can't segfault again.
 
 Blast radius is only this path — all other reads/writes stay green.
 

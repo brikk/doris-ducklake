@@ -108,7 +108,7 @@ Verify the runtime image actually carries the build you think it does:
 # ⚠️ SOURCE = apache/doris `master` (the SPI is upstream now — the brikk fork is retired).
 #   The connector SPI landed in apache master (#64304 + the fe/fe-connector tree), so build the FE
 #   from the REAL apache/doris, not the old fork branch `branch-catalog-spi`.
-#   Pin (2026-08-17): 168d0777833  ([fix](build) Unbreak master: stale unity-skip + dropped count probe (#66831)); serves connector plugin API 6.0
+#   Pin (2026-08-25): 1731787677f  ([chore](lance) update lance version to tag 0.1.7 (#67115)); serves connector plugin API 6.0
 #   Master's <revision> is still 1.2-SNAPSHOT → ~/.m2 coordinates unchanged.
 #   Builds PATCH-FREE since upstream #66135 removed both former FE-patch anchors — NO patch to apply.
 #   The current pin is recorded in ../fe-patches/FE-PATCHES.md → "Re-vendor log" (keep both in sync).
