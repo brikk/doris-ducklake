@@ -228,6 +228,34 @@ internal class DuckLakeConnectorMetadataTimeTravelTest {
         }
     }
 
+    // ---- getTableStatistics — global ducklake_table_stats must not leak into a historical read ----
+
+    @Test
+    fun tableStatisticsServedAtCurrentSnapshotButEmptyForHistoricalPin() {
+        withCatalog { catalog ->
+            val md = DuckLakeConnectorMetadata(catalog)
+            val snap0 = catalog.currentSnapshotId
+            val tableId = requireNotNull(catalog.getTable("sales", "orders", snap0)) {
+                "expected sales.orders"
+            }.tableId
+
+            // Advance history so there is a strictly-earlier snapshot to time-travel to.
+            val snap1 = commitOneInsertSnapshot(catalog, tableId, snap0)
+            assertThat(snap1).isGreaterThan(snap0)
+
+            val table = requireNotNull(catalog.getTable("sales", "orders", snap1)) { "expected sales.orders" }
+            val handleCurrent = DuckLakeTableHandle("sales", "orders", table.schemaId, tableId, snap1)
+            val handleHistorical = handleCurrent.copy(snapshotId = snap0)
+
+            // Current-snapshot pin → whole-table stats (global `ducklake_table_stats`) are served.
+            assertThat(md.getTableStatistics(null, handleCurrent)).isPresent
+
+            // Historical pin → serving the global (current-snapshot) stats would misreport a
+            // `FOR VERSION AS OF` read's cardinality, so v1 serves no stats at all.
+            assertThat(md.getTableStatistics(null, handleHistorical)).isEmpty
+        }
+    }
+
     private fun mvcc(snapshotId: Long): ConnectorMvccSnapshot =
         ConnectorMvccSnapshot.builder().snapshotId(snapshotId).build()
 
