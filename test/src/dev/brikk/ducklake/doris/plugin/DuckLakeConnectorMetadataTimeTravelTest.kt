@@ -228,20 +228,24 @@ internal class DuckLakeConnectorMetadataTimeTravelTest {
         }
     }
 
-    // ---- getTableStatistics — global ducklake_table_stats must not leak into a historical read ----
+    // ---- getTableStatistics — snapshot-scoped, not the global current-snapshot row ----
 
     @Test
-    fun tableStatisticsServedAtCurrentSnapshotButEmptyForHistoricalPin() {
+    fun tableStatisticsAreSnapshotScopedForTimeTravelPin() {
         withCatalog { catalog ->
             val md = DuckLakeConnectorMetadata(catalog)
             val snap0 = catalog.currentSnapshotId
             val tableId = requireNotNull(catalog.getTable("sales", "orders", snap0)) {
                 "expected sales.orders"
             }.tableId
+            val rows0 = catalog.getDataFiles(tableId, snap0).sumOf { it.recordCount }
+            assertThat(rows0).isGreaterThan(0) // seeded sales.orders
 
-            // Advance history so there is a strictly-earlier snapshot to time-travel to.
+            // Advance history: commit one 3-row data file → new current snapshot.
             val snap1 = commitOneInsertSnapshot(catalog, tableId, snap0)
             assertThat(snap1).isGreaterThan(snap0)
+            val rows1 = catalog.getDataFiles(tableId, snap1).sumOf { it.recordCount }
+            assertThat(rows1).isEqualTo(rows0 + 3)
 
             val table = requireNotNull(catalog.getTable("sales", "orders", snap1)) { "expected sales.orders" }
             val handleCurrent = DuckLakeTableHandle("sales", "orders", table.schemaId, tableId, snap1)
@@ -250,9 +254,13 @@ internal class DuckLakeConnectorMetadataTimeTravelTest {
             // Current-snapshot pin → whole-table stats (global `ducklake_table_stats`) are served.
             assertThat(md.getTableStatistics(null, handleCurrent)).isPresent
 
-            // Historical pin → serving the global (current-snapshot) stats would misreport a
-            // `FOR VERSION AS OF` read's cardinality, so v1 serves no stats at all.
-            assertThat(md.getTableStatistics(null, handleHistorical)).isEmpty
+            // Historical pin → snapshot-scoped stats derived from the files live at snap0: the OLD
+            // row count (rows0), NOT the current one (rows1). Proves global current-snapshot stats
+            // do not leak into a `FOR VERSION AS OF` read.
+            val historical = md.getTableStatistics(null, handleHistorical)
+            assertThat(historical).isPresent
+            assertThat(historical.get().rowCount).isEqualTo(rows0)
+            assertThat(historical.get().rowCount).isLessThan(rows1)
         }
     }
 

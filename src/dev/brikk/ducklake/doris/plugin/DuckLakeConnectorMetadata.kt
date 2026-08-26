@@ -333,20 +333,25 @@ internal class DuckLakeConnectorMetadata(
         handle: ConnectorTableHandle,
     ): Optional<ConnectorTableStatistics> {
         val dlHandle = handle.asDuckLakeHandle<DuckLakeTableHandle>()
-        // `ducklake_table_stats` holds WHOLE-TABLE stats for the CURRENT snapshot only. Time travel
-        // is wired (the handle pins `snapshotId`), so serving these for a historical read would
-        // report the current row count / on-disk size for a `FOR VERSION|TIME AS OF` query and
-        // mislead planner cardinality. v1: only serve global stats when the pin IS the current
-        // snapshot; for a historical pin return no stats (the planner falls back to its defaults).
-        // Deriving a snapshot-scoped count from the active data files is a later refinement.
-        // See dev-docs/TODO-read.md (global-stats-time-travel).
-        if (dlHandle.snapshotId != catalog.currentSnapshotId) {
-            return Optional.empty()
+        // `ducklake_table_stats` holds WHOLE-TABLE stats for the CURRENT snapshot only, so serving
+        // it for a time-travel read (Step 8 pins `snapshotId`) would report current cardinality for a
+        // `FOR VERSION|TIME AS OF` query and mislead the planner. Current-snapshot pin → serve that
+        // cheap global row. Historical pin → derive a snapshot-scoped estimate from the data files
+        // active at the pin. See dev-docs/TODO-read.md (global-stats-time-travel).
+        if (dlHandle.snapshotId == catalog.currentSnapshotId) {
+            // v1 reports whole-table stats; refining to the pushed-filter / pruned-file subset is a
+            // later optimization (the planner applies filter selectivity on top).
+            val stats = catalog.getTableStats(dlHandle.tableId) ?: return Optional.empty()
+            return Optional.of(ConnectorTableStatistics(stats.recordCount, stats.fileSizeBytes))
         }
-        // v1 reports whole-table stats; refining to the pushed-filter / pruned-file subset is a
-        // later optimization (the planner applies filter selectivity on top).
-        val stats = catalog.getTableStats(dlHandle.tableId) ?: return Optional.empty()
-        return Optional.of(ConnectorTableStatistics(stats.recordCount, stats.fileSizeBytes))
+        // Time-travel pin: sum the data files live at `snapshotId`. This is an estimate — it does
+        // not subtract position-deletes (neither does the whole-table row) and excludes inlined data
+        // — but a snapshot-scoped count beats falling back to planner defaults for a historical read.
+        val files = catalog.getDataFiles(dlHandle.tableId, dlHandle.snapshotId)
+        if (files.isEmpty()) return Optional.empty()
+        return Optional.of(
+            ConnectorTableStatistics(files.sumOf { it.recordCount }, files.sumOf { it.fileSizeBytes }),
+        )
     }
 
     // ---- MVCC snapshot pinning + time travel ----
