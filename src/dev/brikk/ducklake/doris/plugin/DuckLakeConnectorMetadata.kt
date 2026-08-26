@@ -328,26 +328,42 @@ internal class DuckLakeConnectorMetadata(
 
     // ---- Statistics (planner cardinality) ----
 
+    // Latest-snapshot stats (fe-core's background row-count cache path). The handle here is resolved
+    // at the current snapshot, so this serves the cheap whole-table row.
     override fun getTableStatistics(
         session: ConnectorSession?,
         handle: ConnectorTableHandle,
     ): Optional<ConnectorTableStatistics> {
         val dlHandle = handle.asDuckLakeHandle<DuckLakeTableHandle>()
-        // `ducklake_table_stats` holds WHOLE-TABLE stats for the CURRENT snapshot only, so serving
-        // it for a time-travel read (Step 8 pins `snapshotId`) would report current cardinality for a
-        // `FOR VERSION|TIME AS OF` query and mislead the planner. Current-snapshot pin → serve that
-        // cheap global row. Historical pin → derive a snapshot-scoped estimate from the data files
-        // active at the pin. See dev-docs/TODO-read.md (global-stats-time-travel).
-        if (dlHandle.snapshotId == catalog.currentSnapshotId) {
-            // v1 reports whole-table stats; refining to the pushed-filter / pruned-file subset is a
-            // later optimization (the planner applies filter selectivity on top).
-            val stats = catalog.getTableStats(dlHandle.tableId) ?: return Optional.empty()
+        return statsAtSnapshot(dlHandle.tableId, dlHandle.snapshotId)
+    }
+
+    // Snapshot-aware overload — fe-core threads the PINNED snapshot here for a time-travel read
+    // (`PluginDrivenExternalTable.fetchRowCountAtSnapshot`), while `handle` is still resolved at the
+    // current snapshot. Use the `snapshot` arg, not the handle, so a `FOR VERSION|TIME AS OF` query's
+    // CBO cardinality matches the snapshot the scan actually reads (the default overload drops the
+    // snapshot and returns the latest count → skewed time-travel cardinality). See dev-docs/TODO-read.md.
+    override fun getTableStatistics(
+        session: ConnectorSession?,
+        handle: ConnectorTableHandle,
+        snapshot: ConnectorMvccSnapshot,
+    ): Optional<ConnectorTableStatistics> {
+        val dlHandle = handle.asDuckLakeHandle<DuckLakeTableHandle>()
+        return statsAtSnapshot(dlHandle.tableId, snapshot.snapshotId)
+    }
+
+    // Current snapshot → the cheap whole-table `ducklake_table_stats` row. Historical (time-travel)
+    // snapshot → derive from the data files live at that snapshot. Estimate: sums file
+    // recordCount / fileSizeBytes; does NOT subtract position-deletes (neither does the whole-table
+    // row) and excludes inlined data — but a snapshot-scoped count matches the pinned read instead of
+    // reporting current cardinality. Refining to the pushed-filter / pruned-file subset is a later
+    // optimization (the planner applies filter selectivity on top).
+    private fun statsAtSnapshot(tableId: Long, snapshotId: Long): Optional<ConnectorTableStatistics> {
+        if (snapshotId == catalog.currentSnapshotId) {
+            val stats = catalog.getTableStats(tableId) ?: return Optional.empty()
             return Optional.of(ConnectorTableStatistics(stats.recordCount, stats.fileSizeBytes))
         }
-        // Time-travel pin: sum the data files live at `snapshotId`. This is an estimate — it does
-        // not subtract position-deletes (neither does the whole-table row) and excludes inlined data
-        // — but a snapshot-scoped count beats falling back to planner defaults for a historical read.
-        val files = catalog.getDataFiles(dlHandle.tableId, dlHandle.snapshotId)
+        val files = catalog.getDataFiles(tableId, snapshotId)
         if (files.isEmpty()) return Optional.empty()
         return Optional.of(
             ConnectorTableStatistics(files.sumOf { it.recordCount }, files.sumOf { it.fileSizeBytes }),

@@ -254,13 +254,21 @@ internal class DuckLakeConnectorMetadataTimeTravelTest {
             // Current-snapshot pin → whole-table stats (global `ducklake_table_stats`) are served.
             assertThat(md.getTableStatistics(null, handleCurrent)).isPresent
 
-            // Historical pin → snapshot-scoped stats derived from the files live at snap0: the OLD
-            // row count (rows0), NOT the current one (rows1). Proves global current-snapshot stats
-            // do not leak into a `FOR VERSION AS OF` read.
+            // 2-arg with a historical handle → snapshot-scoped stats from the files live at snap0:
+            // the OLD row count (rows0), NOT the current one (rows1).
             val historical = md.getTableStatistics(null, handleHistorical)
             assertThat(historical).isPresent
             assertThat(historical.get().rowCount).isEqualTo(rows0)
             assertThat(historical.get().rowCount).isLessThan(rows1)
+
+            // The path fe-core actually uses for time travel: the 3-arg overload with a CURRENT handle
+            // but the PINNED snapshot threaded as the arg. Must honour the arg (rows0), not the handle
+            // (rows1) — this is what makes `FOR VERSION AS OF` CBO cardinality match the pinned read.
+            val viaSnapshotArg = md.getTableStatistics(null, handleCurrent, mvcc(snap0))
+            assertThat(viaSnapshotArg).isPresent
+            assertThat(viaSnapshotArg.get().rowCount).isEqualTo(rows0)
+            // 3-arg at the current snapshot still serves the whole-table row.
+            assertThat(md.getTableStatistics(null, handleCurrent, mvcc(snap1))).isPresent
         }
     }
 
