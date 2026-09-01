@@ -15,7 +15,7 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
  > from FE core into loadable connector plugins* + the whole `fe/fe-connector` tree, incl.
  > `fe-connector-api` / `fe-connector-spi`). We now vendor from **`~/DEV/OSS/doris`, branch
  > `master`** (apache/doris), **not** the retired brikk fork `branch-catalog-spi`. Current
- > pin: **`1731787677f`** (apache/doris master, 2026-08-25). Master's `<revision>` is still
+ > pin: **`df36be5a86d`** (apache/doris master, 2026-09-01). Master's `<revision>` is still
  > `1.2-SNAPSHOT`, so the installed `~/.m2` coordinates are unchanged.
  > **SPI-surface note:** #66407 merged `fe-connector-api` INTO `fe-connector-spi` and renamed the
  > `org.apache.doris.connector.api.*` packages to `…spi.*`. We now depend on **only** the
@@ -25,6 +25,34 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
  > Keep this note, the Re-vendor log, and `compose/README.md` in sync.
 
 ### Re-vendor log
+
+- **2026-09-01 → pin `df36be5a86d`** (`[fix](point query) Keep point-query scan when partition pruning
+  is empty (#67161)`). "Stay-current" bump from `1731787677f` (+61 commits over ~7 days). **Non-breaking
+  (FE):** no `fe-connector-spi` surface change (`src/main` diff empty), `<revision>` still `1.2-SNAPSHOT`,
+  api.version still `6.0` (stamp unchanged); plugin main+test compile clean. **UNIT + CORPUS GREEN** —
+  `./gradlew clean test` = **240 tests, 0 failures** (incl. `DuckLakeScanRangeThriftParityTest`, which
+  exercises the regenerated thrift classes → wire-compatible, and `DuckLakeConnectorMetadataTimeTravelTest`
+  snapshot-scoped stats).
+  - **⚠️ THRIFT 0.16 → 0.24 (#65990, `2cf32a3bbdc`, merged 2026-09-01).** `fe/pom.xml` libthrift +
+    `thirdparty/vars.sh` compiler both bump; `fe-thrift`'s `check-thrift-compiler-version` guard fails if
+    the local thrift **compiler** ≠ 0.24. Our `DORIS_THIRDPARTY` (`doris-catalog-spi/thirdparty`) ships the
+    0.16 compiler, and the 2026-08-21 build-env image is 0.16 too. **Workaround (captured for reuse):**
+    built a thrift **0.24.0 compiler** from source in the build-env container — cmake
+    `-DBUILD_COMPILER=ON -DBUILD_LIBRARIES=OFF`, after dropping thrift's hardcoded bison `--file-prefix-map`
+    flag (container bison is 3.5.1 < the 3.7 that flag needs) → `/tmp/opencode/thrift-build/thrift024/bin/thrift`
+    (build scripts in that dir). Then rebuilt `fe-connector-spi` + `fe-thrift` into `~/.m2` **inside the
+    container** (run as host user; explicit `-Dmaven.repo.local=$HOME/.m2/repository -Duser.home=$HOME`)
+    with `-Ddoris.thrift.executable=…/thrift024/bin/thrift`. **BUILD SUCCESS.**
+  - **⛔ BE BUILD + LIVE SMOKE DEFERRED (compile+unit+corpus-verified re-vendor; precedent 2026-08-02).**
+    A `df36be5a86d` BE needs a build-env dated **after today** for two independent reasons: (1) thrift 0.24
+    **libs** (#65990) — the compiler-only workaround above does NOT give the BE its thrift libs; (2)
+    `arrow-paimon-vars.sh` `+345` lines (#66546 "Keep Arrow 17 **and** 24 in shared thirdparty", adds
+    `ARROW_17`/`XSIMD_17`/`PAIMON_CPP_17`) trips the BE arrow/paimon freshness guard. The public
+    `apache/doris:build-env-ldb-toolchain-latest` isn't rebuilt with these yet (both landed ~2026-08-31/09-01);
+    a local thirdparty rebuild is multi-hour. **Pending a fresh build-env:** FE image rebuild,
+    `doris-be:master-local` bake, and full compose smoke (catalog / reads / §8b-count / §12b / W1–W3 /
+    §13 GC). §12b status is **carried forward from `1731787677f`** (unverified at this pin — no BE run).
+  - No branch-4.2 yet; api.version steady at 6.0.
 
 - **2026-08-25 → pin `1731787677f`** (`[chore](lance) update lance version to tag 0.1.7 (#67115)`).
   "Stay-current" bump from `168d0777833` (+~130 commits over ~8 days). **Non-breaking:** no
