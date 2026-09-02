@@ -15,7 +15,7 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
  > from FE core into loadable connector plugins* + the whole `fe/fe-connector` tree, incl.
  > `fe-connector-api` / `fe-connector-spi`). We now vendor from **`~/DEV/OSS/doris`, branch
  > `master`** (apache/doris), **not** the retired brikk fork `branch-catalog-spi`. Current
- > pin: **`df36be5a86d`** (apache/doris master, 2026-09-01). Master's `<revision>` is still
+ > pin: **`952bfcbb40f`** (apache/doris master, 2026-09-02). Master's `<revision>` is still
  > `1.2-SNAPSHOT`, so the installed `~/.m2` coordinates are unchanged.
  > **SPI-surface note:** #66407 merged `fe-connector-api` INTO `fe-connector-spi` and renamed the
  > `org.apache.doris.connector.api.*` packages to `…spi.*`. We now depend on **only** the
@@ -25,6 +25,34 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
  > Keep this note, the Re-vendor log, and `compose/README.md` in sync.
 
 ### Re-vendor log
+
+- **2026-09-02 → pin `952bfcbb40f`** (`[chore](lance) update some patch about lance (#67262)`).
+  Advances the `df36be5a86d` entry below (+13 commits) to fold in **#67330 revert of "Keep Arrow 17 and 24
+  in shared thirdparty"** (#66546), which — together with a freshly-published build-env — unblocked the BE
+  build. **Non-breaking (FE):** no `fe-connector-spi` surface change, `<revision>` `1.2-SNAPSHOT`,
+  api.version `6.0`. **UNIT + CORPUS GREEN** (`./gradlew clean test` = **240 tests, 0 failures**).
+  - **✅ THRIFT 0.24 now native.** Apache published a fresh `build-env-ldb-toolchain-latest` (2026-09-01
+    15:23 UTC) carrying **thrift 0.24 compiler + `libthrift.a` + mecab-ipadic + lance-c 0.1.8**, so the
+    from-source thrift-compiler hack (see df36be5a86d entry) is no longer needed — SPI+`fe-thrift` rebuilt
+    natively in-container. **The fresh build-env matches this tip** (post-revert Arrow-24-only).
+  - **✅ BE + FE BUILT.** `sh build.sh --be --fe` in the fresh build-env → `doris_be` + `doris-fe.jar`.
+    Baked `doris-be:master-local` + `doris-fe:pr62767-local`. Recipe now persisted at
+    `compose/be-overlay/Dockerfile` (mirrors `fe-overlay`; base `apache/doris:be-4.1.3`). Build gotchas
+    (all resolved): run as **root** in-container (prior builds left root-owned artifacts); `git config
+    --global --add safe.directory /doris`; wipe stale `be/build_Release` (prior cache was cut at a
+    different mount path `/root/doris`); stage docker contexts on **disk** not `/tmp` (14G tmpfs).
+  - **⛔ MASTER BE CRASHES AT STARTUP (open — deferred).** The freshly-built `952bfcbb40f` BE SIGSEGVs
+    during embedded-JVM/hadoop `libhdfs` bootstrap in `Jni::Util::Init` (`could not find method
+    getRootCauseMessage from class (null)`), **before any DuckLake code**. Ruled out: arch (ran AVX2/amd64),
+    JDK (17.0.2 both), base image (base-6.0 at both pins; be-4.1.3 worked at the prior pin), and classpath
+    (`JniUtil` + `commons-lang3` both load fine from the built CLASSPATH). Only new signal: benign
+    `Unknown module: org.apache.arrow.memory.core` warning. Looks like a master-tip instability or a
+    fresh-build-env (gcc15) toolchain artifact — **not a connector bug**. Live **master-BE** smoke
+    (§8b/§12b/W1–W3/§13 GC) is therefore **deferred** pending root-cause / a later tip.
+  - **✅ CONNECTOR LIVE-VALIDATED on the read path** with the new FE + **release `be-4.1.3`**: catalog
+    load, `SHOW DATABASES/TABLES`, `COUNT(*) nation=25`, sample rows, `COUNT(*) lineitem=60175` (multi-file
+    scan), EXPLAIN cardinality-from-stats=25. (`COUNT(col)` undercount is a known be-4.1.3 count-pushdown
+    gap — correct on master BE per earlier smokes.) §12b carried forward (needs master BE).
 
 - **2026-09-01 → pin `df36be5a86d`** (`[fix](point query) Keep point-query scan when partition pruning
   is empty (#67161)`). "Stay-current" bump from `1731787677f` (+61 commits over ~7 days). **Non-breaking

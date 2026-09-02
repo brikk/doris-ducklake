@@ -108,10 +108,11 @@ Verify the runtime image actually carries the build you think it does:
 # ⚠️ SOURCE = apache/doris `master` (the SPI is upstream now — the brikk fork is retired).
 #   The connector SPI landed in apache master (#64304 + the fe/fe-connector tree), so build the FE
 #   from the REAL apache/doris, not the old fork branch `branch-catalog-spi`.
-#   SPI pin (2026-09-01): df36be5a86d  ([fix](point query) Keep point-query scan when partition pruning is empty (#67161)); serves connector plugin API 6.0
-#   ⚠️ The baked compose FE/BE images are STILL 1731787677f: the df36be5a86d SPI is compile+unit+corpus-verified,
-#     but the FE-image rebuild + doris-be:master-local bake + live smoke are DEFERRED pending a build-env image
-#     with thrift 0.24 (#65990) + Arrow 17/24 (#66546). See ../fe-patches/FE-PATCHES.md → Re-vendor log (2026-09-01).
+#   Pin (2026-09-02): 952bfcbb40f  ([chore](lance) update some patch about lance (#67262)); serves connector plugin API 6.0
+#   FE image doris-fe:pr62767-local IS rebuilt at 952bfcbb40f (thrift 0.24 native, from the 2026-09-01 build-env).
+#   ⚠️ doris-be:master-local was ALSO built at 952bfcbb40f but crashes at JVM/hadoop startup (not a connector bug);
+#     the compose default BE stays apache/doris:be-4.1.3. Connector read path is live-validated on be-4.1.3 with the
+#     new FE; live MASTER-BE smoke (§8b/§12b/writes/GC) is DEFERRED. See ../fe-patches/FE-PATCHES.md → Re-vendor log (2026-09-02).
 #   Master's <revision> is still 1.2-SNAPSHOT → ~/.m2 coordinates unchanged.
 #   Builds PATCH-FREE since upstream #66135 removed both former FE-patch anchors — NO patch to apply.
 #   The current pin is recorded in ../fe-patches/FE-PATCHES.md → "Re-vendor log" (keep both in sync).
