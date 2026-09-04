@@ -13,8 +13,12 @@
 #     -v /home/jayson/DEV/OSS/doris:/doris -v /tmp/opencode/be-ccache:/ccache \
 #     -v /tmp/opencode/be-m2:/home/jayson/.m2 \
 #     --entrypoint /bin/bash apache/doris:build-env-ldb-toolchain-latest -c '
-#       export DORIS_THIRDPARTY=/var/local/thirdparty CCACHE_DIR=/ccache
-#       cd /doris && sh build.sh --be -j"$(nproc)"'
+ #       export DORIS_THIRDPARTY=/var/local/thirdparty CCACHE_DIR=/ccache
+ #       cd /doris && sh build.sh --be -j14'
+ #   # NOTE: cap at -j14 (NOT $(nproc)=24). On the 26 GB dev box (14 GB of which is a
+ #   # tmpfs /tmp), a full 24-core BE compile OOM-rebooted the machine — especially if any
+ #   # other heavy JVM (e.g. the gradle suite) runs at the same time. Never parallelize the
+ #   # BE compile with another heavy build; keep it sequential and -j14.
 #   # 2) stage a minimal context (don't send the multi-GB repo to the daemon) + bake
 #   S=/tmp/beimg; rm -rf $S; mkdir -p $S/output; cp -r ~/DEV/OSS/doris/output/be $S/output/be
 #   docker build --platform linux/amd64 \

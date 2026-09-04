@@ -40,7 +40,7 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
     decouple — none startup-related). A BE rebuild here was **not** re-attempted: parallelizing the 24-core
     BE compile with the gradle suite **OOM-rebooted the 26 GB dev box** (14 GB of it is a tmpfs `/tmp`),
     wiping the BE ccache. Retry the master-BE build **sequentially** (never alongside another heavy JVM)
-    once a window fix lands. Connector **read path** stays live-validated (new FE + release `be-4.1.3`,
+    and **capped at `-j14`** (not `$(nproc)`=24) — see `compose/be-overlay/Dockerfile` — once a window fix lands. Connector **read path** stays live-validated (new FE + release `be-4.1.3`,
     per the 2026-09-02 entry; SPI surface is identical here). §12b carried forward.
 
 - **2026-09-02 → pin `952bfcbb40f`** (`[chore](lance) update some patch about lance (#67262)`).
