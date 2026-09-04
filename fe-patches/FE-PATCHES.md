@@ -15,7 +15,7 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
  > from FE core into loadable connector plugins* + the whole `fe/fe-connector` tree, incl.
  > `fe-connector-api` / `fe-connector-spi`). We now vendor from **`~/DEV/OSS/doris`, branch
  > `master`** (apache/doris), **not** the retired brikk fork `branch-catalog-spi`. Current
- > pin: **`952bfcbb40f`** (apache/doris master, 2026-09-02). Master's `<revision>` is still
+ > pin: **`4ab2cd71095`** (apache/doris master, 2026-09-04). Master's `<revision>` is still
  > `1.2-SNAPSHOT`, so the installed `~/.m2` coordinates are unchanged.
  > **SPI-surface note:** #66407 merged `fe-connector-api` INTO `fe-connector-spi` and renamed the
  > `org.apache.doris.connector.api.*` packages to `…spi.*`. We now depend on **only** the
@@ -25,6 +25,23 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
  > Keep this note, the Re-vendor log, and `compose/README.md` in sync.
 
 ### Re-vendor log
+
+- **2026-09-04 → pin `4ab2cd71095`** (`[feature](function) Add array_except_all scalar function (#67132)`).
+  "Stay-current" bump from `952bfcbb40f` (+38 commits). **Non-breaking (FE):** no `fe-connector-spi`
+  surface change, `<revision>` `1.2-SNAPSHOT`, api.version `6.0`; SPI+`fe-thrift` rebuilt natively at this
+  tip (thrift 0.24 from the fresh build-env). **UNIT + CORPUS GREEN** — `./gradlew clean test` = **240
+  tests, 0 failures**.
+  - **Thirdparty:** `#67385` **removed paimon-cpp** (arrow-paimon-vars.sh −361 lines); this only *drops* a
+    requirement, so the 2026-09-01 build-env still satisfies the BE build. thrift stays 0.24. No arrow bump.
+  - **⛔ MASTER BE build/live-smoke DEFERRED (unchanged).** The `952bfcbb40f` master-BE startup SIGSEGV
+    (JNI/hadoop `libhdfs` bootstrap in `Jni::Util::Init`, before any DuckLake code — see the 2026-09-02
+    entry) is expected to persist: **nothing in the +38 window touches `jni-util` / the hadoop-libhdfs
+    startup path** (BE changes were `#67442` memtable UAF, `#67451` arm64 build, `#67036` status.h
+    decouple — none startup-related). A BE rebuild here was **not** re-attempted: parallelizing the 24-core
+    BE compile with the gradle suite **OOM-rebooted the 26 GB dev box** (14 GB of it is a tmpfs `/tmp`),
+    wiping the BE ccache. Retry the master-BE build **sequentially** (never alongside another heavy JVM)
+    once a window fix lands. Connector **read path** stays live-validated (new FE + release `be-4.1.3`,
+    per the 2026-09-02 entry; SPI surface is identical here). §12b carried forward.
 
 - **2026-09-02 → pin `952bfcbb40f`** (`[chore](lance) update some patch about lance (#67262)`).
   Advances the `df36be5a86d` entry below (+13 commits) to fold in **#67330 revert of "Keep Arrow 17 and 24
