@@ -10,7 +10,7 @@ detekt = "2.0.0-alpha.3"
 # ducklake-catalog and ducklake-test-corpus-replay (released in lockstep); the latter pulls
 # dev.brikk.ducklake:slt-format transitively at the same version. Bump in lockstep when consuming a
 # new catalog release; -SNAPSHOT resolves from the Central Portal snapshots repo.
-ducklake-catalog = "0.4.0"
+ducklake-catalog = "0.5.0"
 # brikk-sql: TEST-ONLY DuckDB->Doris SQL transpiler for the corpus-replay dialect gate.
 # Releases on Maven Central; -SNAPSHOTs via the Central Portal snapshots repo (wired in
 # buildlogic.kotlin.brikk).
