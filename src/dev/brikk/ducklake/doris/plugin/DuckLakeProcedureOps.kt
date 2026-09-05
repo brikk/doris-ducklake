@@ -312,10 +312,15 @@ internal class DuckLakeProcedureOps(
         val referenced = catalog.listAllReferencedFiles()
         val knownPaths = buildSet {
             referenced.tableFiles.forEach { ref ->
+                val schemaDataPath = DuckLakePathResolver.resolveScopedPath(
+                    ref.schemaPath,
+                    ref.schemaPathIsRelative,
+                    rootDataPath,
+                )
                 val tableDataPath = DuckLakePathResolver.resolveScopedPath(
                     ref.tablePath,
                     ref.tablePathIsRelative,
-                    rootDataPath,
+                    schemaDataPath,
                 )
                 add(pathResolver.resolveFilePath(ref.path, ref.pathIsRelative, tableDataPath))
             }

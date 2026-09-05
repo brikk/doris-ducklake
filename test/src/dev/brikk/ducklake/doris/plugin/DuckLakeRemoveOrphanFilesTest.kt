@@ -150,8 +150,11 @@ internal class DuckLakeRemoveOrphanFilesTest {
     @Test
     fun catalogScopeKeepsDroppedTableAndScheduledFiles() {
         val dropped = DucklakeTableFilePathRef(
+            98L,
+            "archive",
+            true,
             99L,
-            "archive/dropped_orders",
+            "dropped_orders",
             true,
             "ducklake-dropped-owned.parquet",
             true,
@@ -298,8 +301,11 @@ internal class DuckLakeRemoveOrphanFilesTest {
                 tables.flatMap { table ->
                     refsByTableId[table.tableId].orEmpty().map { ref ->
                         DucklakeTableFilePathRef(
+                            schemaId,
+                            schemaPath,
+                            true,
                             table.tableId,
-                            "$schemaPath/${table.path}",
+                            table.path,
                             true,
                             ref.path,
                             ref.pathIsRelative,
