@@ -260,8 +260,9 @@ internal class DuckLakeConnectorMetadata(
         filter: ConnectorExpression,
         columns: List<DucklakeColumn>,
     ): Set<Long>? {
-        val bucketFields = catalog.getPartitionSpecs(handle.tableId, handle.snapshotId)
-            .flatMap { it.fields }
+        val spec = catalog.getPartitionSpecs(handle.tableId, handle.snapshotId).singleOrNull()
+            ?: return null
+        val bucketFields = spec.fields
             .filter { it.transform == DucklakePartitionTransform.BUCKET }
         if (bucketFields.isEmpty()) {
             return null
@@ -275,9 +276,14 @@ internal class DuckLakeConnectorMetadata(
         if (targetBuckets.isEmpty()) {
             return null
         }
-        return catalog.getFilePartitionValues(handle.tableId, handle.snapshotId)
-            .filterValues { values -> fileMatchesBuckets(values, targetBuckets) }
-            .keys
+        val valuesByFileId = catalog.getFilePartitionValues(handle.tableId, handle.snapshotId)
+        // Key indexes belong to a spec. Keep older/unpartitioned files and files without values.
+        return catalog.getDataFiles(handle.tableId, handle.snapshotId)
+            .filter { file ->
+                file.partitionId != spec.partitionId ||
+                    fileMatchesBuckets(valuesByFileId[file.dataFileId].orEmpty(), targetBuckets)
+            }
+            .mapTo(HashSet()) { it.dataFileId }
     }
 
     /**
