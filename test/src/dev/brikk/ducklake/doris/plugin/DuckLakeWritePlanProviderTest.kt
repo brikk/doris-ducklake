@@ -92,6 +92,33 @@ internal class DuckLakeWritePlanProviderTest {
             .dataSink.icebergTableSink
 
     @Test
+    fun requiresFullSchemaWriteOrderForPositionalIcebergSink() {
+        withCatalog { catalog ->
+            assertThat(provider(catalog).requiresFullSchemaWriteOrder()).isTrue()
+        }
+    }
+
+    @Test
+    fun planWriteKeepsFullSchemaForReorderedAndPartialColumnLists() {
+        withCatalog { catalog ->
+            for (table in listOf("orders", "by_region", "by_name_bucket")) {
+                val handle = handleFor(catalog, "sales", table)
+                val columns = DuckLakeConnectorMetadata(catalog).getTableSchema(null, handle).columns
+                for (writeColumns in listOf(columns.reversed(), columns.takeLast(1))) {
+                    val sink = provider(catalog).planWrite(
+                        FakeSession(DuckLakeConnectorTransaction(99L, catalog)),
+                        FakeWriteHandle(handle, overwrite = false, columns = writeColumns),
+                    ).dataSink.icebergTableSink
+
+                    // FE binding owns row reordering/null fill; the positional sink still needs every column.
+                    assertThat(SchemaParser.fromJson(sink.schemaJson).columns().map { it.name() })
+                        .containsExactlyElementsOf(columns.map { it.name })
+                }
+            }
+        }
+    }
+
+    @Test
     @Throws(Exception::class)
     fun planWriteBuildsIcebergSinkForOrders() {
         withCatalog { catalog ->
@@ -184,9 +211,10 @@ internal class DuckLakeWritePlanProviderTest {
     private class FakeWriteHandle(
         private val table: ConnectorTableHandle,
         private val overwrite: Boolean,
+        private val columns: List<ConnectorColumn> = emptyList(),
     ) : ConnectorWriteHandle {
         override fun getTableHandle(): ConnectorTableHandle = table
-        override fun getColumns(): List<ConnectorColumn> = emptyList() // provider uses the catalog schema
+        override fun getColumns(): List<ConnectorColumn> = columns
         override fun isOverwrite(): Boolean = overwrite
         // Renamed from getWriteContext() in the SPI write-handle consolidation; same
         // Map<String, String> shape (static partition spec for a partition-targeted write).

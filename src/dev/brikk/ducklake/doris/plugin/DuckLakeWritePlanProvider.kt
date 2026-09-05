@@ -45,6 +45,9 @@ internal class DuckLakeWritePlanProvider(
     private val properties: Map<String, String>,
 ) : ConnectorWritePlanProvider {
 
+    // The Iceberg writer binds by position, so the FE must reorder and fill omitted columns.
+    override fun requiresFullSchemaWriteOrder(): Boolean = true
+
     override fun planWrite(session: ConnectorSession, handle: ConnectorWriteHandle): ConnectorSinkPlan {
         val tableHandle = handle.tableHandle.asDuckLakeHandle<DuckLakeTableHandle>()
         val outputPath = resolveOutputPath(tableHandle)
