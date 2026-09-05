@@ -6,8 +6,10 @@ import java.util.UUID
 
 import dev.brikk.ducklake.catalog.DucklakeCatalog
 import dev.brikk.ducklake.catalog.DucklakeFilePathRef
+import dev.brikk.ducklake.catalog.DucklakeReferencedFiles
 import dev.brikk.ducklake.catalog.DucklakeSchema
 import dev.brikk.ducklake.catalog.DucklakeTable
+import dev.brikk.ducklake.catalog.DucklakeTableFilePathRef
 
 import org.apache.doris.connector.spi.DorisConnectorException
 import org.assertj.core.api.Assertions.assertThat
@@ -146,6 +148,33 @@ internal class DuckLakeRemoveOrphanFilesTest {
     }
 
     @Test
+    fun catalogScopeKeepsDroppedTableAndScheduledFiles() {
+        val dropped = DucklakeTableFilePathRef(
+            99L,
+            "archive/dropped_orders",
+            true,
+            "ducklake-dropped-owned.parquet",
+            true,
+        )
+        val scheduled = DucklakeFilePathRef("scheduled/ducklake-pending.parquet", true)
+        val cat = catalog(extraTableRefs = listOf(dropped), scheduledRefs = listOf(scheduled))
+        val store = FakeBlobStore(
+            listing = listOf(
+                BlobEntry("s3://dl/data/archive/dropped_orders/ducklake-dropped-owned.parquet", old),
+                BlobEntry("s3://dl/data/scheduled/ducklake-pending.parquet", old),
+                BlobEntry("s3://dl/data/failed/ducklake-orphan.parquet", old),
+            ),
+        )
+
+        ops(cat, store).execute(
+            null, handle("sales", "orders"), "remove_orphan_files",
+            mapOf("scope" to "catalog", "retention_threshold" to "7d"), null, emptyList(),
+        )
+
+        assertThat(store.deleteRequested).containsExactly("s3://dl/data/failed/ducklake-orphan.parquet")
+    }
+
+    @Test
     fun databaseIsAnAliasForSchemaScope() {
         val cat = catalog()
         val store = FakeBlobStore(listing = emptyList())
@@ -209,7 +238,10 @@ internal class DuckLakeRemoveOrphanFilesTest {
         DuckLakeTableHandle(db, table, schemaId = if (db == "sales") 10L else 11L, tableId = 20L, snapshotId = 5L)
 
     /** Two schemas (sales: orders+customers, analytics: events), each table with one referenced file. */
-    private fun catalog() = FakeCatalog(
+    private fun catalog(
+        extraTableRefs: List<DucklakeTableFilePathRef> = emptyList(),
+        scheduledRefs: List<DucklakeFilePathRef> = emptyList(),
+    ) = FakeCatalog(
         schemas = mapOf(
             "sales" to sch(10L, "sales"),
             "analytics" to sch(11L, "analytics"),
@@ -223,6 +255,8 @@ internal class DuckLakeRemoveOrphanFilesTest {
             21L to listOf(DucklakeFilePathRef("ducklake-live-c.parquet", true)),
             30L to listOf(DucklakeFilePathRef("ducklake-live-e.parquet", true)),
         ),
+        extraTableRefs = extraTableRefs,
+        scheduledRefs = scheduledRefs,
     )
 
     private fun sch(id: Long, name: String) = DucklakeSchema(id, UUID.randomUUID(), 1L, null, name, name, pathIsRelative = true)
@@ -247,6 +281,8 @@ internal class DuckLakeRemoveOrphanFilesTest {
         private val schemas: Map<String, DucklakeSchema> = emptyMap(),
         private val tablesBySchemaId: Map<Long, List<DucklakeTable>> = emptyMap(),
         private val refsByTableId: Map<Long, List<DucklakeFilePathRef>> = emptyMap(),
+        private val extraTableRefs: List<DucklakeTableFilePathRef> = emptyList(),
+        private val scheduledRefs: List<DucklakeFilePathRef> = emptyList(),
     ) : DucklakeCatalog by throwingDelegate() {
 
         override fun getDataPath(): String = "s3://dl/data"
@@ -256,6 +292,23 @@ internal class DuckLakeRemoveOrphanFilesTest {
         override fun listSchemas(snapshotId: Long): List<DucklakeSchema> = schemas.values.toList()
         override fun listTables(schemaId: Long, snapshotId: Long): List<DucklakeTable> = tablesBySchemaId[schemaId].orEmpty()
         override fun listReferencedFilePaths(tableId: Long): List<DucklakeFilePathRef> = refsByTableId[tableId].orEmpty()
+        override fun listAllReferencedFiles(): DucklakeReferencedFiles {
+            val tableRefs = tablesBySchemaId.flatMap { (schemaId, tables) ->
+                val schemaPath = schemas.values.first { it.schemaId == schemaId }.path
+                tables.flatMap { table ->
+                    refsByTableId[table.tableId].orEmpty().map { ref ->
+                        DucklakeTableFilePathRef(
+                            table.tableId,
+                            "$schemaPath/${table.path}",
+                            true,
+                            ref.path,
+                            ref.pathIsRelative,
+                        )
+                    }
+                }
+            }
+            return DucklakeReferencedFiles(tableRefs + extraTableRefs, scheduledRefs)
+        }
 
         companion object {
             private fun throwingDelegate(): DucklakeCatalog =

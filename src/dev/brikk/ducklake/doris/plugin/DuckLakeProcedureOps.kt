@@ -33,8 +33,8 @@ import org.apache.doris.connector.spi.pushdown.ConnectorPredicate
  *    `.puffin`/`.db` objects; see [OrphanFiles]) under the warehouse that NO catalog row
  *    references (residue of aborted commits) and are older than a grace period. Catalog-wide
  *    (models upstream `ducklake_delete_orphaned_files`, which sweeps `.parquet`/`.puffin` as of
- *    DuckLake 1.5.5): globs the whole `data_path`, diffs against `listAllReferencedFilePaths` (all
- *    tables), and — like the two above — IGNORES the named table.
+ *    DuckLake 1.5.5): scans the requested table/schema/catalog scope and diffs against
+ *    `listAllReferencedFiles` (including dropped-table and scheduled-file ownership).
  *
  * ## Why one ops class per connector (not one per procedure)
  * Doris routes every `ALTER TABLE EXECUTE` for a connector through this one
@@ -280,11 +280,12 @@ internal class DuckLakeProcedureOps(
      * This delivers the same semantics as the Trino plugin's optional-arg tiers (dev-docs
      * DESIGN-maintenance §8.2/§8.3), adapted to Doris's grammar.
      *
-     * The known set is the UNION of every in-scope table's [DucklakeCatalog.listReferencedFilePaths],
-     * each resolved against ITS OWN data path — so a wide sweep can't mistake one table's live files
-     * for another's orphans, and scanning the schema/root DIRECTORY (not per-table) reaches
-     * failed-CREATE residue that has no catalog row to name. Only `ducklake-`-prefixed managed residue
-     * is ever deleted ([OrphanFiles]); foreign files always survive.
+     * The known set comes from [DucklakeCatalog.listAllReferencedFiles], including files owned by
+     * dropped-but-unexpired tables. Table files resolve against their owning table path; scheduled
+     * files resolve against the catalog root (never a table path). This prevents time-travel data
+     * loss and premature deletion of scheduled files. Scanning the schema/root DIRECTORY (not
+     * per-table) still reaches failed-CREATE residue with no catalog row to name. Only
+     * `ducklake-`-prefixed managed residue is ever deleted ([OrphanFiles]); foreign files survive.
      */
     @Suppress("ThrowsCount")
     private fun removeOrphanFiles(table: ConnectorTableHandle?, properties: Map<String, String>): ConnectorProcedureResult {
@@ -306,12 +307,22 @@ internal class DuckLakeProcedureOps(
                     "use scope='schema'/'catalog' to widen from that table",
             )
 
-        val (targets, scanRoots) = resolveOrphanScope(scope, handle)
-        val knownPaths = targets.flatMap { (schema, tbl) ->
-            val tableDataPath = pathResolver.resolveTableDataPath(schema, tbl)
-            catalog.listReferencedFilePaths(tbl.tableId)
-                .map { pathResolver.resolveFilePath(it.path, it.pathIsRelative, tableDataPath) }
-        }.toSet()
+        val (_, scanRoots) = resolveOrphanScope(scope, handle)
+        val rootDataPath = pathResolver.rootDataPath()
+        val referenced = catalog.listAllReferencedFiles()
+        val knownPaths = buildSet {
+            referenced.tableFiles.forEach { ref ->
+                val tableDataPath = DuckLakePathResolver.resolveScopedPath(
+                    ref.tablePath,
+                    ref.tablePathIsRelative,
+                    rootDataPath,
+                )
+                add(pathResolver.resolveFilePath(ref.path, ref.pathIsRelative, tableDataPath))
+            }
+            referenced.scheduledFiles.forEach { ref ->
+                add(pathResolver.resolveFilePath(ref.path, ref.pathIsRelative, rootDataPath))
+            }
+        }
 
         val cutoff: Instant = Instant.now().minusMillis(retentionMillis)
         val orphans = scanRoots
@@ -332,9 +343,9 @@ internal class DuckLakeProcedureOps(
     }
 
     /**
-     * Resolve the in-scope (schema, table) targets and the directory root(s) to scan, from the named
-     * table's viewpoint widened by [scope]. Catalog/schema scopes enumerate live tables so their
-     * referenced files populate the known set; the directory scan reaches residue with no table row.
+     * Resolve the in-scope (schema, table) targets and directory root(s) to scan from the named
+     * table's viewpoint widened by [scope]. The targets identify scope roots; the known set itself
+     * is catalog-wide so it also protects dropped-but-unexpired table files.
      */
     private fun resolveOrphanScope(
         scope: OrphanScope,

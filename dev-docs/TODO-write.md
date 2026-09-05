@@ -429,12 +429,13 @@ Two FE-route gaps surfaced and were fixed to get here (both in
     grammar + `CallFunc`). A `scope` arg widens outward: `table` (default) / `schema` (alias
     `database`) / `catalog`. Same semantics as the Trino plugin's optional-arg tiers (§8.2), adapted
     to Doris's grammar. Upstream ask filed below to add ALTER CATALOG/DATABASE EXECUTE someday.
-  - **Known set = UNION of every in-scope table's `listReferencedFilePaths(tableId)`** resolved
-    against ITS OWN data path (iterate-targets, matching Trino `eefcb74` — NOT a single catalog-wide
-    query; an earlier `listAllReferencedFilePaths()` catalog method was added then removed to match).
-    Scan roots: table dir / schema dir (`resolveSchemaDataPath`) / warehouse root (`rootDataPath`).
-    Scanning the schema/root DIRECTORY (not per-table) is what reaches failed-CREATE residue with no
-    catalog row.
+  - **Known set = catalog-wide `listAllReferencedFiles()` (catalog 0.6.0, adopted 2026-09-04).** This
+    includes data/delete rows owned by dropped-but-unexpired tables, so a wide sweep cannot destroy
+    time-travel data. Table files resolve against their catalog-provided latest table path; scheduled
+    paths stay separate and resolve against catalog `data_path` (not every table path), preventing
+    premature deletion. Scan roots remain table dir / schema dir (`resolveSchemaDataPath`) / warehouse
+    root (`rootDataPath`); scanning the schema/root directory reaches failed-CREATE residue with no
+    catalog row. Regression: `catalogScopeKeepsDroppedTableAndScheduledFiles`.
   - **Storage:** `WarehouseBlobStore.list(prefix)` + `BlobEntry(uri, lastModified)`;
     `S3WarehouseBlobStore.list` uses MinIO `listObjects(recursive)` with a **directory-safe prefix**
     (`dirUri` appends `/`). List failures FATAL (a partial listing read as "no live files" → data loss).
