@@ -18,8 +18,11 @@ import os
 
 import duckdb
 
+from smoke_lake import require_smoke_lake
+
 
 def main() -> None:
+    require_smoke_lake()
     mode = os.environ.get("MODE", "create")
     schema = os.environ.get("SCHEMA", "tpch")
     table = os.environ.get("TABLE", "doris_w")

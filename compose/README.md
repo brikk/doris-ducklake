@@ -2,7 +2,7 @@
 
 The slow, real-cluster counterpart to `:doris-ducklake:test`. `smoke.sh` brings up
 a full Doris cluster (FE hosting our plugin + a stock BE) against the DuckLake
-substrate (Postgres + MinIO + seeded TPC-H) and exercises the plugin end-to-end:
+substrate (Postgres + MinIO), seeds a fresh run-owned TPC-H lake, and exercises the plugin end-to-end:
 
 - **read** — `CREATE CATALOG`, `SHOW/DESC`, `SELECT * FROM dl.tpch.orders`
 - **Step 7** — position-delete plumbing (FE-side; BE-side gated on a known
@@ -22,13 +22,55 @@ substrate (Postgres + MinIO + seeded TPC-H) and exercises the plugin end-to-end:
 ## Quick start
 
 ```bash
-cd jvm/doris-ducklake/compose
+cd compose                    # from this repository's root
 ./smoke.sh                 # build plugin → up substrate+cluster → drive read/delete/INSERT
 ./smoke.sh --no-build      # skip the gradle plugin rebuild (zip already current)
 ./smoke.sh --down          # tear down the Doris cluster (substrate left running)
 ```
 
 One-time `~20 min` cluster build (FE image, image pulls); `~2–3 min` per re-run.
+
+### Smoke isolation (F21)
+
+The driver reuses only the sibling Trino stack's PostgreSQL/MinIO services. It
+does not start the shared-lake bootstrap or mutate the `ducklake` metadata
+database / `s3://ducklake/data/` warehouse. After cluster health checks, each full
+run generates a new ID and creates:
+
+- PostgreSQL database `doris_smoke_<32-hex-ID>` from `template0`.
+- Warehouse `s3://ducklake/doris-smoke/<ID>/`, outside the shared warehouse.
+- FE catalog `doris_smoke_<ID>`; an existing `dl` catalog is left alone. Step labels
+  still use `dl` as shorthand, while actual SQL uses the printed run-owned name.
+
+The run fails rather than adopting an existing database or nonempty prefix. The
+sibling TPC-H generator runs once with explicit database/prefix overrides and
+DuckDB 1.5.5; the stored DuckLake `data_path` must match before the driver proceeds.
+Every helper, metadata query, maintenance call, and GC fixture uses that same
+identity. Standalone Python helpers require matching `SMOKE_RUN_ID`, `PG_DB`, and
+`DATA_PATH`, checked by `smoke_lake.py` before opening DuckDB.
+
+`--up-only` brings up infrastructure/FE/BE without allocating or seeding any smoke
+lake. Full-run resources are retained on both success and failure for inspection;
+the log prints their exact names. `--down` removes only the Doris stack/volumes,
+not these PostgreSQL databases or S3 prefixes. Reclaim only an explicitly selected
+run's resources after inspection, never a prefix-wide database or warehouse sweep.
+
+This is accidental-target protection, not credential-level tenant isolation.
+The FE/BE containers and plugin volume are still shared development resources:
+do not run concurrent smoke/deployment operations against them. F24 (plugin
+reload/provenance) and F25 (nonfatal assertions) remain separate open items, so
+`Smoke complete` alone is not proof of end-to-end correctness.
+
+Cluster-free isolation regressions (Python standard library only):
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s compose -p 'test_smoke_*.py'
+bash -n compose/smoke.sh
+```
+
+Run those from the repository root. The command-recording driver test uses a
+temporary fake Docker executable; it never contacts the Docker daemon. It checks
+all target routing and fail-closed allocation paths, not actual engine/GC behavior.
 
 ### Prereqs
 - The **FE image** `doris-fe:pr62767-local` must exist locally (see *Building the FE

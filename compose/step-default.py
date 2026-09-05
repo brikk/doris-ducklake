@@ -18,8 +18,11 @@ import os
 
 import duckdb
 
+from smoke_lake import require_smoke_lake
+
 
 def main() -> None:
+    require_smoke_lake()
     pg_db = os.environ["PG_DB"]
     pg_host = os.environ["PG_HOST"]
     pg_user = os.environ["PG_USER"]

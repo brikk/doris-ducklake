@@ -37,6 +37,16 @@ done
 
 log() { printf '\033[1;36m[smoke]\033[0m %s\n' "$*"; }
 
+mc_run() {
+    docker run --rm --network trino-ducklake-dev_default --entrypoint sh minio/mc:latest -ec "
+        mc alias set m http://trino-ducklake-minio:9000 minioadmin minioadmin >/dev/null
+        $1"
+}
+
+psql_c() {
+    docker exec trino-ducklake-postgres psql -X -v ON_ERROR_STOP=1 -U ducklake -d "$SMOKE_PG_DB" -tA -c "$1"
+}
+
 # Doris's init_fe.sh appends `priority_networks` to fe.conf at every boot. The
 # compose mounts a gitignored runtime copy (not the tracked file) so those appends
 # never pollute the repo. Stage it fresh from the pristine tracked fe.conf here, so
@@ -50,28 +60,9 @@ if [[ $DOWN -eq 1 ]]; then
     exit 0
 fi
 
-# 1. Substrate.
-log "Bringing up DuckLake substrate (Postgres + MinIO + seed)…"
-docker compose -f "${TRINO_COMPOSE}" up -d postgres minio create-bucket bootstrap
-
-# Wait for the substrate's bootstrap container to exit successfully — it's the
-# one that seeds TPC-H into DuckLake. After it exits (0) the substrate is ready.
-log "Waiting for substrate bootstrap to complete…"
-deadline=$((SECONDS + 300))
-while :; do
-    state=$(docker inspect -f '{{.State.Status}}' trino-ducklake-bootstrap 2>/dev/null || echo missing)
-    exit_code=$(docker inspect -f '{{.State.ExitCode}}' trino-ducklake-bootstrap 2>/dev/null || echo -1)
-    if [[ "$state" == "exited" && "$exit_code" == "0" ]]; then
-        log "Substrate ready."
-        break
-    fi
-    if (( SECONDS >= deadline )); then
-        log "Substrate bootstrap did not finish in time."
-        docker logs trino-ducklake-bootstrap | tail -40 || true
-        exit 1
-    fi
-    sleep 2
-done
+# 1. Reuse infrastructure, never bootstrap or reset the shared Trino lake.
+log "Bringing up PostgreSQL + MinIO infrastructure (no shared-lake seed)…"
+docker compose -f "${TRINO_COMPOSE}" up -d --no-recreate --wait --wait-timeout 120 postgres minio
 
 # 2. Plugin zip — rebuild and unpack into the bind mount.
 if [[ $DO_BUILD -eq 1 ]]; then
@@ -184,6 +175,47 @@ if [[ "$UP_ONLY" -eq 1 ]]; then
     exit 0
 fi
 
+# Each driver invocation owns a fresh database and a disjoint object prefix.
+# Neither is user-overridable: existing databases/prefixes must never be adopted.
+SMOKE_RUN_ID=$(docker exec trino-ducklake-postgres psql -X -v ON_ERROR_STOP=1 -U ducklake -d postgres -tA -c \
+    "SELECT replace(gen_random_uuid()::text, '-', '');")
+if [[ ! "$SMOKE_RUN_ID" =~ ^[0-9a-f]{32}$ ]]; then
+    log "Invalid smoke run ID; refusing to allocate a lake."
+    exit 1
+fi
+readonly SMOKE_RUN_ID
+readonly SMOKE_PG_DB="doris_smoke_${SMOKE_RUN_ID}"
+readonly SMOKE_CATALOG="doris_smoke_${SMOKE_RUN_ID}"
+readonly SMOKE_PREFIX="doris-smoke/${SMOKE_RUN_ID}/"
+readonly SMOKE_DATA_PATH="s3://ducklake/${SMOKE_PREFIX}"
+readonly SMOKE_MC_ROOT="m/ducklake/${SMOKE_PREFIX}"
+log "Run ${SMOKE_RUN_ID}: catalog=${SMOKE_CATALOG}, database=${SMOKE_PG_DB}, warehouse=${SMOKE_DATA_PATH}"
+log "Run-owned lake resources are retained for inspection on success or failure; no shared-lake cleanup runs."
+log "Step labels use dl as shorthand for ${SMOKE_CATALOG}; all SQL targets the run-owned catalog."
+
+mc_run "mc mb --ignore-existing m/ducklake"
+prefix_contents=$(mc_run "mc ls '${SMOKE_MC_ROOT}'")
+if [[ -n "$prefix_contents" ]]; then
+    log "Smoke prefix already exists; refusing to overwrite any objects."
+    exit 1
+fi
+docker exec trino-ducklake-postgres psql -X -v ON_ERROR_STOP=1 -U ducklake -d postgres -c \
+    "CREATE DATABASE ${SMOKE_PG_DB} TEMPLATE template0;"
+
+# Reuse the TPC-H generator, but override every target; it never reads the shared lake.
+DUCKDB_VERSION=1.5.5 docker compose -f "${TRINO_COMPOSE}" run --rm --no-deps \
+    -e PG_HOST=trino-ducklake-postgres -e PG_DB="$SMOKE_PG_DB" \
+    -e PG_USER=ducklake -e PG_PASSWORD=ducklake \
+    -e S3_ENDPOINT=trino-ducklake-minio:9000 \
+    -e S3_KEY_ID=minioadmin -e S3_SECRET=minioadmin \
+    -e S3_BUCKET=ducklake -e S3_DATA_PREFIX="$SMOKE_PREFIX" \
+    -e TPCH_SCHEMA=tpch -e TPCH_SCALE_FACTOR=0.01 bootstrap
+persisted_path=$(psql_c "SELECT value FROM ducklake_metadata WHERE key = 'data_path';")
+if [[ "$persisted_path" != "$SMOKE_DATA_PATH" ]]; then
+    log "Seeded catalog data_path does not match the owned warehouse; refusing smoke mutations."
+    exit 1
+fi
+
 # 7. Drive the plugin.
 #
 # CREATE CATALOG carries s3.* credentials so the BE's parquet reader can reach
@@ -193,13 +225,12 @@ fi
 # canonicalises (s3.access_key → AWS_ACCESS_KEY, etc.).
 log "Creating DuckLake catalog + listing schemas/tables…"
 docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
-    DROP CATALOG IF EXISTS dl;
-    CREATE CATALOG dl PROPERTIES (
+    CREATE CATALOG ${SMOKE_CATALOG} PROPERTIES (
         'type'              = 'ducklake',
-        'metadata.url'      = 'jdbc:postgresql://trino-ducklake-postgres:5432/ducklake',
+        'metadata.url'      = 'jdbc:postgresql://trino-ducklake-postgres:5432/${SMOKE_PG_DB}',
         'metadata.user'     = 'ducklake',
         'metadata.password' = 'ducklake',
-        'storage.warehouse' = 's3://ducklake/data/',
+        'storage.warehouse' = '${SMOKE_DATA_PATH}',
         's3.endpoint'       = 'http://trino-ducklake-minio:9000',
         's3.region'         = 'us-east-1',
         's3.access_key'     = 'minioadmin',
@@ -209,18 +240,18 @@ docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
         'maintenance.min-retention' = '1s'
     );
     SHOW CATALOGS;
-    SHOW DATABASES FROM dl;
-    SWITCH dl;
+    SHOW DATABASES FROM ${SMOKE_CATALOG};
+    SWITCH ${SMOKE_CATALOG};
     SHOW DATABASES;
     SHOW TABLES FROM tpch;
-    DESC dl.tpch.orders;
-    DESC dl.tpch.lineitem;
+    DESC ${SMOKE_CATALOG}.tpch.orders;
+    DESC ${SMOKE_CATALOG}.tpch.lineitem;
 " 2>&1
 
 # 8. Step 5 of the roadmap: live SELECT * through to the BE parquet reader.
 log "SELECT * FROM dl.tpch.orders LIMIT 5 …"
 docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
-    USE dl.tpch;
+    USE ${SMOKE_CATALOG}.tpch;
     SELECT * FROM orders LIMIT 5;
 " 2>&1
 
@@ -229,8 +260,8 @@ docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
 # The cross-engine round-trip (fresh DuckDB write → Doris read) is covered by
 # §12b (column DEFAULT backfill) and W3 (Doris CTAS read-back).
 log "§8b read checklist: per-table row counts…"
-orders_n=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -N -e "SELECT COUNT(*) FROM dl.tpch.orders;" 2>/dev/null | tail -1)
-lineitem_n=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -N -e "SELECT COUNT(*) FROM dl.tpch.lineitem;" 2>/dev/null | tail -1)
+orders_n=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -N -e "SELECT COUNT(*) FROM ${SMOKE_CATALOG}.tpch.orders;" 2>/dev/null | tail -1)
+lineitem_n=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -N -e "SELECT COUNT(*) FROM ${SMOKE_CATALOG}.tpch.lineitem;" 2>/dev/null | tail -1)
 log "  dl.tpch.orders=${orders_n:-?}  dl.tpch.lineitem=${lineitem_n:-?}"
 if [[ "${orders_n:-0}" -gt 0 && "${lineitem_n:-0}" -gt 0 ]]; then
     log "§8b row counts GREEN: both TPC-H tables return positive counts via the BE."
@@ -253,7 +284,7 @@ fi
 log "§8b-count: COUNT(*) vs COUNT(col) on a nullable column (metadata count-pushdown must stay COUNT(*)-only)…"
 set +e
 cc_setup=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
-    SWITCH dl;
+    SWITCH ${SMOKE_CATALOG};
     DROP TABLE IF EXISTS tpch.count_col_check;
     CREATE TABLE tpch.count_col_check (id INT, v INT);
     INSERT INTO tpch.count_col_check VALUES (1,10),(2,NULL),(3,30),(4,NULL);
@@ -265,8 +296,8 @@ if [[ $cc_setup_status -ne 0 ]]; then
     log "§8b-count CHECK: setup (CREATE/INSERT) failed — inspect above (INSERT needs the iceberg SDK bundled in the plugin; see FE-PATCHES 2026-07-22). Skipping the count assertion."
     cc_star=skip; cc_col=skip
 else
-    cc_star=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -N -e "SELECT COUNT(*) FROM dl.tpch.count_col_check;" 2>/dev/null | tail -1)
-    cc_col=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -N -e "SELECT COUNT(v) FROM dl.tpch.count_col_check;" 2>/dev/null | tail -1)
+    cc_star=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -N -e "SELECT COUNT(*) FROM ${SMOKE_CATALOG}.tpch.count_col_check;" 2>/dev/null | tail -1)
+    cc_col=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -N -e "SELECT COUNT(v) FROM ${SMOKE_CATALOG}.tpch.count_col_check;" 2>/dev/null | tail -1)
 fi
 log "  COUNT(*)=${cc_star:-?} (exp 4)  COUNT(v)=${cc_col:-?} (exp 2, non-null)"
 if [[ "${cc_star:-0}" == "4" && "${cc_col:-0}" == "2" ]]; then
@@ -283,11 +314,11 @@ elif [[ "${cc_star:-0}" == "4" ]]; then
 else
     log "§8b-count CHECK: COUNT(*)=${cc_star:-?}, COUNT(v)=${cc_col:-?} (exp 4 and 2) — unexpected, inspect above."
 fi
-docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "DROP TABLE IF EXISTS dl.tpch.count_col_check;" 2>&1 | tail -1
+docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "DROP TABLE IF EXISTS ${SMOKE_CATALOG}.tpch.count_col_check;" 2>&1 | tail -1
 
 log "§8b EXPLAIN VERBOSE of a filter-pushdown SELECT (expect a plugin scan over tpch.orders)…"
 explain_out=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
-    EXPLAIN VERBOSE SELECT o_orderkey, o_orderstatus FROM dl.tpch.orders WHERE o_orderkey < 100;
+    EXPLAIN VERBOSE SELECT o_orderkey, o_orderstatus FROM ${SMOKE_CATALOG}.tpch.orders WHERE o_orderkey < 100;
 " 2>&1)
 echo "${explain_out}" | sed 's/^/  /' | tail -40
 if echo "${explain_out}" | grep -qiE "orders|scan"; then
@@ -328,23 +359,25 @@ log "Issuing DELETE of $DELETE_COUNT rows through DuckDB+DuckLake (on tpch.step7
 docker run --rm \
     --network trino-ducklake-dev_default \
     -v "${HERE}/step7-delete.py:/script.py:ro" \
+    -v "${HERE}/smoke_lake.py:/smoke_lake.py:ro" \
+    -e SMOKE_RUN_ID="$SMOKE_RUN_ID" \
     -e PG_HOST=trino-ducklake-postgres \
-    -e PG_DB=ducklake \
+    -e PG_DB="$SMOKE_PG_DB" \
     -e PG_USER=ducklake \
     -e PG_PASSWORD=ducklake \
     -e S3_ENDPOINT=trino-ducklake-minio:9000 \
     -e S3_KEY_ID=minioadmin \
     -e S3_SECRET=minioadmin \
-    -e DATA_PATH=s3://ducklake/data/ \
+    -e DATA_PATH="$SMOKE_DATA_PATH" \
     -e DELETE_COUNT="$DELETE_COUNT" \
     python:3.12-slim sh -c '
         set -e
-        pip install --quiet --no-cache-dir "duckdb==1.5.2"
+        pip install --quiet --no-cache-dir "duckdb==1.5.5"
         python /script.py
     ' 2>&1 | sed "s/^/  [duckdb] /"
 
 log "Verifying ducklake_delete_file got a fresh row (active at the latest snapshot)…"
-active_deletes=$(docker exec trino-ducklake-postgres psql -U ducklake -d ducklake -tA -c "
+active_deletes=$(psql_c "
     SELECT COUNT(*) FROM ducklake_delete_file WHERE end_snapshot IS NULL;
 " 2>&1 | tail -1)
 if [[ "$active_deletes" -lt 1 ]]; then
@@ -355,13 +388,13 @@ log "  ducklake_delete_file has $active_deletes active row(s) — FE-side Step 7
 
 log "Refreshing Doris catalog so the new snapshot is visible…"
 docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
-    DROP CATALOG IF EXISTS dl;
-    CREATE CATALOG dl PROPERTIES (
+    DROP CATALOG ${SMOKE_CATALOG};
+    CREATE CATALOG ${SMOKE_CATALOG} PROPERTIES (
         'type'              = 'ducklake',
-        'metadata.url'      = 'jdbc:postgresql://trino-ducklake-postgres:5432/ducklake',
+        'metadata.url'      = 'jdbc:postgresql://trino-ducklake-postgres:5432/${SMOKE_PG_DB}',
         'metadata.user'     = 'ducklake',
         'metadata.password' = 'ducklake',
-        'storage.warehouse' = 's3://ducklake/data/',
+        'storage.warehouse' = '${SMOKE_DATA_PATH}',
         's3.endpoint'       = 'http://trino-ducklake-minio:9000',
         's3.region'         = 'us-east-1',
         's3.access_key'     = 'minioadmin',
@@ -379,7 +412,7 @@ log "Attempting SELECT COUNT(*) via Doris on the table with the new delete file�
 # is tracked in dev-docs/ducklake-doris-friction.md (2026-05-19 entry).
 set +e
 output=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -N -e "
-    SELECT COUNT(*) FROM dl.tpch.step7_orders;
+    SELECT COUNT(*) FROM ${SMOKE_CATALOG}.tpch.step7_orders;
 " 2>&1)
 status=$?
 set -e
@@ -417,18 +450,20 @@ w2_helper() {  # $1 = MODE (create|verify), $2 = TABLE (default doris_w), $3 = P
     docker run --rm \
         --network trino-ducklake-dev_default \
         -v "${HERE}/w2-insert.py:/script.py:ro" \
+        -v "${HERE}/smoke_lake.py:/smoke_lake.py:ro" \
+        -e SMOKE_RUN_ID="$SMOKE_RUN_ID" \
         -e MODE="$1" \
         -e TABLE="${2:-doris_w}" \
         -e PARTITION_BY="${3:-}" \
         -e SCHEMA="${4:-tpch}" \
-        -e PG_HOST=trino-ducklake-postgres -e PG_DB=ducklake \
+        -e PG_HOST=trino-ducklake-postgres -e PG_DB="$SMOKE_PG_DB" \
         -e PG_USER=ducklake -e PG_PASSWORD=ducklake \
         -e S3_ENDPOINT=trino-ducklake-minio:9000 \
         -e S3_KEY_ID=minioadmin -e S3_SECRET=minioadmin \
-        -e DATA_PATH=s3://ducklake/data/ \
+        -e DATA_PATH="$SMOKE_DATA_PATH" \
         python:3.12-slim sh -c '
             set -e
-            pip install --quiet --no-cache-dir "duckdb==1.5.2"
+            pip install --quiet --no-cache-dir "duckdb==1.5.5"
             python /script.py
         ' 2>&1 | sed "s/^/  [duckdb] /"
 }
@@ -461,7 +496,7 @@ DDL_DB=ddl_smoke
 
 log "W1 DDL: best-effort clean slate (DROP any leftover ${DDL_DB} from a prior run)…"
 docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
-    SWITCH dl;
+    SWITCH ${SMOKE_CATALOG};
     DROP TABLE IF EXISTS ${DDL_DB}.doris_ddl;
     DROP TABLE IF EXISTS ${DDL_DB}.doris_ddl_p;
     DROP DATABASE IF EXISTS ${DDL_DB};
@@ -471,7 +506,7 @@ docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
 log "W1 DDL: Doris CREATE DATABASE dl.${DDL_DB} (database-level DDL)…"
 set +e
 ddldb_out=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
-    SWITCH dl;
+    SWITCH ${SMOKE_CATALOG};
     CREATE DATABASE ${DDL_DB};
 " 2>&1)
 ddldb_status=$?
@@ -480,7 +515,7 @@ echo "$ddldb_out" | tail -4
 if [[ $ddldb_status -ne 0 ]]; then
     log "W1 DDL: CREATE DATABASE failed — see output above + fe.log. (Previously live-green; regression?)"
 else
-    db_present=$(docker exec trino-ducklake-postgres psql -U ducklake -d ducklake -tA -c "
+    db_present=$(psql_c "
         SELECT COUNT(*) FROM ducklake_schema WHERE schema_name='${DDL_DB}' AND end_snapshot IS NULL;
     " 2>&1 | tail -1)
     if [[ "${db_present:-0}" == "1" ]]; then
@@ -495,7 +530,7 @@ fi
 log "W1 DDL: Doris CREATE TABLE dl.${DDL_DB}.doris_ddl (id INT, name STRING)…"
 set +e
 ddl_out=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
-    SWITCH dl;
+    SWITCH ${SMOKE_CATALOG};
     CREATE TABLE ${DDL_DB}.doris_ddl (id INT, name STRING);
 " 2>&1)
 ddl_status=$?
@@ -516,11 +551,11 @@ else
     log "W1 DDL: CREATE TABLE GREEN — routed to the connector + committed to DuckLake. Running full verify…"
     log "W1 DDL: DESC dl.${DDL_DB}.doris_ddl (Doris-side schema after the round-trip)…"
     docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
-        DESC dl.${DDL_DB}.doris_ddl;
+        DESC ${SMOKE_CATALOG}.${DDL_DB}.doris_ddl;
     " 2>&1
 
     log "W1 DDL: catalog cross-check — schema + columns the connector wrote to DuckLake…"
-    docker exec trino-ducklake-postgres psql -U ducklake -d ducklake -tA -c "
+    psql_c "
         SELECT c.column_order, c.column_name, c.column_type
         FROM ducklake_column c
         JOIN ducklake_table t  ON t.table_id  = c.table_id
@@ -536,17 +571,17 @@ else
     log "W1 DDL: INSERT INTO dl.${DDL_DB}.doris_ddl (reuses the W2 BE sink) + read back…"
     set +e
     ddl_ins=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
-        INSERT INTO dl.${DDL_DB}.doris_ddl VALUES (1,'alice'),(2,'bob');
+        INSERT INTO ${SMOKE_CATALOG}.${DDL_DB}.doris_ddl VALUES (1,'alice'),(2,'bob');
     " 2>&1)
     ddl_ins_status=$?
     set -e
     echo "$ddl_ins" | tail -6
     if [[ $ddl_ins_status -eq 0 ]]; then
         ddl_rows=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -N -e "
-            SELECT COUNT(*) FROM dl.${DDL_DB}.doris_ddl;
+            SELECT COUNT(*) FROM ${SMOKE_CATALOG}.${DDL_DB}.doris_ddl;
         " 2>&1 | tail -1)
         docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
-            SELECT * FROM dl.${DDL_DB}.doris_ddl ORDER BY id;
+            SELECT * FROM ${SMOKE_CATALOG}.${DDL_DB}.doris_ddl ORDER BY id;
         " 2>&1
         w2_helper verify doris_ddl "" "${DDL_DB}"
         if [[ "${ddl_rows:-0}" == "2" ]]; then
@@ -564,7 +599,7 @@ else
     log "W1 DDL: partitioned CREATE TABLE doris_ddl_p PARTITION BY LIST (bucket(4, name)) ()…"
     set +e
     ddlp_out=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
-        SWITCH dl;
+        SWITCH ${SMOKE_CATALOG};
         CREATE TABLE ${DDL_DB}.doris_ddl_p (id INT, name STRING) PARTITION BY LIST (bucket(4, name)) ();
     " 2>&1)
     ddlp_status=$?
@@ -572,7 +607,7 @@ else
     echo "$ddlp_out" | tail -8
     if [[ $ddlp_status -eq 0 ]]; then
         log "W1 DDL: catalog cross-check — partition transform the connector recorded…"
-        transforms=$(docker exec trino-ducklake-postgres psql -U ducklake -d ducklake -tA -c "
+        transforms=$(psql_c "
             SELECT pc.transform
             FROM ducklake_partition_column pc
             JOIN ducklake_partition_info pi ON pi.partition_id = pc.partition_id
@@ -598,7 +633,7 @@ fi
 log "W1 DDL: DROP TABLE (if any) + DROP DATABASE dl.${DDL_DB} (database-level DDL)…"
 set +e
 dropdb_out=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
-    SWITCH dl;
+    SWITCH ${SMOKE_CATALOG};
     DROP TABLE IF EXISTS ${DDL_DB}.doris_ddl;
     DROP TABLE IF EXISTS ${DDL_DB}.doris_ddl_p;
     DROP DATABASE ${DDL_DB};
@@ -606,7 +641,7 @@ dropdb_out=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
 dropdb_status=$?
 set -e
 echo "$dropdb_out" | tail -4
-gone=$(docker exec trino-ducklake-postgres psql -U ducklake -d ducklake -tA -c "
+gone=$(psql_c "
     SELECT COUNT(*) FROM ducklake_schema WHERE schema_name='${DDL_DB}' AND end_snapshot IS NULL;
 " 2>&1 | tail -1)
 if [[ $dropdb_status -eq 0 && "${gone:-1}" == "0" ]]; then
@@ -619,7 +654,7 @@ log "W1 DDL summary: CREATE/DROP DATABASE + TABLE (unpartitioned + bucket-partit
 
 log "W2: creating target dl.tpch.doris_w via Doris CREATE TABLE (live DDL — no DuckDB crutch)…"
 docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
-    SWITCH dl;
+    SWITCH ${SMOKE_CATALOG};
     DROP TABLE IF EXISTS tpch.doris_w;
     CREATE TABLE tpch.doris_w (id INT, name STRING);
 " 2>&1 | tail -4
@@ -627,7 +662,7 @@ docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
 log "W2: INSERT INTO dl.tpch.doris_w via Doris (BE Iceberg sink writes the Parquet)…"
 set +e
 insert_out=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
-    INSERT INTO dl.tpch.doris_w VALUES (1,'alice'),(2,'bob'),(3,'charlie');
+    INSERT INTO ${SMOKE_CATALOG}.tpch.doris_w VALUES (1,'alice'),(2,'bob'),(3,'charlie');
 " 2>&1)
 insert_status=$?
 set -e
@@ -643,15 +678,15 @@ if [[ $insert_status -ne 0 ]]; then
 else
     log "W2: INSERT accepted — reading back through Doris…"
     doris_rows=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -N -e "
-        SELECT COUNT(*) FROM dl.tpch.doris_w;
+        SELECT COUNT(*) FROM ${SMOKE_CATALOG}.tpch.doris_w;
     " 2>&1 | tail -1)
     docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
-        SELECT * FROM dl.tpch.doris_w ORDER BY id;
+        SELECT * FROM ${SMOKE_CATALOG}.tpch.doris_w ORDER BY id;
     " 2>&1
     log "W2: cross-engine read-back via DuckDB+DuckLake (proves the Parquet is DuckLake-readable)…"
     w2_helper verify
     log "W2: catalog cross-check — active data files for doris_w…"
-    docker exec trino-ducklake-postgres psql -U ducklake -d ducklake -tA -c "
+    psql_c "
         SELECT COUNT(*) FROM ducklake_data_file f
         JOIN ducklake_table t ON t.table_id = f.table_id
         WHERE t.table_name = 'doris_w' AND f.end_snapshot IS NULL;
@@ -674,7 +709,7 @@ fi
 # {1,2,3}. A different/colliding set means the BE hash differs from DuckLake's.
 log "W2c: creating bucketed target dl.tpch.doris_wb via Doris CREATE TABLE PARTITION BY LIST (bucket(4, name)) () (live DDL — no DuckDB crutch)…"
 docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
-    SWITCH dl;
+    SWITCH ${SMOKE_CATALOG};
     DROP TABLE IF EXISTS tpch.doris_wb;
     CREATE TABLE tpch.doris_wb (id INT, name STRING) PARTITION BY LIST (bucket(4, name)) ();
 " 2>&1 | tail -4
@@ -682,7 +717,7 @@ docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
 log "W2c: INSERT alice/bob/charlie INTO dl.tpch.doris_wb via Doris (BE buckets + writes partitioned)…"
 set +e
 wb_insert=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
-    INSERT INTO dl.tpch.doris_wb VALUES (1,'alice'),(2,'bob'),(3,'charlie');
+    INSERT INTO ${SMOKE_CATALOG}.tpch.doris_wb VALUES (1,'alice'),(2,'bob'),(3,'charlie');
 " 2>&1)
 wb_status=$?
 set -e
@@ -696,12 +731,12 @@ if [[ $wb_status -ne 0 ]]; then
     fi
 else
     wb_rows=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -N -e "
-        SELECT COUNT(*) FROM dl.tpch.doris_wb;
+        SELECT COUNT(*) FROM ${SMOKE_CATALOG}.tpch.doris_wb;
     " 2>&1 | tail -1)
     log "W2c: cross-engine read-back via DuckDB+DuckLake…"
     w2_helper verify doris_wb
     log "W2c: BUCKET-equivalence — bucket each file was tagged with in the catalog (must be 1,2,3)…"
-    buckets=$(docker exec trino-ducklake-postgres psql -U ducklake -d ducklake -tA -c "
+    buckets=$(psql_c "
         SELECT pv.partition_value
         FROM ducklake_file_partition_value pv
         JOIN ducklake_table t ON t.table_id = pv.table_id
@@ -712,7 +747,7 @@ else
     log "  recorded buckets: [$buckets]  (DuckLake murmur3: alice→1, bob→2, charlie→3)"
     # Prove Doris's own read-side bucket pruning agrees with what it just wrote.
     alice_rows=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -N -e "
-        SELECT COUNT(*) FROM dl.tpch.doris_wb WHERE name='alice';
+        SELECT COUNT(*) FROM ${SMOKE_CATALOG}.tpch.doris_wb WHERE name='alice';
     " 2>&1 | tail -1)
     if [[ "$buckets" == "1,2,3" && "${wb_rows:-0}" == "3" && "${alice_rows:-0}" == "1" ]]; then
         log "W2c GREEN: BE bucket(4,name) == DuckLake murmur3; partitioned INSERT round-trips cross-engine. 🎉"
@@ -740,12 +775,12 @@ fi
 # crashes the same way), so the smoke avoids narrow ints rather than crashing the BE.
 log "W3 CTAS: CREATE TABLE dl.tpch.doris_ctas AS SELECT id, name FROM tpch.doris_w (DDL + INSERT composed)…"
 docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
-    SWITCH dl;
+    SWITCH ${SMOKE_CATALOG};
     DROP TABLE IF EXISTS tpch.doris_ctas;
 " >/dev/null 2>&1 || true
 set +e
 ctas_out=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
-    SWITCH dl;
+    SWITCH ${SMOKE_CATALOG};
     CREATE TABLE tpch.doris_ctas AS SELECT id, name FROM tpch.doris_w;
 " 2>&1)
 ctas_status=$?
@@ -760,15 +795,15 @@ if [[ $ctas_status -ne 0 ]]; then
     fi
 else
     ctas_rows=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -N -e "
-        SELECT COUNT(*) FROM dl.tpch.doris_ctas;
+        SELECT COUNT(*) FROM ${SMOKE_CATALOG}.tpch.doris_ctas;
     " 2>&1 | tail -1)
     docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
-        DESC dl.tpch.doris_ctas;
-        SELECT * FROM dl.tpch.doris_ctas ORDER BY id;
+        DESC ${SMOKE_CATALOG}.tpch.doris_ctas;
+        SELECT * FROM ${SMOKE_CATALOG}.tpch.doris_ctas ORDER BY id;
     " 2>&1
     log "W3 CTAS: cross-engine read-back via DuckDB+DuckLake…"
     w2_helper verify doris_ctas
-    ctas_files=$(docker exec trino-ducklake-postgres psql -U ducklake -d ducklake -tA -c "
+    ctas_files=$(psql_c "
         SELECT COUNT(*) FROM ducklake_data_file f
         JOIN ducklake_table t ON t.table_id = f.table_id
         WHERE t.table_name = 'doris_ctas' AND f.end_snapshot IS NULL;
@@ -780,7 +815,7 @@ else
         log "W3 CTAS CHECK: rows=${ctas_rows:-?} (exp 3), data files=${ctas_files:-?} (exp ≥1) — inspect above."
     fi
     docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
-        SWITCH dl; DROP TABLE IF EXISTS tpch.doris_ctas;
+        SWITCH ${SMOKE_CATALOG}; DROP TABLE IF EXISTS tpch.doris_ctas;
     " 2>&1 | tail -1
 fi
 
@@ -795,33 +830,35 @@ log "§12b column-DEFAULT backfill: DuckDB seeds pre-ADD rows, ADD COLUMN b DEFA
 docker run --rm \
     --network trino-ducklake-dev_default \
     -v "${HERE}/step-default.py:/script.py:ro" \
+    -v "${HERE}/smoke_lake.py:/smoke_lake.py:ro" \
+    -e SMOKE_RUN_ID="$SMOKE_RUN_ID" \
     -e PG_HOST=trino-ducklake-postgres \
-    -e PG_DB=ducklake \
+    -e PG_DB="$SMOKE_PG_DB" \
     -e PG_USER=ducklake \
     -e PG_PASSWORD=ducklake \
     -e S3_ENDPOINT=trino-ducklake-minio:9000 \
     -e S3_KEY_ID=minioadmin \
     -e S3_SECRET=minioadmin \
-    -e DATA_PATH=s3://ducklake/data/ \
+    -e DATA_PATH="$SMOKE_DATA_PATH" \
     python:3.12-slim sh -c '
         set -e
-        pip install --quiet --no-cache-dir "duckdb==1.5.2"
+        pip install --quiet --no-cache-dir "duckdb==1.5.5"
         python /script.py
     ' 2>&1 | sed "s/^/  [duckdb] /"
 
 log "§12b refreshing Doris catalog so the evolved schema is visible…"
-docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "REFRESH CATALOG dl;" 2>&1 | tail -1
+docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "REFRESH CATALOG ${SMOKE_CATALOG};" 2>&1 | tail -1
 
 log "§12b reading tpch.default_probe via Doris (old rows must backfill b=42; new row keeps b=99)…"
 # Old rows (a∈{1,2,3}) predate b → expect b=42 backfilled; new row (a=4) → b=99.
 default_backfill=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -N -e "
-    SELECT COUNT(*) FROM dl.tpch.default_probe WHERE a IN (1,2,3) AND b = 42;
+    SELECT COUNT(*) FROM ${SMOKE_CATALOG}.tpch.default_probe WHERE a IN (1,2,3) AND b = 42;
 " 2>/dev/null | tail -1)
 default_explicit=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -N -e "
-    SELECT b FROM dl.tpch.default_probe WHERE a = 4;
+    SELECT b FROM ${SMOKE_CATALOG}.tpch.default_probe WHERE a = 4;
 " 2>/dev/null | tail -1)
 default_nulls=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -N -e "
-    SELECT COUNT(*) FROM dl.tpch.default_probe WHERE b IS NULL;
+    SELECT COUNT(*) FROM ${SMOKE_CATALOG}.tpch.default_probe WHERE b IS NULL;
 " 2>/dev/null | tail -1)
 log "  old rows with b=42: ${default_backfill:-?}/3  |  new row a=4 b=${default_explicit:-?} (exp 99)  |  NULL b: ${default_nulls:-?} (exp 0)"
 if [[ "${default_backfill:-0}" -eq 3 && "${default_explicit:-0}" -eq 99 && "${default_nulls:-1}" -eq 0 ]]; then
@@ -830,7 +867,7 @@ else
     log "§12b DEFAULT-BACKFILL CHECK: b=42 rows=${default_backfill:-?} (exp 3), a=4 b=${default_explicit:-?} (exp 99), NULL b=${default_nulls:-?} (exp 0) — inspect above."
 fi
 docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
-    SWITCH dl; DROP TABLE IF EXISTS tpch.default_probe;
+    SWITCH ${SMOKE_CATALOG}; DROP TABLE IF EXISTS tpch.default_probe;
 " 2>&1 | tail -1
 
 # 13. Maintenance-GC procedures (F6 / getProcedureOps): expire_snapshots,
@@ -852,13 +889,7 @@ docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
 #    ducklake_files_scheduled_for_deletion; failed_file_count == 0.
 #  - remove_orphan_files → deleted_file_count == 1 (only the ducklake- orphan) and
 #    ONLY that orphan is gone; foreign files (_SUCCESS, a user's data.parquet) stay.
-GC_ANCHOR="dl.tpch.orders" # any real table; expire/cleanup ignore it, orphan uses it only for the handle
-mc_run() { # run an mc script against the substrate MinIO
-    docker run --rm --network trino-ducklake-dev_default --entrypoint sh minio/mc:latest -c "
-        mc alias set m http://trino-ducklake-minio:9000 minioadmin minioadmin >/dev/null 2>&1
-        $1"
-}
-psql_c() { docker exec trino-ducklake-postgres psql -U ducklake -d ducklake -tA -c "$1" 2>/dev/null | tail -1; }
+GC_ANCHOR="${SMOKE_CATALOG}.tpch.orders" # expiry/cleanup affect only this run's catalog
 fe_proc() { # run an ALTER TABLE … EXECUTE proc; echo the last (result) row, tab-delimited
     docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -N -e "$1" 2>/dev/null | tail -1
 }
@@ -881,13 +912,13 @@ log "§13 cleanup_old_files (drains the schedule → deletes blobs, retention_th
 # Deterministic fixture: a recognizable blob + an already-aged schedule row pointing at
 # it (schedule_start 1h ago clears the 1s retention with no wait). Proves the
 # list-schedule → delete-blob → drain-row path end-to-end, independent of write churn.
-mc_run "printf 'cleanup-fixture' | mc pipe m/ducklake/data/ducklake-smoke-cleanup.parquet" 2>&1 | tail -1
+mc_run "printf 'cleanup-fixture' | mc pipe ${SMOKE_MC_ROOT}ducklake-smoke-cleanup.parquet" 2>&1 | tail -1
 psql_c "INSERT INTO ducklake_files_scheduled_for_deletion (data_file_id, path, path_is_relative, schedule_start)
-        VALUES (900001, 's3://ducklake/data/ducklake-smoke-cleanup.parquet', false, now() - interval '1 hour');" >/dev/null
+        VALUES (900001, '${SMOKE_DATA_PATH}ducklake-smoke-cleanup.parquet', false, now() - interval '1 hour');" >/dev/null
 cleanup_row=$(fe_proc "ALTER TABLE ${GC_ANCHOR} EXECUTE cleanup_old_files('retention_threshold' = '1s');")
 cleanup_deleted=$(field "$cleanup_row" 3)
 cleanup_failed=$(field "$cleanup_row" 4)
-cleanup_blob=$(mc_run "mc stat m/ducklake/data/ducklake-smoke-cleanup.parquet >/dev/null 2>&1 && echo present || echo gone" 2>/dev/null | tail -1)
+cleanup_blob=$(mc_run "mc stat ${SMOKE_MC_ROOT}ducklake-smoke-cleanup.parquet >/dev/null 2>&1 && echo present || echo gone" 2>/dev/null | tail -1)
 cleanup_sched=$(psql_c "SELECT COUNT(*) FROM ducklake_files_scheduled_for_deletion WHERE data_file_id = 900001;")
 log "  returned deleted=${cleanup_deleted:-?} failed=${cleanup_failed:-?}; fixture blob=${cleanup_blob:-?}; fixture schedule rows left=${cleanup_sched:-?}"
 if [[ "${cleanup_deleted:-0}" -ge 1 && "${cleanup_failed:-1}" -eq 0 && "${cleanup_blob}" == "gone" && "${cleanup_sched:-1}" -eq 0 ]]; then
@@ -899,9 +930,9 @@ fi
 log "§13 remove_orphan_files: seeding orphan + foreign files at the warehouse root…"
 # ducklake-*.parquet = recognizable residue (delete); _SUCCESS + data.parquet = foreign (keep).
 mc_run "
-    printf 'orphan'  | mc pipe m/ducklake/data/ducklake-smoke-orphan.parquet
-    printf 'success' | mc pipe m/ducklake/data/_SUCCESS
-    printf 'foreign' | mc pipe m/ducklake/data/data.parquet
+    printf 'orphan'  | mc pipe ${SMOKE_MC_ROOT}ducklake-smoke-orphan.parquet
+    printf 'success' | mc pipe ${SMOKE_MC_ROOT}_SUCCESS
+    printf 'foreign' | mc pipe ${SMOKE_MC_ROOT}data.parquet
 " 2>&1 | tail -2
 sleep 2 # age the fixtures past the 1s retention grace
 
@@ -914,7 +945,7 @@ log "  returned deleted=${orphan_deleted:-?} failed=${orphan_failed:-?}"
 log "§13 verifying storage state (orphan gone; foreign files survive)…"
 # `mc stat` returns non-zero when the object is absent (unlike `mc ls <object>`, which exits 0 on a
 # missing exact path — that idiom gave false "present" results).
-exists() { mc_run "mc stat m/ducklake/data/$1 >/dev/null 2>&1 && echo present || echo gone" 2>/dev/null | tail -1; }
+exists() { mc_run "mc stat ${SMOKE_MC_ROOT}$1 >/dev/null 2>&1 && echo present || echo gone" 2>/dev/null | tail -1; }
 orphan_state=$(exists ducklake-smoke-orphan.parquet)
 success_state=$(exists _SUCCESS)
 foreign_state=$(exists data.parquet)
@@ -922,7 +953,7 @@ log "  ducklake-smoke-orphan.parquet: ${orphan_state}  |  _SUCCESS: ${success_st
 
 # doris_w's referenced files must be untouched — read it back (if W2 created it).
 gc_readback=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -N -e "
-    SELECT COUNT(*) FROM dl.tpch.doris_w;
+    SELECT COUNT(*) FROM ${SMOKE_CATALOG}.tpch.doris_w;
 " 2>/dev/null | tail -1)
 
 # deleted ≥ 1 (our orphan, plus any real churn residue — deleting that is also correct);
@@ -937,6 +968,6 @@ fi
 
 # Clean up the foreign test fixtures we parked at the warehouse root (the orphan is deleted by the
 # procedure when GREEN). Best-effort; never fails the smoke.
-mc_run "mc rm m/ducklake/data/_SUCCESS m/ducklake/data/data.parquet m/ducklake/data/ducklake-smoke-orphan.parquet 2>/dev/null; true" >/dev/null 2>&1 || true
+mc_run "mc rm ${SMOKE_MC_ROOT}_SUCCESS ${SMOKE_MC_ROOT}data.parquet ${SMOKE_MC_ROOT}ducklake-smoke-orphan.parquet 2>/dev/null; true" >/dev/null 2>&1 || true
 
 log "Smoke complete."
