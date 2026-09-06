@@ -15,7 +15,7 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
  > from FE core into loadable connector plugins* + the whole `fe/fe-connector` tree, incl.
  > `fe-connector-api` / `fe-connector-spi`). We now vendor from **`~/DEV/OSS/doris`, branch
  > `master`** (apache/doris), **not** the retired brikk fork `branch-catalog-spi`. Current
- > pin: **`4ab2cd71095`** (apache/doris master, 2026-09-04). Master's `<revision>` is still
+ > source/SPI pin: **`b58b2c53ff5`** (apache/doris master, 2026-09-05). Master's `<revision>` is still
  > `1.2-SNAPSHOT`, so the installed `~/.m2` coordinates are unchanged.
  > **SPI-surface note:** #66407 merged `fe-connector-api` INTO `fe-connector-spi` and renamed the
  > `org.apache.doris.connector.api.*` packages to `…spi.*`. We now depend on **only** the
@@ -25,6 +25,59 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
  > Keep this note, the Re-vendor log, and `compose/README.md` in sync.
 
 ### Re-vendor log
+
+- **2026-09-05 -> source/SPI pin `b58b2c53ff5`**
+  (`[enhancement](thirdparty) fix arrow build bug and clear dangerous env... (#67535)`).
+  Six commits after `4ab2cd71095`; local apache/doris checkout fast-forwarded cleanly.
+  **Non-breaking connector API:** SPI source/resources unchanged, plugin API **6.0**,
+  Maven revision `1.2-SNAPSHOT`, Thrift compiler/runtime **0.24.0**. Thrift IDL is
+  additive, not identical: `TPaimonFileDesc` gains optional `original_file_path`;
+  the Iceberg descriptors used by DuckLake are unchanged.
+
+  **Artifacts/validation:** rebuilt and installed SPI + `fe-thrift` and reactor
+  prerequisites using the September 1 build-env image
+  `7bc419b9a7fd` (Java 17.0.2, native Thrift 0.24), capped at 6 CPUs / 6 GB.
+  Maven command: `mvn -B install -P flatten -pl fe-connector/fe-connector-spi,fe-thrift -am -Dmaven.test.skip=true -Dmaven.build.cache.enabled=false`.
+  The initial `-DskipTests` attempt hit a permission error copying an old generated
+  test resource; skipping test resource/compilation phases resolved
+  it without changing ownership or source. Maven's build cache was disabled so the
+  new Thrift IDL was regenerated and compiled, rather than trusting cached artifacts.
+  `./gradlew test --rerun detekt assemble` with Java 25.0.2: **247 passed, 1 skipped,
+  0 failures**. Separate Java-17 plugin suite (temporary launcher override, excludes
+  `**/corpus/**`): **223 passed, 1 skipped, 0 failures**. These are connector tests,
+  **not live corpus or full FE tests**. The user's catalog `0.7.1` working-tree bump
+  was retained unchanged. No connector implementation/API adaptation was needed.
+
+  **Relevant changes:** #67207 adds native V2 file-location metadata support
+  (`_file`/`_pos` for Iceberg; corresponding Paimon columns). DuckLake does not inherit
+  the in-tree FE provider, so exposing these would require its own schema/handle/
+  `SYNTHESIZED` classification and compatible-BE checks. This is useful row-location
+  infrastructure, **not** inline-row transport or hidden snapshot filtering. F08
+  (historical deletes) and F12 (nested dictionary omission) remain unchanged by
+  source inspection. #67431 fixes reversed FLOAT/DOUBLE zone maps in Doris's internal
+  storage, not DuckLake metadata statistics. #67535 repairs Arrow/LZO build resolution
+  and isolates third-party build environments; it does not modify JNI startup.
+  The other changes concern temporary-table CTAS/DROP, streaming-job status, and
+  the FE JUnit-5 migration.
+
+  **Runtime still deferred:** no full FE/BE build, image replacement, BE startup
+  retry, or live smoke/corpus was performed. Nothing in this six-commit delta
+  directly repairs the recorded JNI/Hadoop startup failure (O07); do not interpret
+  that as a newly reproduced crash at this pin. A future BE retry remains sequential
+  and capped at `-j14`. O01's DEFAULT backfill needs fresh live validation: the old
+  unconditional-default-clearing explanation does not match the unmarked DuckLake
+  scan path in either compared source pin; see the friction-log follow-up.
+
+  **Monday watchlist:** [#66729](https://github.com/apache/doris/pull/66729) remains
+  OPEN (updated September 5), proposing isolated BE Java plugins and lazy JVM startup.
+  It is relevant to the startup failure class, but is **not merged or verified as
+  our fix**. [#66773](https://github.com/apache/doris/pull/66773) (HDFS lazy open/delete
+  file sizes) and [#66935](https://github.com/apache/doris/pull/66935) (Hadoop install
+  symlink compatibility) also remain open. No `branch-4.2*` remote head was present.
+
+  Installed-artifact SHA-256 values (provenance for these mutable local coordinates):
+  `fe-connector-spi`: `64a14536686a91379764c4fb40d21153d2d12c0cb2dfbd985be131f65151bf54`;
+  `fe-thrift`: `9f1af5b4ea587a9bc003209086ad70344868f795a2e6e4401a517f77fb3f2db1`.
 
 - **2026-09-04 → pin `4ab2cd71095`** (`[feature](function) Add array_except_all scalar function (#67132)`).
   "Stay-current" bump from `952bfcbb40f` (+38 commits). **Non-breaking (FE):** no `fe-connector-spi`

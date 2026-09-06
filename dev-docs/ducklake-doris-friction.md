@@ -23,6 +23,18 @@ Also green on master: reads, DDL (CREATE/DROP DB+TABLE, bucket-partition), INSER
 
 ## P0 — silent wrong data: schema-evolution column DEFAULT reads 0 instead of the DEFAULT
 
+**2026-09-05 source recheck (O01):** the failure and diagnosis below are historical
+evidence from the stated live baseline, not a fresh result on `b58b2c53ff5`.
+In both `4ab2cd71095` and `b58b2c53ff5`,
+[`IcebergTableReader::annotate_projected_column`](https://github.com/apache/doris/blob/b58b2c53ff56354c692c2dc7634d724d8780838f/be/src/format_v2/table/iceberg_reader.cpp#L865-L892)
+returns after base annotation unless `iceberg_scan_semantics_version >= 2` is
+explicitly supplied. DuckLake does not supply that marker (`format_version=2` on
+the file descriptor is a different field). The unmarked path preserves the FE
+default expression, so the unconditional-default-clearing diagnosis below does
+not explain the currently traced path. #67207 does not change this behavior.
+Keep O01 pending an isolated, artifact-identified live DEFAULT probe; neither
+continued wrong values nor end-to-end resolution was established by this recheck.
+
 **A read of an external-table column added with a `DEFAULT` over pre-existing rows returns `0`, not the
 DEFAULT** — silent wrong values on a supported operation. (The BE **crash** this path used to throw is
 gone again as of `1731787677f`; see timeline. What remains is the correctness miss.)
