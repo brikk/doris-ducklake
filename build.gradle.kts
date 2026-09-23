@@ -188,12 +188,14 @@ tasks.withType<JavaCompile>().configureEach {
 // /META-INF/doris/connector-plugin-api-version.properties (api.version) baked into fe-connector-spi.
 // Master's <connector.plugin.api.version> (fe/fe-connector/pom.xml) has stepped 1 -> 5 (#66407
 // api-into-spi merge) -> 6 (#66413 forward-port Variant/Parquet + new connector capability defaults
-// isWritesDataFiles/getBeExecVersion/canServeMetadataOnlyCount). The gate compares MAJOR only; a
-// mismatch is a fail-closed load rejection ("major 5 but this FE serves CONNECTOR plugin API 6.0").
-// Keep this equal to the pinned baseline's major. Current pin serves 6.0.
+// isWritesDataFiles/getBeExecVersion/canServeMetadataOnlyCount) -> 7 (#67182 adds the public
+// SUPPORTS_STORAGE_PREDICATE_PRUNING enum constant) -> 8 (#67904 adds retained-schema state to
+// ConnectorMvccSnapshot) -> 9 (#68027 publishes the Hive OpenCSV scan-property contract). Even
+// additive surface changes bump the gated major. DuckLake keeps the opt-ins at their safe defaults
+// and does not emit the Hive text property. Keep this equal to the pinned FE/SPI major.
 tasks.jar {
     manifest {
-        attributes("Doris-Connector-Plugin-Api-Version" to "6.0")
+        attributes("Doris-Connector-Plugin-Api-Version" to "9.0")
     }
 }
 

@@ -1,22 +1,21 @@
 # FE overlay image for the DuckLake-on-Doris live smoke.
 #
-# Overlays our locally-built P-series FE (`output/fe`, from branch-catalog-spi
-# with the two ducklake FE patches applied — see ../fe-patches/FE-PATCHES.md)
+# Overlays our locally-built master FE (`output/fe`; see ../fe-patches/FE-PATCHES.md)
 # onto the stock released FE image, so the compose cluster runs our connector-SPI
 # FE while inheriting the base image's init scripts / JDK / entrypoint.
 #
 # Build (stage a minimal context so the multi-GB repo isn't sent to the daemon):
-#   S=/tmp/feimg; rm -rf $S; mkdir -p $S/output
-#   cp -r ~/DEV/OSS/doris-catalog-spi/output/fe $S/output/fe
+#   S=/path/on-disk/feimg; rm -rf $S; mkdir -p $S/output
+#   cp -r ~/DEV/OSS/doris/output/fe $S/output/fe
 #   docker build --platform linux/amd64 \
 #     -f jvm/doris-ducklake/compose/fe-overlay/Dockerfile \
 #     -t doris-fe:pr62767-local \
-#     --build-arg BASE_IMAGE=apache/doris:fe-4.1.0 --build-arg OUTPUT_PATH=./output $S
+#     --build-arg BASE_IMAGE=apache/doris:fe-4.1.4 --build-arg OUTPUT_PATH=./output $S
 #
 # Rebuild only when the FE itself changes; plugin-only changes are reinstalled
 # into the plugin volume by smoke.sh.
 
-ARG BASE_IMAGE=apache/doris:fe-4.1.0
+ARG BASE_IMAGE=apache/doris:fe-4.1.4
 FROM ${BASE_IMAGE}
 
 ARG OUTPUT_PATH=./output

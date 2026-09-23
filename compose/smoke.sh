@@ -47,11 +47,12 @@ psql_c() {
     docker exec trino-ducklake-postgres psql -X -v ON_ERROR_STOP=1 -U ducklake -d "$SMOKE_PG_DB" -tA -c "$1"
 }
 
-# Doris's init_fe.sh appends `priority_networks` to fe.conf at every boot. The
-# compose mounts a gitignored runtime copy (not the tracked file) so those appends
-# never pollute the repo. Stage it fresh from the pristine tracked fe.conf here, so
-# both the `up` and `--down` compose calls below find the mount source present.
+# Doris's init_fe.sh appends `priority_networks` only when initializing an empty
+# metadata directory. We replace the mounted config on every run, so preserve the
+# static election-network choice ourselves or a restart can select the substrate
+# network IP and fail to rejoin its persisted FE identity.
 cp "${HERE}/fe.conf" "${HERE}/.fe.conf.runtime"
+printf '\npriority_networks = 172.30.80.0/24\n' >> "${HERE}/.fe.conf.runtime"
 
 if [[ $DOWN -eq 1 ]]; then
     log "Tearing down doris-ducklake stack…"
@@ -147,20 +148,24 @@ docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
     SELECT 1 AS wire_compat_ok;
 " 2>&1 | tail -40
 
-# 6b. FE/BE version-skew shim: the P-series FE (branch-catalog-spi, master-based)
+# 6b. FE/BE version-skew shim: the master FE
 # plans within-fragment local exchange on the FE (AddLocalExchange →
-# TPlanNodeType.LOCAL_EXCHANGE_NODE = 38), but the stock 4.1.0 BE's enum tops out
+# TPlanNodeType.LOCAL_EXCHANGE_NODE = 38), but the stock 4.1.4 BE lacks that enum
 # at REC_CTE_SCAN_NODE = 36 and rejects any fragment containing it with
 # "[INTERNAL_ERROR]Unsupported exec type in pipeline: Invalid plan node type"
 # (first hit: the step-7 COUNT(*) agg fragment, P6 baseline 8b391c7). Turning
 # enable_local_shuffle_planner off makes the BE fall back to planning local
 # exchange itself (runtime_state.h::plan_local_shuffle()) — the pre-38 behavior
-# the 4.1.0 BE implements. Drop this once the compose BE image catches up with
+# the 4.1.4 BE implements. Drop this once the compose BE image catches up with
 # the FE's thrift. Tracked in dev-docs/ducklake-doris-friction.md.
-log "Disabling FE-side local-exchange planning (4.1.0 BE lacks TPlanNodeType 38)…"
-docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
-    SET GLOBAL enable_local_shuffle_planner = false;
-" 2>&1 | tail -5
+if [[ "${DORIS_BE_IMAGE:-apache/doris:be-4.1.4}" == "apache/doris:be-4.1.4" ]]; then
+    log "Disabling FE-side local-exchange planning (4.1.4 BE lacks TPlanNodeType 38)…"
+    docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
+        SET GLOBAL enable_local_shuffle_planner = false;
+    " 2>&1 | tail -5
+else
+    log "Matching/custom BE '${DORIS_BE_IMAGE}': keeping FE-side local-exchange planning enabled."
+fi
 
 # 6c. Headless mode: everything above is cluster bring-up (substrate, plugin
 # install, FE+BE health, version-skew shim); everything below is the smoke
@@ -343,13 +348,8 @@ fi
 #       the Step 7 path is reachable from the catalog side;
 #   (c) drop+recreate the catalog so Doris re-resolves snapshot fresh
 #       (REFRESH CATALOG was not enough on the first bring-up);
-#   (d) try SELECT COUNT(*) through Doris. As of 2026-05-19 this fails
-#       with `[CORRUPTION]Not nullable column has null values` because
-#       DuckLake writes the position-delete file with OPTIONAL columns
-#       and the BE iceberg reader expects REQUIRED (friction log entry
-#       on DuckLake delete-file parquet nullability). We log the
-#       expected failure but do not fail the smoke — the FE work shipped;
-#       end-to-end correctness is blocked on the BE/DuckLake fix.
+#   (d) SELECT COUNT(*) through Doris. OPTIONAL position-delete columns are
+#       supported on the current master runtime and this must return 93.
 DELETE_COUNT=7
 
 log "Issuing DELETE of $DELETE_COUNT rows through DuckDB+DuckLake (on tpch.step7_orders)…"
@@ -406,10 +406,7 @@ docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
 " 2>&1 | tail -5
 
 log "Attempting SELECT COUNT(*) via Doris on the table with the new delete file…"
-# Capture output; either success (count == 100 - DELETE_COUNT) or the known
-# BE error. Don't propagate failure to smoke exit code — the FE wire-format
-# work is what this smoke verifies; downstream BE parquet-nullability fix
-# is tracked in dev-docs/ducklake-doris-friction.md (2026-05-19 entry).
+# Capture output so a mismatch or reader error has a focused diagnostic.
 set +e
 output=$(docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -N -e "
     SELECT COUNT(*) FROM ${SMOKE_CATALOG}.tpch.step7_orders;
@@ -421,18 +418,13 @@ if [[ $status -eq 0 ]]; then
     if [[ "$output" == "$expected" ]]; then
         log "Step 7 GREEN: Doris saw $output rows (expected $expected). Deletes propagated end-to-end."
     else
-        log "Step 7 PARTIAL: Doris returned $output rows, expected $expected."
-    fi
-else
-    if echo "$output" | grep -q "Not nullable column has null values"; then
-        log "Step 7 FE-side OK; BE-side blocked on known parquet-nullability gap."
-        log "  See dev-docs/ducklake-doris-friction.md (2026-05-19) for the upstream fix."
-        log "  BE error: $(echo "$output" | grep -oE 'reason = \[[^]]+\][^[:cntrl:]]*' | head -1)"
-    else
-        log "Step 7 unexpected error from Doris:"
-        echo "$output" | tail -10
+        log "Step 7 FAIL: Doris returned $output rows, expected $expected."
         exit 1
     fi
+else
+    log "Step 7 error from Doris (OPTIONAL delete columns are expected to work):"
+    echo "$output" | tail -10
+    exit 1
 fi
 
 # 10. W2 (INSERT) end-to-end: Doris writes to a DuckLake table via the BE Iceberg

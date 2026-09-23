@@ -530,9 +530,9 @@ hardcoded list should be open / discoverable"):
   the compose mount point — a file we own, zero behavior change. The upstream ask remains: Doris's
   own `conf/fe.conf` should carry the same commented line (Config default is
   `EnvUtils.getDorisHome() + "/plugins/connector"`); not in our patch (cosmetic, non-essential).
-- [ ] **API-surface churn on PR #62767**. Diff `fe-connector-api/` and `fe-connector-spi/` against the head of PR #62767 whenever we re-pull; flag breaking changes.
-- [ ] **Avoid binlog/CCR table-create paths** in our smoke loop — PR-branch FE removed `TBinlogFormat` etc. from the FE↔BE thrift; stock 4.1.0 BE talks to PR FE fine for everything we care about, but `CREATE TABLE … PROPERTIES("binlog.enable"="true")` would deadlock. Document in the smoke recipe (done) and keep out of regression tests.
-- [ ] **DuckLake delete-file parquet nullability**. Upstream ask to DuckDB/DuckLake: write `file_path` + `pos` as `REQUIRED` in position-delete parquet, matching Iceberg's spec. Or, to the Doris BE: fall through to the nullable column reader path when an Iceberg-spec'd delete-file column reports OPTIONAL. Friction log 2026-05-19 has the full repro.
+- [ ] **API-surface churn on master.** Diff `fe-connector-spi`, its frozen surface and API version on every re-vendor; rebuild matching artifacts even when new methods have defaults.
+- [ ] **Avoid unsupported mixed-version table features** in the stock-BE smoke lane. The API-9 master FE plus stock 4.1.4 BE passed the full isolated compatibility smoke on 2026-09-19, but matching-master validation remains authoritative. The last matching validation is API 7 at `96d0ac68e84` until the API-9 BE is rebuilt.
+- [x] **DuckLake delete-file parquet nullability — resolved upstream/live-validated.** Matching master FE+BE `96d0ac68e84` reads DuckLake OPTIONAL position-delete columns end to end (100 -> 93). Keep F08 separate: a historical read still needs to filter delete entries by DuckLake snapshot.
 
 ## Done — shipped milestones
 

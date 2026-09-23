@@ -5,7 +5,7 @@
 > table format (spec v1.0). It targets the `fe-connector` catalog SPI, which
 > **merged into Apache Doris `master`** (`#64304` *decouple external catalogs
 > from FE core into loadable connector plugins*, + the `fe/fe-connector` tree);
-> we target apache/doris `master` (source/SPI pin `b58b2c53ff5`), **not** the
+> we target apache/doris `master` (source/SPI pin `8fc58e929b2`, plugin API **9.0**), **not** the
 > now-retired brikk fork `branch-catalog-spi`. The SPI is not in any tagged
 > Doris *release* yet, so a stock released Doris build still can't load it —
 > build the FE from master (see [`fe-patches/`](fe-patches/); PATCH-FREE). The
@@ -13,6 +13,13 @@
 > INSERT/CTAS/DDL work; DELETE/UPDATE/MERGE do not). If you want a working
 > DuckLake adapter for an OLAP engine today, use
 > [`trino-ducklake`](../trino-ducklake/) instead.
+
+As checked on 2026-09-19, released **4.1.3**, **4.1.4**, and the current
+`branch-4.2` do not contain `fe/fe-connector`; there is no public 4.2 SPI
+backport. An API-9 plugin requires an API-9 master FE. Source/SPI/FE qualification
+and the stock-4.1.4 compatibility smoke are at `8fc58e929b2`; the last matching
+FE/BE runtime validated by the isolated smoke remains API 7 at `96d0ac68e84`.
+See the re-vendor ledger.
 
 Connector for the DuckLake format using **PostgreSQL** as the catalog metadata
 backend (the shared, multi-process shape a Doris FE+BE cluster needs). Tested
@@ -33,8 +40,7 @@ whole feature surface:
 
 **Consequences:** the Doris connector is simpler on execution (no executor /
 Arrow bridge, no function pushdown to translate) but is **bounded by what the
-Doris BE Parquet reader accepts** — which is where the one open read blocker
-lives (position-delete nullability, below). Function/expression pushdown and
+Doris BE Parquet reader accepts**. Function/expression pushdown and
 DuckDB-native file reads are **out of scope by design** (execution-model
 mismatch), not backlog.
 
@@ -45,23 +51,21 @@ toolchain (Kotlin emits 17 bytecode). Managed via [mise](https://mise.jdx.dev/)
 (`jvm/mise.toml`) or [SDKMan](https://sdkman.io/).
 
 ```shell
-cd jvm
-./gradlew :doris-ducklake:assemble        # builds the plugin zip
+./gradlew assemble        # builds the plugin zip
 ```
 
 The plugin zip is at
-`doris-ducklake/build/distributions/doris-ducklake-<version>-plugin.zip` — a
+`build/distributions/doris-ducklake-<version>-plugin.zip` — a
 flat `lib/` layout containing the connector jar plus the runtime deps the FE
 parent classloader doesn't already supply (Postgres driver, jOOQ, kotlin
-stdlib, …). SPI jars (`fe-connector-api`/`spi`, `fe-thrift`, iceberg) are
-`compileOnly` — the FE provides them at runtime.
+stdlib, …). `fe-connector-spi` and `fe-thrift` are `compileOnly`; the FE
+provides them. The plugin owns its isolated Iceberg SDK copy.
 
-### FE patches
+### FE integration
 
-The plugin needs two one-line FE guards it can't self-apply (whitelist
-`type=ducklake` in `SPI_READY_TYPES`; pad `ENGINE_ICEBERG` for no-ENGINE
-CREATE TABLE). They're kept as a reapplyable patch and are tracked upstream
-asks — see [`fe-patches/FE-PATCHES.md`](fe-patches/FE-PATCHES.md).
+The FE builds patch-free from the pinned apache/doris master. The former type
+whitelist and engine-padding patches are historical; see
+[`fe-patches/FE-PATCHES.md`](fe-patches/FE-PATCHES.md).
 
 ### Running tests
 
@@ -69,7 +73,7 @@ The module tests use Testcontainers (PostgreSQL + a real DuckLake catalog via
 DuckDB's `postgres`/`ducklake` extensions) — no live cluster needed:
 
 ```shell
-./gradlew :doris-ducklake:test :doris-ducklake:detekt
+./gradlew test detekt
 ```
 
 The **corpus replay** test mirrors upstream DuckLake reads through a live
@@ -174,7 +178,7 @@ metadata, and comments dirs.
 | Schema evolution on read | Yes | Renamed / added columns read correctly; a column added with `DEFAULT` backfills its `initial_default` value for older rows (scalar types; complex/binary skip to NULL), otherwise NULL; across the alter suite |
 | Registered files (`add_files`) | Yes | Externally-registered Parquet read via `ducklake_name_mapping` (case/rename/reorder resolved), including hive-layout directory partitions (`key=value/` path values filled). A table mixing hive-layout `add_files` files with natively-partitioned files fails loud rather than mis-filling |
 | Inlined data (small tables) | No (default) | **Hard-blocked by default** (loud error) — DuckLake keeps small writes in `ducklake_inlined_*` catalog rows, not Parquet. An experimental dev-only path (`experimental.inlined.reads=true`) synthesizes a temp Parquet, but it requires FE and BE to share warehouse storage as a local filesystem, so it is NOT production-viable. A distributed-cluster solution (object-store write or an SPI payload channel) is a required follow-up — see dev-docs. |
-| Delete files (merge-on-read) | Blocked | FE plumbing done; **blocked on the BE** — DuckLake position-delete Parquet uses OPTIONAL columns, the BE Iceberg reader requires REQUIRED (`[CORRUPTION] Not nullable column has null values`). See Known Limitations. |
+| Delete files (merge-on-read) | Yes, latest snapshot | DuckLake OPTIONAL position-delete columns read correctly on matching master FE/BE `96d0ac68e84` (live 100→93 probe). Historical reads over a delete file containing entries from later snapshots remain unsafe (F08) and need filtering or a fail-closed guard. |
 | Time travel over a compaction boundary | Guarded | A read AS OF a snapshot older than a `merge_adjacent_files` compaction needs a per-row hidden-column snapshot filter the BE can't apply — fails loudly instead of over-returning. Latest-snapshot reads unaffected. |
 | Views | No | DuckLake views are not surfaced yet (they skip cleanly) |
 | Function / expression pushdown | No | **Out of scope** — the BE evaluates predicates natively; there's no in-JVM engine to push to |
@@ -322,10 +326,10 @@ Catalog properties on `CREATE CATALOG dl PROPERTIES (...)`:
 - **Serving inlined data rows** — turn the loud plan-time guard into an actual
   read (FE-side synthesis of a Parquet range from `readInlinedData`, or a JNI
   scanner seam). Also unblocks inline DELETE application.
-- **BE position-delete nullability** — DuckLake writes position-delete Parquet
-  with OPTIONAL columns; the BE Iceberg reader's fast path requires REQUIRED.
-  Needs a BE-side fix (or a DuckLake writer change). Blocks merge-on-read
-  delete *reads*.
+- **Historical delete-file snapshot filtering** — latest-snapshot position deletes
+  work, but a historical read must ignore delete positions created after its pin.
+  Doris reads only `file_path`/`pos`; the DuckLake delete snapshot column is not
+  filtered. See F08 in the review.
 - **Time-travel over compaction** — needs a BE hook to apply the hidden
   `_ducklake_internal_snapshot_id` per-row filter for partial files.
 - **Per-file column mapping** — the scan-node-level schema dictionary

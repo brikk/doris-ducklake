@@ -89,19 +89,20 @@ In `DuckLakeScanPlanProvider`, all throwing `DorisConnectorException`:
   apply; would over-return. Latest-snapshot reads unaffected.
 - **COUNT(\*) pushdown** refuses on any filter / delete / inlined / non-latest
   / partial file (serves the `-1` sentinel → BE counts by reading).
-- **BE delete-file nullability** — a known BE gap (OPTIONAL-vs-REQUIRED
-  position-delete columns); classified as an engine-skip, never wrong rows.
+- **Historical delete snapshot filtering** — OPTIONAL position deletes work at
+  the latest snapshot, but F08 remains unsafe for multi-snapshot delete files.
 
 ## 5. Known upstream-blocked gaps (documented, not worked around)
 
-- **BE position-delete nullability** (merge-on-read delete reads) — BE fix.
-- **BE timestamptz→TimeStampTz** conversion — BE fix (see §3).
+- **Historical position-delete visibility** — needs the hidden DuckLake snapshot
+  predicate or a fail-closed guard (F08).
+- **BE timestamptz→TimeStampTz** conversion — version-gated (see §3).
 - **Per-file column mapping** (add_files DROP+re-ADD name collision over id-less
   files) — the scan-node-level schema dictionary can't express per-file maps;
   needs per-range schema info or a BE hook. 2 corpus files skipped.
-- **Column DEFAULT values** (ADD COLUMN … DEFAULT n backfill) — DuckLake stores
-  it; our read path returns NULL. Needs the iceberg default-column seam;
-  possibly BE-gated.
+- **Column DEFAULT predicates** (ADD COLUMN … DEFAULT n) — projection is correct
+  on `96d0ac68e84`, but predicates on the missing-file column return zero and one
+  sequence crashed `_evaluate_constant_filters` (O01).
 All in the friction log with pickable upstream fixes.
 
 ## 6. Test-harness shortcuts (test-only; no product impact)
@@ -132,10 +133,9 @@ All in the friction log with pickable upstream fixes.
 
 ## 7. Compose / cluster config (not connector behavior)
 
-- **`enable_local_shuffle_planner=false` shim** in `smoke.sh` — the P-series FE
-  plans `LOCAL_EXCHANGE_NODE` (thrift 38) the stock 4.1.0 BE rejects. Pure
-  FE/BE version skew in the dev cluster; drop when a matching BE image exists.
+- **`enable_local_shuffle_planner=false` shim** in `smoke.sh` — current master FE
+  plans `LOCAL_EXCHANGE_NODE` (thrift 38), which stock 4.1.4 rejects. It is gated
+  to the stock compatibility axis and skipped for matching master BE images.
 - **BE platform auto-detect** (arm64 default ↔ amd64 host) — dev ergonomics.
-- **FE `SPI_READY_TYPES` + engine-padding patches** (`fe-patches/`) — the two
-  documented, reapplyable FE guards the plugin needs until upstream generalizes
-  them; tracked as upstream asks. Not a hack, a pending-upstream dependency.
+- **Former FE patches** (`fe-patches/`) — historical only; both generic seams
+  landed upstream and current master builds patch-free.

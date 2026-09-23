@@ -15,16 +15,295 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
  > from FE core into loadable connector plugins* + the whole `fe/fe-connector` tree, incl.
  > `fe-connector-api` / `fe-connector-spi`). We now vendor from **`~/DEV/OSS/doris`, branch
  > `master`** (apache/doris), **not** the retired brikk fork `branch-catalog-spi`. Current
- > source/SPI pin: **`b58b2c53ff5`** (apache/doris master, 2026-09-05). Master's `<revision>` is still
+ > source/SPI pin: **`8fc58e929b2`** (apache/doris master, qualified 2026-09-19).
+ > Last runtime-validated FE/BE pin: **`96d0ac68e84`** (2026-09-15). Master's `<revision>` is still
  > `1.2-SNAPSHOT`, so the installed `~/.m2` coordinates are unchanged.
  > **SPI-surface note:** #66407 merged `fe-connector-api` INTO `fe-connector-spi` and renamed the
  > `org.apache.doris.connector.api.*` packages to `…spi.*`. We now depend on **only** the
  > `fe-connector-spi` artifact and our imports moved `api.` → `spi.` (mechanical). Still
  > **PATCH-FREE** (unchanged since #66135). The `Doris-Connector-Plugin-Api-Version` gate (#66211) has
- > stepped **1 → 5 (#66407) → 6 (#66413)**; we stamp **`6.0`** in `build.gradle.kts` to match this pin.
+ > stepped **1 -> 5 (#66407) -> 6 (#66413) -> 7 (#67182) -> 8 (#67904) -> 9 (#68027)**;
+ > we stamp **`9.0`** in `build.gradle.kts` to match the source/SPI pin.
+ > **Deploy together:** the API-9 ZIP will be rejected by an API-7/8 FE. The API-9 FE image and
+ > stock-4.1.4 compatibility smoke are qualified; the matching API-9 BE remains unbuilt.
  > Keep this note, the Re-vendor log, and `compose/README.md` in sync.
 
 ### Re-vendor log
+
+- **2026-09-19 -> source/SPI pin `8fc58e929b2`**
+  (`[fix](iceberg) Reject server planning before snapshot conversion (#68095)`).
+  Eighty-seven commits after the runtime-validated `96d0ac68e84`; the clean local
+  apache/doris checkout was fast-forwarded to the exact fetched master tip. Connector
+  API advances **7.0 -> 8.0** at #67904 (additive retained-schema state on
+  `ConnectorMvccSnapshot`, left false for DuckLake) and **8.0 -> 9.0** at #68027
+  (public Hive OpenCSV scan-property contract, not emitted by DuckLake). No mandatory
+  connector method or DuckLake production-code adaptation is required.
+
+  **Source/SPI install:** Maven revision remains `1.2-SNAPSHOT`; Thrift remains
+  **0.24.0**. SPI, Thrift, and reactor prerequisites were rebuilt and installed with
+  JDK 17 in `apache/doris:build-env-ldb-toolchain-latest` digest
+  `sha256:d92f8279993964ed6d7f54d0f89feda2beb8032e1e7f2e5788b368e8e1aa57f9`,
+  with the Maven cache disabled and the image's native Thrift 0.24 compiler selected.
+  Installed SHA-256 values: `fe-connector-spi`
+  `6ce0e4fdc3724a220b255b803b819bdeb81eebb2c3c6098b4151a1977661d661`;
+  `fe-thrift` `aae23748ed798308c948b24cdaae19ac1578d467cbfc7b17d1f276918c41ee11`.
+
+  **Relevant delta:** #68142 makes Iceberg-discriminated ranges fail when a data or
+  delete file is missing instead of silently skipping it; DuckLake emits those ranges,
+  so matching new BEs inherit the safety fix. #67209 broadens generic CAST residual
+  handling. Built-in Iceberg name-mapping and nested-Variant fixes do not repair
+  DuckLake's F11/F12 dictionary gaps. F08 historical delete filtering, F09 nanosecond
+  fidelity, O01 missing-column default predicates, and production inline transport
+  remain open.
+
+  **Connector qualification:** `./gradlew clean test detekt assemble --rerun-tasks`
+  on Java 25.0.2 passed: **247 passed, 1 skipped, 0 failed**. The isolated Java-17
+  plugin suite passed: **223 passed, 1 skipped, 0 failed**. All 15 cluster-free
+  smoke-driver/lake tests passed, including a new fail-loud wrong-delete-count case.
+  Archive verification confirms API **9.0** and excludes host SPI/Thrift jars. Plugin
+  JAR SHA-256: `9aa7bc3e2481f09ae8d09b8c1892f4ddf6cb2362c946b99f21565e34d8c08060`;
+  ZIP: `49a89278191dbc4f10a20bb84ab357eb2fefa3d1da90765223e692575380b1c3`.
+
+  **FE/image:** a clean FE build succeeded in the same pinned build environment at
+  six CPUs/10 GiB. FE jar SHA-256:
+  `9f21e1beb5073599eabccd694b71b1faed8b3b0c5ec9437eb53f00549557f0d6`.
+  The `doris-fe:pr62767-local` overlay digest is
+  `sha256:5cf626e0a26bd743de570997e4343d4199591d4ad0e611ca97def2af624045a8`.
+  Startup reported `doris-0.0.0-8fc58e929b2`; the API-9 DuckLake plugin loaded with
+  zero connector failures.
+
+  **Stock-BE compatibility smoke:** full isolated run
+  `5724667282194d03968b284f67c80ec5` passed against `apache/doris:be-4.1.4`:
+  TPC-H reads/counts and filter EXPLAIN, strict OPTIONAL position deletes (100 -> 93),
+  DDL, INSERT, bucket equivalence, CTAS, snapshot expiry, cleanup and orphan removal.
+  O01 remains reproduced: unfiltered defaults materialize, but `WHERE b=42` returns
+  **0/3**. The run also exposed and fixed restart configuration losing
+  `priority_networks` when FE metadata already existed; command-level coverage now
+  pins the staged election network. An explicit FE restart retained the persisted
+  `172.30.80.10` identity and returned both FE and BE alive.
+
+  **Qualification boundary:** no matching API-9 BE build or corpus replay has been
+  performed. Current master adds Lance-C and BRPC third-party patches not proven by
+  the September 14 build image. `96d0ac68e84` remains the last matching-master
+  runtime baseline; do not use its API-7 FE image with the API-9 ZIP.
+
+- **2026-09-15 -> source/SPI/runtime pin `96d0ac68e84`**
+  (`[fix](agg) Align complex aggregate null ordering (#67439)`). This is the first
+  pin here containing merged #66729 (`1407093484a`): isolated BE Java plugins and
+  lazy JVM startup. Connector API stays **7.0**; Maven revision stays
+  `1.2-SNAPSHOT`; `ConnectorMetadata.listsPartitionsAtSnapshot` is a default-false
+  opt-in and requires no DuckLake adaptation. Existing storage-predicate and nested
+  prune capabilities remain off. `TIcebergDeleteFileDesc.file_size` and row-id-fetch
+  scan metadata are additive; DuckLake does not emit the optional delete size yet.
+  Upstream master advanced once after the build to `9d576e9e00a` (planner-overhead
+  only; no SPI/Thrift/BE/runtime files changed), so the checkout intentionally remains
+  at the exact built/tested pin rather than claiming that later commit.
+
+  **Host/build discipline:** 24 hardware threads, 26 GiB RAM, 8 GiB swap, 1.4 TiB
+  disk free, and a 14 GiB `/tmp` tmpfs. No heavy services were running. Builds were
+  sequential, never alongside Gradle: Maven/SPI at 6 CPUs/6 GiB, FE at 6 CPUs/10 GiB,
+  BE at **`-j8`** with 18 GiB RAM / 24 GiB memory+swap. Ccache and image staging were
+  disk-backed (`~/.cache/doris-be-ccache`, Doris `output/`), not `/tmp`.
+  Build environment `apache/doris:build-env-ldb-toolchain-latest` digest
+  `sha256:d92f8279993964ed6d7f54d0f89feda2beb8032e1e7f2e5788b368e8e1aa57f9`
+  (created 2026-09-14) carries Thrift 0.24, Rust 1.91, protoc, Lance, Snappy and
+  libunwind artifacts matching this source window. Host passwd/group were mounted
+  read-only so non-root UID 1000 resolved correctly.
+
+  **Build results:** SPI/Thrift installed successfully. Clean FE build succeeded
+  with OBS/COS excluded. Full C++ BE compile/link succeeded at `-j8`, including the
+  GLIBC_2.17 symbol gate; the packaging rerun skipped the unrelated CDC client after
+  its stale root-owned Maven target blocked resource copying. All eight isolated JNI
+  plugin directories passed Doris's six deployment-layout checks. The BE overlay now
+  replaces/copies `output/be/plugins` in addition to bin/lib/conf/www. Old root-owned
+  generated/build/submodule trees were preserved, not deleted, under
+  `output/backups/pre-96d0ac68/`; clean pinned contrib submodules were initialized.
+
+  **Connector checks:** `./gradlew test --rerun detekt assemble` on Java 25.0.2:
+  **247 passed, 1 skipped, 0 failed**. The Java-17 plugin suite: **223 passed,
+  1 skipped, 0 failed**. Archive verification confirmed API 7.0 matches the SPI and
+  host SPI/Thrift jars are excluded. The 13 cluster-free smoke-routing tests pass.
+
+  **Images/artifacts:** `doris-fe:pr62767-local` image
+  `sha256:7bb8466fb3a67ab9bedb7818743bccf3615ae09cb0a48d971672dd6d81d78b82`;
+  `doris-be:master-local` image
+  `sha256:ebf378d54f668cec6958897d403e8424e44d520a2da2b368264368c179b82e60`.
+  FE jar `8dbc478383dd589db6a0263b3f0143071fd02c1a0cad58e3ac7e7bf4496efc5f`;
+  BE binary `8f294f4d940cc37cbe2249e3b05da347e069395f4bce52871f7eb6f9f5323d94`;
+  SPI `452ab12a3d4a47e6799accf047eb443dd25f50aa8d69c2ee9fa2da97a7b90df0`;
+  Thrift `c9b7f056a9963b74e03ac13b712d9084eddd592a1adbec7e5e28ecb8dd87634f`;
+  plugin ZIP `67886c0dd3ed612dae49294fda5e83e7a0d18fe2831e36720539c1e71ac847af`.
+
+  **Live isolated smoke:** FE and BE both reported `doris-0.0.0-96d0ac68e84`.
+  Run ID `15d35479433c4141816b33c1a0927621`, PostgreSQL database/catalog of the
+  same `doris_smoke_<ID>` name, warehouse
+  `s3://ducklake/doris-smoke/<ID>/`. Reads (orders 15000, lineitem 60175),
+  nullable COUNT (4/2), filter EXPLAIN, file position deletes (100 -> 93), DDL,
+  writes, bucket equivalence (1/2/3), CTAS, snapshot expiry, scheduled-file cleanup,
+  orphan deletion and foreign-file preservation all passed. F03 was separately
+  live-validated with reversed columns, a partial insert and bucketed reversed
+  columns; Doris and DuckDB both returned `(10,ten),(20,twenty),(NULL,missing)` and
+  `(1,alice),(2,bob)` respectively. F21's run-owned routing and GC were therefore
+  exercised live; the shared database/warehouse were never selected by the driver.
+
+  **O07 resolved for this workload:** master BE starts and serves native S3 Parquet.
+  `/api/jni_plugin_status` reports `registryInitialized=false` and no plugin loaded;
+  `/metrics` has no `jvm_*` series. `libjvm.so` being mapped is not evidence that a
+  VM was created. This validates #66729's lazy path for this workload, not HDFS or
+  each JNI plugin. FE/BE images and the isolated run are left available for follow-up.
+
+  **O01 narrowed, still P0:** unfiltered read materializes evolved defaults correctly
+  as `(1,42),(2,42),(3,42),(4,99)`, but `WHERE b=42` and
+  `WHERE a IN (1,2,3) AND b=42` return **0**, with the old-file range still present.
+  One follow-up query sequence produced the known `Const(INT)` versus
+  `Nullable(INT)` error and a SIGSEGV in `_evaluate_constant_filters`; after BE
+  restart, the individual predicates reproducibly returned 0 without crashing.
+  So the current defect is the missing-column constant-predicate path, not general
+  default materialization, and the crash is observed but not immediately repeatable.
+  The smoke remains nonfatal on this known check (F25), so its final completion line
+  must not hide this failure.
+
+  **Still open:** F08 historical multi-snapshot delete visibility was not exercised;
+  latest-snapshot file deletes alone passed. F11/F12 nested/per-file identities,
+  production inline transport, F07 metadata rewrite consistency, and other review
+  findings remain unchanged. No corpus replay was run because F22's broad cleanup
+  guard remains open. `branch-4.2` has no connector SPI and remains unsuitable.
+  Duckbridge follow-up is captured in
+  [`../duckbridge/dev-docs/HANDOFF-doris-master-96d0ac68-lazy-jvm.md`](../../duckbridge/dev-docs/HANDOFF-doris-master-96d0ac68-lazy-jvm.md).
+
+- **2026-09-09 -> source/SPI pin `0557668f405`**
+  (`[fix](cloud) Exclude covered rowsets from compaction minimum timestamps (#67617)`).
+  Forty commits after `2be8fba29d7`; the local source checkout was fast-forwarded
+  cleanly. **Plugin API remains 7.0**, Maven revision `1.2-SNAPSHOT`, Thrift
+  compiler/runtime **0.24.0**. #67545 adds default no-op
+  `ConnectorProvider.validateCreateTable(Map)` for configuration-only preflight;
+  DuckLake needs no override. Existing API-7 manifest and capability opt-outs were
+  preserved. No production connector logic/type mapping changed in this check.
+
+  **Wire/artifacts:** regenerated and installed SPI + Thrift and reactor dependencies
+  with the same Java-17, 6-CPU/6-GB Maven invocation and disabled build cache used
+  previously. Thrift IDL changed: `TIMESTAMP_NS = 45`, `TColumnAccessPath.version`,
+  `TColumn.default_value_expr`, `TExprNode.is_strict_cast`, and the internal
+  time-based change-read fence request/result/RPC. The Iceberg range descriptor
+  and external schema Thrift are unchanged. FE gRPC advances **1.65.1 -> 1.75.0**;
+  native third-party sources are unchanged from the previous pin, including the
+  Lance-C-0.1.9 requirement that the September 1 build-env does not satisfy for a BE build.
+
+  **Validation:** connector suite **247 passed, 1 skipped, 0 failures** on Java
+  25.0.2; isolated Java-17 plugin suite **223 passed, 1 skipped, 0 failures**.
+  Detekt/assemble passed, and the temporary archive check confirmed the actual
+  packaged plugin manifest matches SPI **7.0**, with host SPI/Thrift JARs excluded.
+  These are connector/headless and archive checks, **not full FE/BE or corpus runs**.
+
+  **Useful upstream fixes:** #67573 distrusts known-bad Parquet writer null counts
+  during V2 row-group/page-index pruning, preserving NULL candidates in affected
+  imported files. #67574 reconciles nested projection alignment after predicate
+  demotion or reader-added dependencies. It does **not** supply DuckLake's omitted
+  nested field IDs: F12 remains open, as does F11's authoritative per-file mapping.
+  #67700 prevents current-MV substitution for explicit VERSION/TIME snapshot scans,
+  including plugin tables; this does not inspect every opaque MVCC handle pin or
+  repair F07/F08. Position-delete snapshot filtering is still absent.
+
+  **TIMESTAMP_NS (#66761):** a real new engine type, not `DATETIMEV2(9)`. The SPI
+  type-converter fallback can recognize it, but that alone does not establish
+  lossless native Parquet reads. Our `timestamp_ns` mapping, inline writer and
+  Iceberg sink remain microsecond-based, with no new opt-in. **F09 is not fixed**
+  by the upstream type addition; a mapper-only switch would not suffice.
+
+  **Deployment warning:** #65805 versions typed DATA/META nested access paths.
+  New BEs decode legacy paths, but old BEs need not understand new FE emission:
+  qualify/upgrade BEs before FEs emitting those paths. The API-7 plugin gate is not
+  a guarantee of FE/BE wire-semantic compatibility. Compose still defaults to the
+  release-4.1.4 BE for limited compatibility work; that combination is not certified
+  for this tip. No full engine build, image replacement, startup retry, or live
+  smoke/corpus was performed.
+
+  **Startup watch:** #67664 switches upstream's compose build to Debian 12/Liberica
+  JDK 17 to avoid expired Bullseye APT metadata, and #67663 reads final config lines
+  without a newline. Neither establishes a fix for O07's recorded JNI/Hadoop crash;
+  our release-based overlay does not automatically adopt the new base image.
+  #66729, #66773 and #66935 remain open. O01 still needs an artifact-identified
+  live DEFAULT probe; the unmarked scan continues to preserve the FE expression
+  in source, rather than following the old unconditional-clearing diagnosis.
+
+  **Release branches:** `branch-4.2` remains at `9d671369d5f`, still without the
+  connector SPI. `branch-4.1` has moved to `bdc3fcf4884`, so they no longer point
+  to the same tip. GitHub still marks 4.1.3 latest stable; the 4.1.4 pre-release
+  entry now names **4.1.4-rc03** (updated September 9), rather than rc04 as recorded
+  on September 8. The inspected rc03 FE tree also lacks `fe/fe-connector`.
+  Keep master as this plugin's development target.
+
+  **Release-container follow-up (2026-09-11):** Docker Hub now publishes multi-arch
+  `apache/doris:be-4.1.4` and `fe-4.1.4`. Compose and the master-BE overlay base now
+  use **BE 4.1.4** for the stock compatibility axis. The released FE is not used:
+  its source line has no connector SPI, while this plugin requires a master/API-7
+  FE. Compose rendering and 14 cluster-free smoke tests pass; no 3GB BE image pull
+  or live FE/BE qualification was performed. Historical 4.1.3 results below remain
+  evidence for their stated runs, not current defaults.
+
+  Installed-artifact SHA-256 values:
+  `fe-connector-spi`: `8b8c0d629881815a1f029cb9854e91903ca357b8f6c4aefe32c0fb4ab21407f7`;
+  `fe-thrift`: `43c8449812904e9cc554ae85f35fdf43e8b3b1c356fa5cbbc8c57bdf7b4fdb1d`.
+
+- **2026-09-08 -> source/SPI pin `2be8fba29d7`**
+  (`[improvement](snapshot) Add snapshot retained analysis interface (#67616)`,
+  committed September 7). Sixteen commits after `b58b2c53ff5`.
+  **Re-vendor required for current master:** #67182 (`eea19b3f3cf`) adds the public
+  `SUPPORTS_STORAGE_PREDICATE_PRUNING` capability and bumps the gated plugin API
+  **6.0 -> 7.0**. Even a connector leaving the new capability off must stamp 7.0
+  to load on this FE. No new mandatory connector method is required. The local
+  checkout was fast-forwarded, SPI/reactor artifacts reinstalled, and our manifest
+  updated to 7.0. The new capability is deliberately **not declared**, with explicit
+  regression coverage: ordinary DuckLake `applyFilter`/bucket/statistics pruning
+  remains available, but the new monotonic-function-derived predicate pass is not
+  opted into before connector-specific correctness validation.
+
+  **Release/branch check:** [#67355](https://github.com/apache/doris/issues/67355)
+  is titled **4.1.4 Release Note**, linking back to the 4.1.3 notes. GitHub still
+  marks **4.1.3** as the latest stable release and **4.1.4-rc04** as a pre-release.
+  A `branch-4.2` now exists, but at this check it points to exactly the same commit
+  as `branch-4.1`: **`9d671369d5fb153ecded29f5f44d02b8b31ed89e`**. Its merge base
+  with `4.1.4-rc04` is the RC's commit **`e5ae5ab9d040d020e0473248de84b53d4ad75d53`**,
+  and it is 39 commits ahead with none unique to the RC side. Thus its current
+  ancestry is the 4.1.4 release line, not master; this does not establish the exact
+  branch-creation event. The 4.1.3, 4.1.4-rc04, and current branch-4.2 trees all
+  lack `fe/fe-connector`. **Do not re-target this plugin to branch-4.2 yet.** The
+  user's 30-45-day 4.2 estimate is a planning horizon, not a verified release date
+  or a promise that the SPI will ship there. Recheck actual contents before switching.
+
+  **Validation:** Maven source/SPI install succeeded on Java 17.0.2 using the same
+  6-CPU/6-GB build-env invocation and skip/cache flags as September 5. Maven revision
+  stays `1.2-SNAPSHOT`; Thrift stays **0.24.0**, with no Thrift IDL delta (a separate
+  protobuf change adds `row_location_version`). Connector tests on Java 25.0.2:
+  **247 passed, 1 skipped, 0 failures**; separate Java-17 plugin suite:
+  **223 passed, 1 skipped, 0 failures**. Detekt and packaging passed. A temporary
+  archive-verification task confirmed that the ZIP's actual plugin JAR declares
+  **7.0**, matching the installed SPI resource, and does not bundle host SPI/Thrift
+  JARs. This is archive/API evidence, **not** an isolated FE classloader/live test.
+
+  **Other relevant changes:** #67441 adds V2 Parquet row-group-statistics pruning
+  for `array_contains`, independently of the new FE capability. It is not a repair
+  for F12's missing nested identities. #67496 advances **Lance C 0.1.8 -> 0.1.9**
+  with both Doris PR-73/PR-74 patches. The September 1 build-env still has the old
+  Lance library: it suffices for this FE-facing build but is not an exact-match BE
+  environment. Verify/update third-party provenance before any full BE build;
+  do not assume an unversioned `liblance_c.a` will fail a freshness check. The tip's
+  snapshot-retained diagnostics are cloud Recycler interfaces, not DuckLake snapshot
+  filtering. #64678's failed-write cleanup mentioned in the 4.1.4 notes was already
+  in our previous master pin; its shared BE writer fix does not resolve M08's
+  separate successful-file/failed-catalog-commit orphan case.
+
+  **Runtime/deployment remains deferred:** no full FE/BE build, image replacement,
+  startup retry, or live smoke/corpus. API-6 FE images must be rebuilt/replaced before
+  installing this API-7 ZIP. The JNI/Hadoop startup path has no fix in this window;
+  #66729 remains open/unmerged. F08/F12 remain source-traced correctness issues,
+  and O01 still needs a current artifact-identified live DEFAULT probe. Retain the
+  previous FE/plugin pair for existing deployments until the matching runtime is
+  ready; re-vendoring the development artifacts is not a production upgrade.
+
+  Installed-artifact SHA-256 values:
+  `fe-connector-spi`: `6f71fab21fa748b2d797fc20ed9ad4086150e9da541735a02f4bbb045f9fc281`;
+  `fe-thrift` (unchanged): `9f1af5b4ea587a9bc003209086ad70344868f795a2e6e4401a517f77fb3f2db1`.
 
 - **2026-09-05 -> source/SPI pin `b58b2c53ff5`**
   (`[enhancement](thirdparty) fix arrow build bug and clear dangerous env... (#67535)`).
@@ -425,24 +704,23 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
   to `~/.m2` (`-P flatten`), plugin zip + `doris-fe:pr62767-local` overlay image rebuilt,
   module suite + detekt + checkAbi green.
 
-## Build + rebuild (PATCH-FREE)
+## Build + rebuild (PATCH-FREE, current)
 
-No patch step — `ducklake-fe.patch` is historical (see the warning box). Just check out
-the pin and build pristine.
+No patch step — `ducklake-fe.patch` is historical. Build the exact current pin; do
+not build a blind moving tip.
 
 ```bash
-# ⚠️ PIN (branch-catalog-spi REBASES — don't build from a blind branch tip). Pin (2026-07-29):
-#    0da96f1ad3e, subject "[chore](handoff) record the 2026-07-30 rebase onto 794d514479e
-#    (upstream #65991)". SHA GC'd? check out the commit with that exact subject.
-cd ~/DEV/OSS/doris-catalog-spi && git checkout -- . && git checkout 0da96f1ad3e   # pristine, NO PATCH
-JAVA_HOME=<jdk17> DISABLE_BUILD_UI=ON ./build.sh --fe                 # ~2 min incremental
+cd ~/DEV/OSS/doris && git fetch origin master && git switch --detach 8fc58e929b2151c9ff4ae71d07375a7f8e944697
+JAVA_HOME=<jdk17> DISABLE_BUILD_UI=ON ./build.sh --fe --clean
 # then re-install the SPI artifacts our gradle build compiles against (mavenLocal):
-#   cd fe && <mvn> install -P flatten -pl fe-connector/fe-connector-api,fe-connector/fe-connector-spi,fe-thrift -DskipTests
+#   cd fe && <mvn> install -P flatten -pl fe-connector/fe-connector-spi,fe-thrift -am \
+#     -Dmaven.test.skip=true -Dmaven.build.cache.enabled=false \
+#     -Ddoris.thrift.executable=<thrift-0.24-bin>
 # (stale ~/.m2 SPI jars => connector compiles against old API, NoSuchMethodError at FE load)
-# re-image the overlay (FROM apache/doris:fe-4.1.0, COPY ./output/fe):
+# re-image the overlay (FROM apache/doris:fe-4.1.4, COPY ./output/fe):
 docker build -f compose/fe-overlay/Dockerfile \
   -t doris-fe:pr62767-local \
-  --build-arg BASE_IMAGE=apache/doris:fe-4.1.0 --build-arg OUTPUT_PATH=./output <staging>
+  --build-arg BASE_IMAGE=apache/doris:fe-4.1.4 --build-arg OUTPUT_PATH=./output <disk-backed-staging>
 # then tear the cluster down (-v) and rerun compose/smoke.sh so the fresh FE loads.
 ```
 

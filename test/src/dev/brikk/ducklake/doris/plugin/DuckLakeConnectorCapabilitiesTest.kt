@@ -23,7 +23,7 @@ import org.assertj.core.api.Assertions.assertThat
  * Adding entries from the new opt-in set (`SUPPORTS_SHOW_CREATE_DDL`,
  * `SUPPORTS_TOPN_LAZY_MATERIALIZE`, `SUPPORTS_NESTED_COLUMN_PRUNE`,
  * `SUPPORTS_VIEW`, `SUPPORTS_COLUMN_AUTO_ANALYZE`,
- * `SUPPORTS_METADATA_PRELOAD`) is a deliberate roadmap step (see
+ * `SUPPORTS_METADATA_PRELOAD`, `SUPPORTS_STORAGE_PREDICATE_PRUNING`) is a deliberate roadmap step (see
  * `dev-docs/TODO-read.md` + `REPORT-doris-p6-iceberg-spi-cutover.md`) —
  * bump the assertion in the same PR that flips a feature on.
  */
@@ -57,6 +57,7 @@ internal class DuckLakeConnectorCapabilitiesTest {
                 ConnectorCapability.SUPPORTS_SHOW_CREATE_DDL,
                 ConnectorCapability.SUPPORTS_TOPN_LAZY_MATERIALIZE,
                 ConnectorCapability.SUPPORTS_NESTED_COLUMN_PRUNE,
+                ConnectorCapability.SUPPORTS_STORAGE_PREDICATE_PRUNING,
                 ConnectorCapability.SUPPORTS_VIEW,
                 ConnectorCapability.SUPPORTS_COLUMN_AUTO_ANALYZE,
                 ConnectorCapability.SUPPORTS_METADATA_PRELOAD,

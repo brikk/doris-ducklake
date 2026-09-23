@@ -23,6 +23,19 @@ Also green on master: reads, DDL (CREATE/DROP DB+TABLE, bucket-partition), INSER
 
 ## P0 — silent wrong data: schema-evolution column DEFAULT reads 0 instead of the DEFAULT
 
+**2026-09-15 live result (`96d0ac68e84`, API 7, matching FE+BE):** the title and
+old diagnosis are now too broad. Unfiltered projection is correct:
+`SELECT a,b` returns `(1,42),(2,42),(3,42),(4,99)`. Filtering the missing-file
+column is wrong: `WHERE b=42` and `WHERE a IN (1,2,3) AND b=42` return **0** even
+though EXPLAIN retains the old-file range. One follow-up query sequence also hit
+`Column type Const(INT) is not compatible with data type Nullable(INT)` and a
+SIGSEGV in `TableReader::_evaluate_constant_filters`; after restart, the same
+individual predicates returned 0 without crashing. Current classification:
+**P0 silent wrong result in the missing-column constant-predicate path, with one
+observed but not immediately repeatable BE crash.** General DEFAULT materialization
+is working. Fix and regression should target V2 constant-filter evaluation for a
+nullable slot whose physical file lacks the column but whose FE default is typed.
+
 **2026-09-05 source recheck (O01):** the failure and diagnosis below are historical
 evidence from the stated live baseline, not a fresh result on `b58b2c53ff5`.
 In both `4ab2cd71095` and `b58b2c53ff5`,
@@ -35,9 +48,9 @@ not explain the currently traced path. #67207 does not change this behavior.
 Keep O01 pending an isolated, artifact-identified live DEFAULT probe; neither
 continued wrong values nor end-to-end resolution was established by this recheck.
 
-**A read of an external-table column added with a `DEFAULT` over pre-existing rows returns `0`, not the
-DEFAULT** — silent wrong values on a supported operation. (The BE **crash** this path used to throw is
-gone again as of `1731787677f`; see timeline. What remains is the correctness miss.)
+**Historical result:** a read of an external-table column added with a `DEFAULT`
+over pre-existing rows returned `0`, not the DEFAULT. The latest result above
+supersedes this broad symptom while preserving the history.
 
 - **Repro:** `ALTER TABLE t ADD COLUMN b INT DEFAULT 42` over rows written before `b` existed, then
   `SELECT b FROM t` → old rows read `b=0` (DuckLake truth: `42`, stored in `ducklake_column.initial_default`);
@@ -57,7 +70,7 @@ gone again as of `1731787677f`; see timeline. What remains is the correctness mi
   alive. Note for hardening: the const-vs-nullable guard has now regressed once — worth a permanent
   test so it can't segfault again.
 
-Blast radius is only this path — all other reads/writes stay green.
+Blast radius is only this path in the current smoke; all other exercised reads/writes stay green.
 
 ---
 

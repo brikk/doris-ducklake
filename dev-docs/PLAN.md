@@ -14,9 +14,10 @@
 
 The full compose smoke is GREEN on the P6 FE: reads with snapshot pinning,
 CREATE/DROP DATABASE + TABLE (unpartitioned + bucket-partitioned), INSERT,
-bucketed INSERT (murmur3 parity), CTAS. Step-7 delete-file reads reach the one
-known BE blocker (parquet nullability). The connector compiles against the P6
-SPI, tests + detekt green, plugin zip + FE overlay image current.
+bucketed INSERT (murmur3 parity), CTAS. The historical Step-7 Parquet-nullability
+blocker is resolved and live-validated on master `96d0ac68e84`; historical
+delete-snapshot filtering remains open (F08). The connector compiles against the
+P6 SPI, tests + detekt green, plugin zip + FE overlay image current.
 
 So: read is *good* but not *full*; write is *started* (INSERT/DDL) but not
 *full*. That maps exactly onto phases R and W below.
@@ -31,14 +32,13 @@ that used to be iceberg-only; the remaining work is ours plus one BE blocker.
 
 Big steps, roughly in order:
 
-1. **Merge-on-read deletes actually filter rows.** FE plumbing is done
-   (delete files ride `iceberg_params.delete_files`); blocked on the BE
-   OPTIONAL-vs-REQUIRED parquet nullability gap
-   ([`REPORT-doris-iceberg-reader-strict-on-delete-file-nullability.md`](./REPORT-doris-iceberg-reader-strict-on-delete-file-nullability.md),
+1. **Merge-on-read deletes actually filter rows.** FE plumbing is done and
+   latest-snapshot OPTIONAL position deletes are live-green on master `96d0ac68e84`.
+   The historical OPTIONAL-vs-REQUIRED parquet nullability gap is documented in
+   [`REPORT-doris-iceberg-reader-strict-on-delete-file-nullability.md`](./REPORT-doris-iceberg-reader-strict-on-delete-file-nullability.md),
    [`REPORT-ducklake-position-delete-parquet-nullability.md`](./REPORT-ducklake-position-delete-parquet-nullability.md),
-   friction 2026-05-19). Path A: upstream/patch the BE reader to take the
-   nullable path for delete columns. Path B: DuckLake writes REQUIRED delete
-   columns. Includes inline-delete synthesis (DuckLake inlines small DELETEs
+   friction 2026-05-19). Remaining: F08 delete-snapshot filtering and
+   inline-delete synthesis (DuckLake inlines small DELETEs
    into catalog rows — surface them to the BE or synthesize a delete file).
 2. **Pushdown completeness.** Filter/projection pushdown exist; finish the
    ladder: limit pushdown, **count pushdown** (P6 threads `countPushdown`
@@ -113,18 +113,14 @@ with fresh facts:
 
 ## Continuous track — baseline & upkeep (not a phase)
 
-- **Track `branch-catalog-spi`.** Each baseline bump: reset worktree → re-apply
-  `fe-patches/ducklake-fe.patch` → rebuild FE → `mvn install -P flatten` the
-  SPI jars → connector tests → smoke. Procedure in
+- **Track pinned apache/doris master.** Each baseline bump: inspect SPI/API and
+  wire changes, rebuild/install SPI+Thrift, run connector tests, then build matching
+  FE/BE images and isolated smoke when the runtime changed. Procedure in
   [`../fe-patches/FE-PATCHES.md`](../fe-patches/FE-PATCHES.md).
-- **Patch upstreaming.** Keep pushing the two asks: `SPI_READY_TYPES`
-  registration seam and connector-declared engine mapping (P6's own javadoc
-  acknowledges the burden).
-- **Vendor migration (optional).** `vendor/doris` exists in-tree; if the
-  external `~/DEV/OSS/doris-catalog-spi` worktree becomes a liability, fetch
-  `branch-catalog-spi` into the vendored clone and repoint docs/build.
-- **FE/BE skew watch.** The 4.1.0 BE needs the `enable_local_shuffle_planner`
-  shim (friction 2026-07-05); drop it when a matching BE image exists.
+- **Resolved FE asks.** Registered connector types and connector-owned CREATE
+  engines landed upstream; no FE patch is applied.
+- **FE/BE skew watch.** Stock 4.1.4 needs the local-shuffle shim. Matching master
+  images do not; API-major equality alone is not BE wire compatibility.
 
 ## Doc map
 

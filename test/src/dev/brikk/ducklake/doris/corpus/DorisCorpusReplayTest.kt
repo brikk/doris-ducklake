@@ -49,9 +49,6 @@ internal class DorisCorpusReplayTest {
                 "custom METADATA_SCHEMA/METADATA_PARAMETERS not threaded to the FE catalog properties",
             "metadata/ducklake_settings.test" to
                 "asserts metadata backend type 'duckdb'; the PG backend-axis rewrite makes it 'postgres' by design",
-            "general/metadata_cache.test" to
-                "KNOWN BE GAP: DuckLake position-delete parquet uses OPTIONAL columns; BE iceberg reader " +
-                "requires REQUIRED (friction log 2026-05-19; REPORT-*delete*-nullability.md)",
             // ---- data_inlining: served now (Stage 1 scalar); these hit known gaps ----
             "data_inlining/data_inlining_encryption.test" to
                 "ENCRYPTED DuckLake attach (DuckDB-only parquet encryption); not a Doris read path",
@@ -83,8 +80,8 @@ internal class DorisCorpusReplayTest {
                 "inlined file-deletes (DATA_INLINING_ROW_LIMIT 10): UPDATE mixing a committed delete file " +
                 "with inlined file-deletions — the known inlined-delete gap (friction 2026-05-19)",
             "issues/issue_1135.test" to
-                "column DEFAULT values not surfaced: ADD COLUMN ... DEFAULT 42 should backfill old rows; " +
-                "DuckLake stores the default but our read path returns NULL (TODO-read: column defaults)",
+                "evolved DEFAULT predicate gap: projection returns 42, but filtering b=42 returns zero and " +
+                    "has produced a Const(INT)/Nullable(INT) BE crash (O01, live 2026-09-15)",
             "issues/view_tosql_performance.test" to
                 "DuckLake view + duckdb_views(): views are not surfaced by the connector (dialect skip)",
             "issues/corrupted_catalog_fault_isolation.test" to

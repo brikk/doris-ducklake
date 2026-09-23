@@ -190,6 +190,9 @@ internal class DuckLakeSnapshotPinningAuditTest {
             // toward the BE, so a drift here re-introduces read skew end to end.
             val mvcc = md.beginQuerySnapshot(null, pinned).orFail("expected an mvcc snapshot")
             assertThat(mvcc.snapshotId).isEqualTo(pinned.snapshotId)
+            // API 8's retained-schema publication is a stronger Paimon-style opt-in.
+            // DuckLake already resolves schema through the snapshot-stamped handle.
+            assertThat(mvcc.isSchemaRetained).isFalse()
         }
     }
 

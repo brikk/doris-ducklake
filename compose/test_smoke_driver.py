@@ -87,7 +87,7 @@ def fake_docker():
             if ".count_col_check" in sql:
                 print(2 if "COUNT(v)" in sql else 4)
             elif ".step7_orders" in sql:
-                print(93)
+                print(100 if scenario == "wrong_delete_count" else 93)
             elif ".default_probe" in sql:
                 print(0 if "IS NULL" in sql else 3)
             elif ".doris_ddl" in sql:
@@ -115,6 +115,14 @@ def fake_docker():
 
 
 class SmokeDriverTests(unittest.TestCase):
+    def test_release_compatibility_defaults_to_414(self):
+        compose = (SOURCE / "docker-compose.yml").read_text()
+        overlay = (SOURCE / "be-overlay" / "Dockerfile").read_text()
+        self.assertIn("image: ${DORIS_BE_IMAGE:-apache/doris:be-4.1.4}", compose)
+        self.assertNotIn("apache/doris:be-4.1.3", compose)
+        self.assertIn("ARG BASE_IMAGE=apache/doris:be-4.1.4", overlay)
+        self.assertIn("COPY ${OUTPUT_PATH}/be/plugins ${DORIS_BE_HOME}/plugins", overlay)
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="smoke-driver-")
         self.addCleanup(temporary.cleanup)
@@ -146,7 +154,7 @@ class SmokeDriverTests(unittest.TestCase):
         sleep.chmod(0o755)
         self.log = self.root / "docker.jsonl"
 
-    def run_driver(self, *args, scenario="ok", token=TOKEN):
+    def run_driver(self, *args, scenario="ok", token=TOKEN, be_image=None):
         self.log.write_text("")
         # Do not inherit BASH_ENV, exported functions, Docker settings, etc.
         env = {
@@ -163,6 +171,8 @@ class SmokeDriverTests(unittest.TestCase):
             "PG_DB": "ducklake", "DATA_PATH": "s3://ducklake/data/",
             "S3_DATA_PREFIX": "data/", "DUCKDB_VERSION": "must-be-overridden",
         }
+        if be_image is not None:
+            env["DORIS_BE_IMAGE"] = be_image
         result = subprocess.run(
             ["bash", str(self.compose / "smoke.sh"), "--no-build", *args],
             cwd=self.root, env=env, text=True, capture_output=True, timeout=30,
@@ -171,8 +181,11 @@ class SmokeDriverTests(unittest.TestCase):
         self.records = records
         self.calls = [record["argv"] for record in records]
         self.output = result.stdout + result.stderr
-        self.assertEqual((self.compose / ".fe.conf.runtime").read_bytes(),
-                         (self.compose / "fe.conf").read_bytes())
+        self.assertEqual(
+            (self.compose / ".fe.conf.runtime").read_bytes(),
+            (self.compose / "fe.conf").read_bytes()
+            + b"\npriority_networks = 172.30.80.0/24\n",
+        )
         return result
 
     def mysql_sql(self):
@@ -328,13 +341,26 @@ class SmokeDriverTests(unittest.TestCase):
         self.assertIn("minio/mc:latest", self.calls[-1])
         self.assertIn(f"mc rm {MC_ROOT}_SUCCESS", self.calls[-1][-1])
 
+    def test_wrong_delete_count_fails_the_smoke(self):
+        self.assertNotEqual(self.run_driver(scenario="wrong_delete_count").returncode, 0)
+        self.assertIn("Step 7 FAIL: Doris returned 100 rows, expected 93", self.output)
+
     def test_up_only_does_not_seed_or_mutate_catalogs(self):
         self.assertEqual(self.run_driver("--up-only").returncode, 0, self.output)
         self.assert_infrastructure_only_up()
         self.assert_no_catalog_mutation()
         self.assertTrue(any("SHOW BACKENDS" in sql for sql in self.mysql_sql()))
+        self.assertTrue(any("enable_local_shuffle_planner" in sql for sql in self.mysql_sql()))
         self.assertEqual(self.allocation_calls(), [])
         self.assertFalse(any(argv[0] == "run" or "psql" in argv for argv in self.calls))
+
+    def test_matching_master_be_skips_release_local_shuffle_shim(self):
+        self.assertEqual(
+            self.run_driver("--up-only", be_image="doris-be:master-local").returncode,
+            0,
+            self.output,
+        )
+        self.assertFalse(any("enable_local_shuffle_planner" in sql for sql in self.mysql_sql()))
 
     def test_down_only_stops_doris(self):
         self.assertEqual(self.run_driver("--down").returncode, 0, self.output)

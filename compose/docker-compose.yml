@@ -1,6 +1,6 @@
 name: doris-ducklake-dev
 
-# Two containers: Doris FE (with our plugin) and stock Doris BE 4.1.0.
+# Two containers: master Doris FE (with our plugin) and stock Doris BE 4.1.4.
 #
 # Substrate (Postgres metadata DB + MinIO warehouse) is reused from
 # trino-ducklake/compose/ by attaching to its bridge network as external.
@@ -27,10 +27,9 @@ services:
       # fit on a typical Docker Desktop memory ceiling. Doris's start_fe.sh
       # sources fe.conf for JAVA_OPTS_FOR_JDK_17, so env-var override doesn't
       # work — must replace the file.
-      # NOTE: init_fe.sh APPENDS `priority_networks` to this file at every boot, so
-      # it must be writable AND must not be the tracked file (else each run pollutes
-      # it with another line that gets committed). smoke.sh stages a gitignored
-      # runtime copy `.fe.conf.runtime` from the pristine tracked fe.conf before `up`.
+      # NOTE: smoke.sh stages a gitignored runtime copy `.fe.conf.runtime` and adds
+      # the static election network. init_fe.sh adds it only for a new metadata dir,
+      # so relying on the image script makes a restart choose the substrate-network IP.
       - ./.fe.conf.runtime:/opt/apache-doris/fe/conf/fe.conf
       # Plugin contents (unzipped). Lives in a named volume rather than a host
       # bind mount because Podman's macOS bind mounts don't reliably propagate
@@ -61,19 +60,15 @@ services:
       start_period: 60s
 
   doris-be:
-    # 4.1.3 (current 4.1.x release; doris-4.1.3-rc02-7126cf65d96). Two known BE
-    # gaps still present as of this image (both upstream, not FE-plugin bugs):
-    #   • position-delete parquet nullability — DuckLake writes file_path/pos as
-    #     OPTIONAL, the BE iceberg reader's not-null fast path rejects them with
-    #     "[CORRUPTION]Not nullable column has null values". Verified STILL failing
-    #     on 4.1.3-rc02 (2026-07-18); upstream fix is in progress, ETA unknown.
-    #     Friction log 2026-05-19 + 2026-07-18.
-    #   • zone-aware timestamptz from parquet — Int64ToTimestampTz converter is
-    #     master-only (4.1.3 still errors "DateTimeV2 => TimeStampTz"); the
-    #     enable.mapping.timestamp_tz=true path needs a master/nightly BE.
+    # Stock 4.1.4 is the release-compatibility axis; the FE remains a locally-built
+    # master image matching the plugin API because release FE images do not include
+    # the connector SPI. 4.1.4 source includes optional position-delete fields
+    # (#65401) and Int64ToTimestampTz; the API-9 FE hybrid lane passed the full
+    # isolated smoke on 2026-09-19. Master-only functionality is tested with the separate
+    # doris-be:master-local overlay when a matching BE has been built.
     # The local-shuffle shim (smoke.sh §6b) is still required (our P6 FE plans
-    # LOCAL_EXCHANGE_NODE=38, absent from 4.1.3's thrift enum).
-    image: apache/doris:be-4.1.3
+    # LOCAL_EXCHANGE_NODE=38, absent from 4.1.4's thrift enum).
+    image: ${DORIS_BE_IMAGE:-apache/doris:be-4.1.4}
     container_name: doris-ducklake-be
     hostname: doris-be
     # Host-overridable: defaults to arm64 (Apple Silicon dev box); set
