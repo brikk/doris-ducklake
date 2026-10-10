@@ -17,7 +17,8 @@ import dev.brikk.house.sql.verify.SqlVerifier
  * assemble by hand — catalog capability (`UNMAPPABLE_FUNCTION`), generator flags
  * (`UNSUPPORTED_TRANSLATION`), `Command`/`Pragma` roots (`RAW_PASSTHROUGH_STATEMENT`),
  * uncertifiable targets (`NO_TARGET_CATALOG`) — plus `SEMANTIC_HAZARD` (probe-
- * verified divergence even where syntax maps).
+ * verified divergence even where syntax maps) and `SEMANTIC_COVERAGE_UNKNOWN`
+ * (0.18.0 refuses unresearched concepts in a partially covered engine pair).
  *
  * A query is [Run]nable iff it passes a TWO-TIER gate (proven on Trino, 0.3.0)
  * AND none of the explicit residuals below fire (else [Skip], never a failure).
@@ -117,8 +118,8 @@ object DorisCorpusDialect {
 
         // ONE call covers the whole capability/hazard predicate: UNMAPPABLE_FUNCTION,
         // UNSUPPORTED_TRANSLATION, RAW_PASSTHROUGH_STATEMENT, NO_TARGET_CATALOG,
-        // SEMANTIC_HAZARD. desugarPipes=true so pipe fragments auto-desugar. Never
-        // throws — the SQL is always produced.
+        // SEMANTIC_HAZARD, SEMANTIC_COVERAGE_UNKNOWN. desugarPipes=true so pipe fragments
+        // auto-desugar. Never throws — the SQL is always produced.
         val report = try {
             fragment.certify(DORIS, desugarPipes = true)
         } catch (e: Exception) {

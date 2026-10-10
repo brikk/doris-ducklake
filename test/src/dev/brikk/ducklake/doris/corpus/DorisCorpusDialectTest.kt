@@ -2,6 +2,10 @@ package dev.brikk.ducklake.doris.corpus
 
 import dev.brikk.ducklake.doris.corpus.DorisCorpusDialect.Run
 import dev.brikk.ducklake.doris.corpus.DorisCorpusDialect.Skip
+import dev.brikk.house.sql.shape.FindingKind
+import dev.brikk.house.sql.shape.Severity
+import dev.brikk.house.sql.shape.SqlFragment
+import dev.brikk.house.sql.shape.certify
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 
@@ -34,11 +38,28 @@ internal class DorisCorpusDialectTest {
     }
 
     @Test
-    fun rewritesCastShorthand() {
-        // `::` is not Doris syntax; the transpiler must emit CAST(...).
-        assertThat(run("SELECT o_orderkey::BIGINT FROM lake.s.orders").dorisSql)
+    fun rewritesCastShorthandWithoutAdmittingUnprovenSemantics() {
+        // 0.18.0 refuses unresearched CAST; 0.18.1 records conditional coverage.
+        // Neither verdict proves an arbitrary column's type/value domain safe for exact replay.
+        val report = SqlFragment("SELECT o_orderkey::BIGINT FROM lake.s.orders", "duckdb")
+            .certify("doris")
+        assertThat(report.result.sql)
             .contains("CAST(o_orderkey AS BIGINT)")
             .doesNotContain("::")
+        val castFinding = report.findings.single { it.subject == "CAST" }
+        assertThat(castFinding.kind).isIn(
+            FindingKind.SEMANTIC_COVERAGE_UNKNOWN,
+            FindingKind.SEMANTIC_HAZARD,
+        )
+        if (castFinding.kind == FindingKind.SEMANTIC_COVERAGE_UNKNOWN) {
+            assertThat(castFinding.severity).isEqualTo(Severity.REFUSAL)
+            assertThat(report.ok).isFalse()
+        } else {
+            assertThat(castFinding.severity).isEqualTo(Severity.WARNING)
+            assertThat(castFinding.detail).contains("conditionally-equivalent")
+            assertThat(report.ok).isTrue()
+        }
+        assertThat(castFinding.provenance).isNotBlank()
     }
 
     @Test
@@ -72,6 +93,25 @@ internal class DorisCorpusDialectTest {
     }
 
     // ---- Skips: transpiler signals / residual divergences ----
+
+    @Test
+    fun skipsCastsWithoutTypeAndValueProof() {
+        for (sql in listOf(
+            "SELECT o_orderkey::BIGINT FROM lake.s.orders",
+            "SELECT CAST(o_orderkey AS BIGINT) FROM lake.s.orders",
+        )) {
+            assertThat(skip(sql).reason)
+                .contains("CAST")
+                .matches("(?s)(certify refused:.*SEMANTIC_COVERAGE_UNKNOWN.*|semantic hazard.*conditionally-equivalent.*)")
+        }
+    }
+
+    @Test
+    fun skipsTryCastWithoutBorrowingCastCoverage() {
+        assertThat(skip("SELECT TRY_CAST('not-an-integer' AS BIGINT)").reason)
+            .contains("SEMANTIC_COVERAGE_UNKNOWN")
+            .contains("TRY_CAST")
+    }
 
     @Test
     fun skipsNonReads() {

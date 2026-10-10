@@ -14,7 +14,7 @@ ducklake-catalog = "0.11.0"
 # brikk-sql: TEST-ONLY DuckDB->Doris SQL transpiler for the corpus-replay dialect gate.
 # Releases on Maven Central; -SNAPSHOTs via the Central Portal snapshots repo (wired in
 # buildlogic.kotlin.brikk).
-brikk-sql = "0.8.0"
+brikk-sql = "0.18.1"
 
 [libraries]
 kotlin-bom = { module = "org.jetbrains.kotlin:kotlin-bom", version.ref = "kotlin" }
