@@ -5,7 +5,7 @@
 > table format (spec v1.0). It targets the `fe-connector` catalog SPI, which
 > **merged into Apache Doris `master`** (`#64304` *decouple external catalogs
 > from FE core into loadable connector plugins*, + the `fe/fe-connector` tree);
-> we target apache/doris `master` (source/SPI pin `8fc58e929b2`, plugin API **9.0**), **not** the
+> we target apache/doris `master` (source/SPI pin `dd456ab7a89`, plugin API **13.0**), **not** the
 > now-retired brikk fork `branch-catalog-spi`. The SPI is not in any tagged
 > Doris *release* yet, so a stock released Doris build still can't load it —
 > build the FE from master (see [`fe-patches/`](fe-patches/); PATCH-FREE). The
@@ -14,12 +14,14 @@
 > DuckLake adapter for an OLAP engine today, use
 > [`trino-ducklake`](../trino-ducklake/) instead.
 
-As checked on 2026-09-19, released **4.1.3**, **4.1.4**, and the current
-`branch-4.2` do not contain `fe/fe-connector`; there is no public 4.2 SPI
-backport. An API-9 plugin requires an API-9 master FE. Source/SPI/FE qualification
-and the stock-4.1.4 compatibility smoke are at `8fc58e929b2`; the last matching
-FE/BE runtime validated by the isolated smoke remains API 7 at `96d0ac68e84`.
-See the re-vendor ledger.
+As checked on 2026-10-10, released **4.1.4**, **4.1.4.1**, and `branch-4.2`
+do not contain `fe/fe-connector`. Master/future 5.x is the plugin target.
+An API-13 plugin requires an API-13 FE; the `dd456ab7a89` re-vendor also requires
+upgrading FE and BE together because master Thrift field ids changed.
+Connector and matching FE/BE isolated smoke qualification are green on this pin.
+The BE is an ASAN validation build, not a performance-qualified release build.
+The September API-9 FE + stock-4.1.4 smoke is historical evidence only; it does
+not qualify today's artifacts. See the [re-vendor ledger](fe-patches/FE-PATCHES.md).
 
 Connector for the DuckLake format using **PostgreSQL** as the catalog metadata
 backend (the shared, multi-process shape a Doris FE+BE cluster needs). Tested

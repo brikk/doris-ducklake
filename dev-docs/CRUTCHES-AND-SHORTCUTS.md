@@ -100,10 +100,12 @@ In `DuckLakeScanPlanProvider`, all throwing `DorisConnectorException`:
 - **Per-file column mapping** (add_files DROP+re-ADD name collision over id-less
   files) — the scan-node-level schema dictionary can't express per-file maps;
   needs per-range schema info or a BE hook. 2 corpus files skipped.
-- **Column DEFAULT predicates** (ADD COLUMN … DEFAULT n) — projection is correct
-  on `96d0ac68e84`, but predicates on the missing-file column return zero and one
-  sequence crashed `_evaluate_constant_filters` (O01).
 All in the friction log with pickable upstream fixes.
+
+**Resolved runtime gap:** scalar evolved-column DEFAULT projection/predicates
+are live-green at `dd456ab7a89` (50 exact checks, two smokes, post-restart read).
+Older `96d0ac68e84` predicate/crash evidence remains in the friction log. The
+DEFAULT smoke check now fails nonzero and retains the failed fixture.
 
 ## 6. Test-harness shortcuts (test-only; no product impact)
 

@@ -15,20 +15,137 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
  > from FE core into loadable connector plugins* + the whole `fe/fe-connector` tree, incl.
  > `fe-connector-api` / `fe-connector-spi`). We now vendor from **`~/DEV/OSS/doris`, branch
  > `master`** (apache/doris), **not** the retired brikk fork `branch-catalog-spi`. Current
- > source/SPI pin: **`8fc58e929b2`** (apache/doris master, qualified 2026-09-19).
- > Last runtime-validated FE/BE pin: **`96d0ac68e84`** (2026-09-15). Master's `<revision>` is still
+ > source/SPI pin: **`dd456ab7a89`** (apache/doris master, connector-qualified 2026-10-10).
+ > Last runtime-validated FE/BE pin: **`dd456ab7a89`** (2026-10-10, ASAN BE). Master's `<revision>` is still
  > `1.2-SNAPSHOT`, so the installed `~/.m2` coordinates are unchanged.
  > **SPI-surface note:** #66407 merged `fe-connector-api` INTO `fe-connector-spi` and renamed the
  > `org.apache.doris.connector.api.*` packages to `…spi.*`. We now depend on **only** the
  > `fe-connector-spi` artifact and our imports moved `api.` → `spi.` (mechanical). Still
  > **PATCH-FREE** (unchanged since #66135). The `Doris-Connector-Plugin-Api-Version` gate (#66211) has
  > stepped **1 -> 5 (#66407) -> 6 (#66413) -> 7 (#67182) -> 8 (#67904) -> 9 (#68027)**;
- > we stamp **`9.0`** in `build.gradle.kts` to match the source/SPI pin.
- > **Deploy together:** the API-9 ZIP will be rejected by an API-7/8 FE. The API-9 FE image and
- > stock-4.1.4 compatibility smoke are qualified; the matching API-9 BE remains unbuilt.
+ > then **10 (#66530) -> 11 (#68320) -> 12 (#66399) -> 13 (#68786)**;
+ > we stamp **`13.0`** in `build.gradle.kts` to match the source/SPI pin.
+ > **Deploy together:** the API-13 ZIP needs an API-13 FE, and #68785/#68822 require
+ > matching regenerated FE/BE Thrift. Matching-engine smoke qualification passed; the September
+ > API-9 FE + stock-4.1.4 smoke does not qualify the new artifacts.
  > Keep this note, the Re-vendor log, and `compose/README.md` in sync.
 
 ### Re-vendor log
+
+- **2026-10-10 -> source/SPI pin `dd456ab7a89`**
+  (`[improvement](mtmv) Judge a base table column change by the MV query it reaches (#68646)`).
+  Exact SHA `dd456ab7a894f54c6553415223c6d5c9c7d4e035`, 269 commits beyond
+  `8fc58e929b2`. Built from the clean detached worktree
+  `/home/jayson/DEV/OSS/doris-ducklake-api13`; the shared Doris checkout and its
+  staged Duckbridge handler changes were not altered. **Matching FE/BE isolated
+  smoke qualification passed, including a persisted-metadata FE restart.** The BE
+  is an ASAN validation artifact, not a performance-qualified release binary.
+
+  **API delta:** connector API **9 -> 13**. API 10 adds statement-scoped scan
+  reuse; API 11 adds generic distribution/changelog row-level DML; API 12 separates
+  field-ID nested paths from nested pruning and adds Fluss scan contracts; API 13
+  adds string write semantics and transformed partition value types. Additional
+  default methods include cluster identity, static-partition NULL keys,
+  `applyColumnDefaultsOnRead()` (true) and `isSingleUse()` (false). DuckLake keeps
+  its type mappings, MVCC-only capabilities, reusable file ranges, read backfill
+  and INSERT-only writes. No production connector adaptation was required.
+
+  **Wire/runtime boundary:** #68785 renumbers `TQueryOptions`; #68822 assigns
+  Iceberg `static_partition_null_keys` to 19 and `nan_count_field_ids` to 20.
+  Do not deploy the new FE over an old master BE. JNI plugin API is now **5.0**,
+  BE execution version **16** (Paimon writes); these do not automatically opt
+  DuckLake into Paimon/Variant writes. Compose now defaults to matching master
+  images, with a fail-closed FE/BE version check before lake allocation. The
+  stock-4.1.4 lane is an explicit compatibility experiment, not a current claim.
+
+  **Build environment:** refreshed October 9 image
+  `apache/doris@sha256:6588fad93b64900fdfe1317772d38e8e67e2f82d9b2fca831b0ba55f578c717d`;
+  JDK 17.0.2, Thrift 0.24, protoc, Lance-C, Paimon-Rust, simdutf and Google Cloud
+  dependencies verified present. Lance archive SHA-256
+  `65f95ae204e06c55a198bd3c6356259ca5f97e841e0492b5026e62f44843381b`;
+  Paimon archive `e1d22da4f5de85edafe37d6b6b75d6211abbffdce0876748914c2c8bbe5f1bbf`.
+  All output/cache/image staging is disk-backed. Heavy phases run sequentially.
+  The upstream worktree guide requires ASAN for non-performance validation;
+  no release-performance qualification is intended by this run.
+
+  **Connector checks:** SPI/Thrift rebuilt and installed with the Maven build cache
+  disabled. Java 25.0.2: **251 passed, 1 skipped, 0 failed**, Detekt and assembly
+  passed. Java-17 plugin suite: **227 passed, 1 skipped, 0 failed**. All **18**
+  cluster-free smoke tests pass. New regressions pin API 13, Thrift field ids,
+  read-default/reusable-range contracts, DML/distribution opt-outs and stale-BE
+  rejection before fixture allocation. The packaged ZIP declares **13.0** and
+  excludes host SPI/Thrift/extension/libthrift jars.
+
+  **Installed/packaged SHA-256:** SPI
+  `cfd1ba6da7ae198dfc44c6f42dda8fbab3dfd6563024bdb2d6a518839a773969`;
+  Thrift `da4b1fe352fe281e0f9952ba5e8348c9bf0e0fd1a39c51f02649d132b6326ed3`;
+  plugin JAR `30317dcb9473d2ef5c035a93a51aed32ede058e24c58989e787ff3b2389264d1`;
+  ZIP `52d15dd8bc68492bee6a8664c00088f7a9375af187df125e2c8c9b57ffc831ce`.
+
+  **Preservation:** old API-9 FE image retained as `doris-fe:ducklake-api9-8fc58e92`;
+  API-7 master BE retained as `doris-be:ducklake-api7-96d0ac68`. The previous
+  API-9/stock-BE containers were stopped, not volume-deleted. Metadata, logs,
+  plugin and BE storage were archived under the new worktree's
+  `output/rollback-api9/runtime-volumes.tar` (2.4 GiB). Shared PostgreSQL/MinIO and
+  run-owned lake resources remain intact.
+
+  **FE/image:** clean patch-free `build.sh --fe --clean` completed with the same
+  pinned image, six CPUs/10 GiB, JDK 17 and Maven heap 5 GiB. Only UI compilation
+  was disabled; filesystem/connector modules were not excluded. FE jar SHA-256
+  `4e37f5a6227b421be25fac0c49901216b9b3a8ddc4f8bd362b0a9482a0f80d7b`.
+  `doris-fe:ducklake-dd456ab7-api13` / `doris-fe:pr62767-local` image ID
+  `sha256:4ce1e07eb011ef0e27e0cf4bccb5e4b824d03d83f94450be89e66dbe1197aa6d`;
+  OCI revision label names the exact source pin. The image is not started over
+  the old BE. BE build completed sequentially at ASAN `-j6`, six CPUs,
+  18 GiB RAM/24 GiB memory+swap and Maven heap 4 GiB, including the CDC client.
+
+  **BE/artifacts:** executable SHA-256
+  `35438a615cb79ba9d232fba8d9f6880f72a344b1a8c0d964ec399d9a057c6944`;
+  JNI SPI `2a508f5f8d9f9a28109357054310590892d349db8c9eca616266c2182c587bbe`;
+  JNI bootstrap `4cb4dc06591a0ec4847485138f00c795312b232ab496e930ca6f38c1d875b462`.
+  `doris-be:ducklake-dd456ab7-api13-asan` / `doris-be:master-local` image ID
+  `sha256:dca24e21762970659de719e390b16152d625da05bca7d2ec19828c20f56b9591`.
+  The executable passed the glibc 2.17 gate (audited maximum requirement 2.10);
+  all **9 JNI plugins pass all six deployment-layout checks**. These are static
+  closure checks, not proof every plugin loads at runtime. The build normalized
+  the trailing line endings of two datasketches binary test fixtures; no Doris
+  production source patch was applied.
+
+  **Live qualification:** both engines report `doris-0.0.0-dd456ab7a89`; FE loaded
+  DuckLake with `failureCount=0`. Two full isolated runs passed reads/counts,
+  filter EXPLAIN, OPTIONAL position deletes (100 -> 93), DDL, INSERT, buckets,
+  CTAS and all maintenance/foreign-file-preservation checks:
+  `1efd1b24b8bd47dea736156eec6a95d5` and
+  `a54206625a7d45aea73753c1ca6be83f`. Each owns only its generated PostgreSQL
+  database/catalog and `s3://ducklake/doris-smoke/<ID>/` prefix. The second run
+  followed a real FE restart; persisted FE identity `172.30.80.10` and cluster ID
+  `50496690` were preserved, with FE and BE alive. FE local-exchange planning is
+  explicitly enabled, overriding any retained stock-lane setting. Native S3 reads
+  left `registryInitialized=false`, no loaded JNI plugins and no `jvm_*` metrics.
+
+  **O01 resolved on this pin for the tested scalar path:** both smoke runs report
+  old-file default predicates **3/3**, new-row explicit value **99**, NULL count
+  **0**. A separately retained fixture returned exact projection
+  `(1,42),(2,42),(3,42),(4,99)`, `WHERE b=42` -> 3 and
+  `WHERE a IN (1,2,3) AND b=42` -> 3 over **50 repeated exact-result checks**.
+  The retained predicate still returns 3 after FE restart. No prior Const/Nullable
+  crash or ASAN diagnostic was observed in these probes. No individual upstream
+  fix is attributed without bisection. DEFAULT smoke mismatches now exit nonzero
+  and retain the failed fixture; all **18** cluster-free driver/lake tests pass.
+
+  **F03 revalidated:** reversed same-type and partial-column INSERT returned
+  `(aye,bee),(NULL,partial)`; reversed bucket-column INSERT returned
+  `(1,alice),(2,bob)`. Doris and DuckDB read-backs agree exactly. These and the
+  O01 fixture remain under the first run's catalog for inspection. Evidence is in
+  the worktree's `output/api13-*.log`, `api13-default-probe.json` and probe files.
+
+  **Still open:** F08 historical delete filtering, F11/F12 mapping gaps and
+  production inline transport. #68786's built-in type fixes do not change DuckLake's
+  mapper by themselves. No full corpus replay, release-performance benchmark or
+  Duckbridge JDBC/JNI runtime validation was performed. F22/F24/F25 remain separate
+  review findings; the new version/default guards do not close every harness issue.
+  Duckbridge follow-up:
+  [`HANDOFF-doris-master-dd456ab7-api13.md`](../../duckbridge/dev-docs/HANDOFF-doris-master-dd456ab7-api13.md).
 
 - **2026-09-19 -> source/SPI pin `8fc58e929b2`**
   (`[fix](iceberg) Reject server planning before snapshot conversion (#68095)`).
@@ -710,7 +827,8 @@ No patch step — `ducklake-fe.patch` is historical. Build the exact current pin
 not build a blind moving tip.
 
 ```bash
-cd ~/DEV/OSS/doris && git fetch origin master && git switch --detach 8fc58e929b2151c9ff4ae71d07375a7f8e944697
+git -C ~/DEV/OSS/doris worktree add --detach ~/DEV/OSS/doris-ducklake-api13 dd456ab7a894f54c6553415223c6d5c9c7d4e035
+cd ~/DEV/OSS/doris-ducklake-api13
 JAVA_HOME=<jdk17> DISABLE_BUILD_UI=ON ./build.sh --fe --clean
 # then re-install the SPI artifacts our gradle build compiles against (mavenLocal):
 #   cd fe && <mvn> install -P flatten -pl fe-connector/fe-connector-spi,fe-thrift -am \
@@ -721,7 +839,8 @@ JAVA_HOME=<jdk17> DISABLE_BUILD_UI=ON ./build.sh --fe --clean
 docker build -f compose/fe-overlay/Dockerfile \
   -t doris-fe:pr62767-local \
   --build-arg BASE_IMAGE=apache/doris:fe-4.1.4 --build-arg OUTPUT_PATH=./output <disk-backed-staging>
-# then tear the cluster down (-v) and rerun compose/smoke.sh so the fresh FE loads.
+# Build the matching BE too; preserve metadata/log/plugin/storage evidence before replacement.
+# Do not delete retained volumes just to force startup. Run the isolated compose smoke afterward.
 ```
 
 ## The patches (`ducklake-fe.patch`) — HISTORICAL, no longer applied

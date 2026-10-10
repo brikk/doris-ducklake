@@ -75,7 +75,13 @@ def fake_docker():
         return 0
     if argv[:3] == ["exec", "doris-ducklake-fe", "mysql"]:
         sql = " ".join(option_values(argv, "-e")[0].split())
-        if sql == "SHOW BACKENDS":
+        if "-B" in argv and sql in {"SHOW FRONTENDS", "SHOW BACKENDS"}:
+            print("Alive\tVersion")
+            version = "doris-0.0.0-dd456ab7a89"
+            if scenario == "stale_master_be" and sql == "SHOW BACKENDS":
+                version = "doris-0.0.0-96d0ac68e84"
+            print(f"true\t{version}")
+        elif sql == "SHOW BACKENDS":
             print("\t".join(["0"] * 9 + ["true"]))
         elif " EXECUTE " in sql:
             print("ok\t0\t2\t0" if "expire_snapshots(" in sql else "ok\t0\t1\t0")
@@ -89,7 +95,7 @@ def fake_docker():
             elif ".step7_orders" in sql:
                 print(100 if scenario == "wrong_delete_count" else 93)
             elif ".default_probe" in sql:
-                print(0 if "IS NULL" in sql else 3)
+                print(0 if "IS NULL" in sql or scenario == "wrong_default_count" else 3)
             elif ".doris_ddl" in sql:
                 print(2)
             elif "WHERE name='alice'" in sql:
@@ -115,10 +121,10 @@ def fake_docker():
 
 
 class SmokeDriverTests(unittest.TestCase):
-    def test_release_compatibility_defaults_to_414(self):
+    def test_default_requires_matching_master_and_preserves_complete_plugin_layout(self):
         compose = (SOURCE / "docker-compose.yml").read_text()
         overlay = (SOURCE / "be-overlay" / "Dockerfile").read_text()
-        self.assertIn("image: ${DORIS_BE_IMAGE:-apache/doris:be-4.1.4}", compose)
+        self.assertIn("image: ${DORIS_BE_IMAGE:-doris-be:master-local}", compose)
         self.assertNotIn("apache/doris:be-4.1.3", compose)
         self.assertIn("ARG BASE_IMAGE=apache/doris:be-4.1.4", overlay)
         self.assertIn("COPY ${OUTPUT_PATH}/be/plugins ${DORIS_BE_HOME}/plugins", overlay)
@@ -345,12 +351,19 @@ class SmokeDriverTests(unittest.TestCase):
         self.assertNotEqual(self.run_driver(scenario="wrong_delete_count").returncode, 0)
         self.assertIn("Step 7 FAIL: Doris returned 100 rows, expected 93", self.output)
 
+    def test_wrong_default_count_fails_and_retains_the_fixture(self):
+        self.assertNotEqual(self.run_driver(scenario="wrong_default_count").returncode, 0)
+        self.assertIn("DEFAULT-BACKFILL FAIL", self.output)
+        self.assertNotIn("Smoke complete", self.output)
+        self.assertFalse(any("DROP TABLE IF EXISTS tpch.default_probe" in sql for sql in self.mysql_sql()))
+
     def test_up_only_does_not_seed_or_mutate_catalogs(self):
         self.assertEqual(self.run_driver("--up-only").returncode, 0, self.output)
         self.assert_infrastructure_only_up()
         self.assert_no_catalog_mutation()
         self.assertTrue(any("SHOW BACKENDS" in sql for sql in self.mysql_sql()))
-        self.assertTrue(any("enable_local_shuffle_planner" in sql for sql in self.mysql_sql()))
+        self.assertTrue(any("enable_local_shuffle_planner = true" in sql for sql in self.mysql_sql()))
+        self.assertFalse(any("enable_local_shuffle_planner = false" in sql for sql in self.mysql_sql()))
         self.assertEqual(self.allocation_calls(), [])
         self.assertFalse(any(argv[0] == "run" or "psql" in argv for argv in self.calls))
 
@@ -360,7 +373,22 @@ class SmokeDriverTests(unittest.TestCase):
             0,
             self.output,
         )
-        self.assertFalse(any("enable_local_shuffle_planner" in sql for sql in self.mysql_sql()))
+        self.assertTrue(any("enable_local_shuffle_planner = true" in sql for sql in self.mysql_sql()))
+        self.assertFalse(any("enable_local_shuffle_planner = false" in sql for sql in self.mysql_sql()))
+
+    def test_stale_master_be_fails_before_lake_allocation(self):
+        self.assertNotEqual(self.run_driver(scenario="stale_master_be").returncode, 0)
+        self.assertIn("FE/BE source mismatch", self.output)
+        self.assertEqual(self.allocation_calls(), [])
+        self.assert_no_catalog_mutation()
+
+    def test_explicit_stock_compatibility_lane_keeps_local_shuffle_shim(self):
+        self.assertEqual(
+            self.run_driver("--up-only", be_image="apache/doris:be-4.1.4").returncode,
+            0,
+            self.output,
+        )
+        self.assertTrue(any("enable_local_shuffle_planner" in sql for sql in self.mysql_sql()))
 
     def test_down_only_stops_doris(self):
         self.assertEqual(self.run_driver("--down").returncode, 0, self.output)

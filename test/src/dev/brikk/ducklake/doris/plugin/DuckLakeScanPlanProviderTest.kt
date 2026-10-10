@@ -68,6 +68,8 @@ internal class DuckLakeScanPlanProviderTest {
 
             val plan = connector.getScanPlanProvider()
             assertThat(plan).isNotNull()
+            // API 13 retains read backfill by default; Paimon opts out, DuckLake must not.
+            assertThat(plan.applyColumnDefaultsOnRead()).isTrue()
             // getScanRangeType()/ConnectorScanRangeType was removed from the SPI (every
             // range is a file scan now), so there is no range-type to assert on the provider.
 
@@ -89,6 +91,8 @@ internal class DuckLakeScanPlanProviderTest {
                 assertThat(range.fileSize).isPositive()
                 assertThat(range.length).isEqualTo(range.fileSize)
                 assertThat(range.partitionValues).isEmpty()
+                // File-backed ranges are reusable, unlike ADBC's consumable result tickets.
+                assertThat(range.isSingleUse).isFalse()
 
                 val path = range.path
                     .orFail("scan range path missing")

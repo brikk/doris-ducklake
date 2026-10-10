@@ -1,27 +1,69 @@
 # DuckLake-on-Doris — Friction log
 
 Open items from implementing the DuckLake `fe-connector` plugin against apache/doris `master`.
-**Ordered by priority for a 4.2 ship** (top = fix first); each has a pickable upstream fix. Full
+**Ordered by priority for master/future 5.x readiness** (top = fix first). Full
 detail on the top items, papercuts kept short. Pin / build: [`../fe-patches/FE-PATCHES.md`](../fe-patches/FE-PATCHES.md).
 
-> **Current as of apache/doris `master` @ `1731787677f`** — commit dated **2026-08-25 22:36:06 +0800**
-> (`[chore](lance) update lance version to tag 0.1.7 (#67115)`). Findings below built + full-smoke
-> validated against that commit (connector plugin API 6.0). No `branch-4.2` yet.
+> **Current validated runtime: apache/doris `master` @ `dd456ab7a89`, 2026-10-10**
+> — connector API **13.0**, JNI API **5.0**, matching FE + **ASAN BE**. Two isolated
+> smokes, persisted-metadata FE restart and 50 exact DEFAULT checks passed.
+> This is correctness validation, not release-performance qualification. `branch-4.2`
+> still lacks `fe/fe-connector`; master/future 5.x remains the plugin target.
+> Older findings below retain their dated evidence; an item not explicitly revalidated
+> here is not a fresh live result on this pin.
 Sister docs: [`ducklake-doris-integration-spi-plan.md`](./ducklake-doris-integration-spi-plan.md),
 [`ducklake-doris-sanity-check.md`](./ducklake-doris-sanity-check.md), [`TODO-read.md`](./TODO-read.md).
 
 ## Already fixed on master — validated live (context; the connector works end-to-end)
 - **`COUNT(<nullable col>)`** pushdown — correct on master (was non-deterministic garbage).
-- **Position-delete** OPTIONAL-column `[CORRUPTION]` — Step-7 DELETE round-trips end-to-end.
+- **Position-delete** OPTIONAL-column `[CORRUPTION]` — latest-snapshot Step-7 DELETE
+  round-trips end-to-end (100 -> 93); historical delete visibility remains open as F08.
+- **Scalar evolved-column DEFAULT projection/predicates (O01)** — live-green at
+  `dd456ab7a89`; the dated section below records the exact checks and prior failures.
 - **timestamptz-in-parquet** — `enable.mapping.timestamp_tz=true` reads a zone-aware `TIMESTAMPTZ`
   (`Int64ToTimestampTz`, #65446); probed live, instants + session-zone rendering correct.
 - **`LOCAL_EXCHANGE_NODE` 38** FE/BE skew and **iceberg sys-table positional read** — moot / landed.
 
-Also green on master: reads, DDL (CREATE/DROP DB+TABLE, bucket-partition), INSERT/CTAS, §13 GC (expire/cleanup/orphan), corpus-replay.
+Also green on the current pin: reads, DDL (CREATE/DROP DB+TABLE, bucket-partition),
+INSERT/CTAS, reordered/partial-column writes and §13 GC (expire/cleanup/orphan).
+Corpus replay and zone-aware timestamp probes have historical validation, but
+were not rerun in this API-13 qualification. Full corpus replay remains deferred
+while F22's broad cleanup guard is open.
+
+---
+
+## P0 — still open: historical reads can apply future deletes (F08)
+
+A DuckLake position-delete file can contain
+`(file_path, pos, _ducklake_internal_snapshot_id)` entries from multiple snapshots.
+The Doris Iceberg-compatible reader consumes `file_path` and `pos`, not the
+embedded deletion snapshot. A historical read can therefore delete rows that
+were still visible at its pinned snapshot. The existing partial-data-file guard
+does not establish safety for these delete entries, and checking only
+`deleteFilePartialMax` is insufficient.
+
+**Required:** filter delete entries by the pinned snapshot, or fail closed when
+historical delete safety cannot be established. Latest-snapshot deletes passing
+the API-13 smoke do not close this gap; it was not live-revalidated in this run.
+See [F08 in the review](REVIEW-2026-09-05.md#f08-historical-reads-apply-future-deletes).
 
 ---
 
 ## P0 — silent wrong data: schema-evolution column DEFAULT reads 0 instead of the DEFAULT
+
+**2026-10-10 resolved for the tested scalar path (`dd456ab7a89`, API 13,
+matching FE + ASAN BE):** both isolated smokes return 3/3 old rows for the
+evolved `DEFAULT 42` predicate, explicit new-row value 99 and zero NULLs.
+A retained fixture passed **50 repeated exact-result checks**: projection
+`(1,42),(2,42),(3,42),(4,99)`, `WHERE b=42` -> 3 and
+`WHERE a IN (1,2,3) AND b=42` -> 3. The retained predicate still returns 3 after
+a persisted-metadata FE restart; no prior Const/Nullable crash or ASAN diagnostic
+was observed in these probes. O01 is resolved on this artifact-identified pin,
+not on older images. No individual upstream fix is attributed without bisection.
+The smoke now fails nonzero on a DEFAULT mismatch and retains the failed fixture.
+Evidence: the re-vendor ledger and
+`~/DEV/OSS/doris-ducklake-api13/output/api13-default-probe.json`.
+The heading/anchor and earlier failures below remain as historical evidence.
 
 **2026-09-15 live result (`96d0ac68e84`, API 7, matching FE+BE):** the title and
 old diagnosis are now too broad. Unfiltered projection is correct:
@@ -30,7 +72,7 @@ column is wrong: `WHERE b=42` and `WHERE a IN (1,2,3) AND b=42` return **0** eve
 though EXPLAIN retains the old-file range. One follow-up query sequence also hit
 `Column type Const(INT) is not compatible with data type Nullable(INT)` and a
 SIGSEGV in `TableReader::_evaluate_constant_filters`; after restart, the same
-individual predicates returned 0 without crashing. Current classification:
+individual predicates returned 0 without crashing. Classification at that pin:
 **P0 silent wrong result in the missing-column constant-predicate path, with one
 observed but not immediately repeatable BE crash.** General DEFAULT materialization
 is working. Fix and regression should target V2 constant-filter evaluation for a
@@ -82,8 +124,8 @@ the common case, not an edge case.** The BE reads files only, and the `fe-connec
 a connector to hand FE-computed rows to it. Three manifestations, one root gap:
 
 - **Inlined DATA read** — plugin refuses at plan time (`…inlined data rows…not supported`).
-- **Inlined DELETE** — DuckDB deletes vanish from Doris' view; only file-based deletes route through
-  `iceberg_params.delete_files`.
+- **Inlined DELETE** — rejected at plan time by `failOnInlinedDeletes`, rather than
+  silently ignored; only file-based deletes route through `iceberg_params.delete_files`.
 - **Our only workaround** — synthesize a temp Parquet FE-side and emit a `FILE_SCAN` range. **Works only
   when FE and BE share a filesystem** (compose bind-mount), so it's **dev-only, not production-viable**;
   plus temp-file GC is on us (the SPI has no end-of-scan/close hook).
@@ -161,5 +203,5 @@ to how `iceberg_params` rides per-range), instead of only the scan-node dictiona
 ---
 
 ## How to add an entry
-Slot by 4.2 priority (P0 crash/dataloss → P4 docs). Keep it tight: literal error + `file:line` root
+Slot by master/5.x priority (P0 crash/dataloss → P4 docs). Keep it tight: literal error + `file:line` root
 cause + one-line workaround + a pickable (single-PR) fix. Small things get small entries.

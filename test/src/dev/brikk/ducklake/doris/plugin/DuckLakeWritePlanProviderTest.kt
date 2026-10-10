@@ -9,6 +9,8 @@ import org.apache.doris.connector.spi.DorisConnectorException
 import org.apache.doris.connector.spi.handle.ConnectorTableHandle
 import org.apache.doris.connector.spi.handle.ConnectorTransaction
 import org.apache.doris.connector.spi.handle.ConnectorWriteHandle
+import org.apache.doris.connector.spi.handle.WriteOperation
+import org.apache.doris.connector.spi.write.ConnectorRowChangeStyle
 import org.apache.doris.thrift.TDataSinkType
 import org.apache.doris.thrift.TFileCompressType
 import org.apache.doris.thrift.TFileFormatType
@@ -95,6 +97,17 @@ internal class DuckLakeWritePlanProviderTest {
     fun requiresFullSchemaWriteOrderForPositionalIcebergSink() {
         withCatalog { catalog ->
             assertThat(provider(catalog).requiresFullSchemaWriteOrder()).isTrue()
+        }
+    }
+
+    @Test
+    fun genericDmlAndDistributionRemainOptedOut() {
+        withCatalog { catalog ->
+            val plan = provider(catalog)
+            assertThat(plan.supportedOperations()).containsExactly(WriteOperation.INSERT)
+            assertThat(plan.rowChangeStyle).isEqualTo(ConnectorRowChangeStyle.NONE)
+            assertThat(plan.changelogMode).isEmpty()
+            assertThat(plan.getWriteDistribution(null, ordersHandle(catalog))).isNull()
         }
     }
 

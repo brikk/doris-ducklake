@@ -6,7 +6,7 @@ substrate (Postgres + MinIO), seeds a fresh run-owned TPC-H lake, and exercises 
 
 - **read** — `CREATE CATALOG`, `SHOW/DESC`, `SELECT * FROM dl.tpch.orders`
 - **Step 7** — latest-snapshot position deletes through OPTIONAL Parquet columns;
-  validated end to end on matching master FE/BE `96d0ac68e84`
+  validated end to end on matching master FE/BE `dd456ab7a89`
 - **W1 DDL** — live Doris `CREATE DATABASE` + `CREATE TABLE` (unpartitioned and
   `PARTITION BY LIST (bucket(4, name)) ()`) routed FE→connector→DuckLake, cross-verified
   via DuckDB+DuckLake and the catalog tables, then `INSERT` + `DROP`. ✅ GREEN 2026-06-10;
@@ -74,15 +74,17 @@ all target routing and fail-closed allocation paths, not actual engine/GC behavi
 
 ### Prereqs
 - The **FE image** `doris-fe:pr62767-local` must exist locally (see *Building the FE
-  image* below), built from source/SPI pin `8fc58e929b2`, API **9.0**. The last
-  runtime-qualified image pair is API 7 at `96d0ac68e84`; it cannot load the current
-  API-9 plugin ZIP. Matching-major FE/plugin deployment is required; stamping the
-  manifest does not upgrade the host FE.
-- The Compose BE default is `apache/doris:be-4.1.4` for release compatibility testing,
-  validated by the full isolated hybrid smoke on 2026-09-19. This is not a claim
-  that all current-master behavior is supported.
-- Use `DORIS_BE_IMAGE=doris-be:master-local` for the matching master BE. Omitting
-  it keeps stock `apache/doris:be-4.1.4` as the separate release-compatibility axis.
+  image* below), at source/SPI pin `dd456ab7a89`, API **13.0**. Connector checks
+  and matching FE/BE isolated smoke passed. The historical API-9 FE cannot load
+  today's plugin ZIP.
+  Stamping the manifest does not upgrade the host FE.
+- The Compose BE default is **`doris-be:master-local`**, built from the same exact
+  pin as the FE. #68785/#68822 realigned Thrift ids; do not combine the new FE with
+  an older master BE. `smoke.sh` rejects differing live FE/BE versions before seeding.
+- Current BE is an **ASAN validation build**. Smoke correctness and restart are
+  qualified; release performance and all JNI-plugin workloads are not.
+- `DORIS_BE_IMAGE=apache/doris:be-4.1.4` explicitly selects the historical stock
+  compatibility lane. Its September API-9 smoke does not qualify the API-13 FE.
 - Docker **or** podman (see *Running under podman* ).
 
 ## Running under podman (x86_64 remote box)
@@ -123,13 +125,15 @@ stock Doris base, via the in-repo [`fe-overlay/Dockerfile`](./fe-overlay/Dockerf
 
 The upstream Doris checkout and its worktrees live under `~/DEV/OSS/`:
 
-- **`~/DEV/OSS/doris`** — the current source/SPI checkout at `8fc58e929b2` on master;
-  use this exact API-9 pin for the next FE/BE qualification, not the historical
-  worktree below.
+- **`~/DEV/OSS/doris-ducklake-api13`** — clean detached build worktree at
+  `dd456ab7a89`. Current FE/BE output is built here, independently of the main
+  checkout's staged Duckbridge handler changes.
+- **`~/DEV/OSS/doris`** — the main checkout remains at `8fc58e929b2` with staged
+  Duckbridge work. Do not switch or reset it to perform this re-vendor.
 - **`~/DEV/OSS/doris-catalog-spi`** — a **linked git worktree** of that same repo,
   parked (detached HEAD) at the **pinned** connector-SPI commit we build the FE
   from (`0da96f1ad3e`, `branch-catalog-spi`). **Historical, not the current build
-  source.** Its output must not be used for the API-9 plugin.
+  source.** Its output must not be used for the API-13 plugin.
 
 (Both are the same `.git`; `git worktree list` from either shows the pair. If a path
 here ever looks wrong, `git worktree list` is the source of truth for where each
@@ -143,30 +147,30 @@ another machine / agent / CI won't have them until reproduced or copied:
 
 | Artifact | Location | Consumer | Get it elsewhere |
 |---|---|---|---|
-| **Raw FE build** (`output/fe`, ~2 GB; incl. `lib/doris-fe.jar`) | `~/DEV/OSS/doris/output/fe` | staging source for the image | built at `8fc58e929b2`; FE jar SHA-256 `9f21e1beb5073599eabccd694b71b1faed8b3b0c5ec9437eb53f00549557f0d6` |
-| **Overlay image** `doris-fe:pr62767-local` | local Docker/podman image store (**not** in any registry) | the compose FE (runtime) — `docker-compose.yml` | API-9 image digest `sha256:5cf626e0a26bd743de570997e4343d4199591d4ad0e611ca97def2af624045a8` |
+| **Raw FE build** (`output/fe`; incl. `lib/doris-fe.jar`) | `~/DEV/OSS/doris-ducklake-api13/output/fe` | staging source for the image | SHA-256 `4e37f5a6227b421be25fac0c49901216b9b3a8ddc4f8bd362b0a9482a0f80d7b`; matching-runtime smoke qualified |
+| **Overlay image** `doris-fe:pr62767-local` | local Docker/podman image store (**not** in any registry) | the compose FE (runtime) — `docker-compose.yml` | API-13 image ID `sha256:4ce1e07eb011ef0e27e0cf4bccb5e4b824d03d83f94450be89e66dbe1197aa6d`; old API-9 image retained as `doris-fe:ducklake-api9-8fc58e92` |
 | **SPI compile jars** (`fe-connector-spi`, `fe-thrift`, `1.2-SNAPSHOT`) | `~/.m2/repository/org/apache/doris/…` (installed via `mvn install -P flatten`) | the gradle plugin build (`build.gradle.kts` → `mavenLocal()`, `org.apache.doris` only) | re-run the flatten install (below) on that box, or copy the `~/.m2/.../1.2-SNAPSHOT` trees over |
+| **Master BE image** `doris-be:master-local` | local Docker image store; exact pin `dd456ab7a89`, ASAN | default compose BE | image ID `sha256:dca24e21762970659de719e390b16152d625da05bca7d2ec19828c20f56b9591`; complete JNI API-5 distribution |
 
 Verify the runtime image actually carries the build you think it does:
-`sha256sum ~/DEV/OSS/doris/output/fe/lib/doris-fe.jar` should equal
+`sha256sum ~/DEV/OSS/doris-ducklake-api13/output/fe/lib/doris-fe.jar` should equal
 `docker run --rm --entrypoint sha256sum doris-fe:pr62767-local /opt/apache-doris/fe/lib/doris-fe.jar`.
 
 # ⚠️ SOURCE = apache/doris `master` (the SPI is upstream now — the brikk fork is retired).
 #   The connector SPI landed in apache master (#64304 + the fe/fe-connector tree), so build the FE
 #   from the REAL apache/doris, not the old fork branch `branch-catalog-spi`.
-#   Source/SPI pin (qualified 2026-09-19): 8fc58e929b2; connector plugin API 9.0.
-#   SPI + thrift rebuilt/installed with JDK 17 + Thrift 0.24 in the pinned build-env.
-#   API-9 FE built cleanly and its overlay passed the full stock-4.1.4 compatibility smoke.
-#   Last matching-master runtime pin: 96d0ac68e84, API 7; the API-9 BE build remains pending.
-#   See FE-PATCHES 2026-09-19.
-#   New SUPPORTS_STORAGE_PREDICATE_PRUNING is deliberately OFF; existing pruning is unchanged.
-#   API 8 retained-schema publication remains OFF; API 9's Hive OpenCSV property is not emitted.
-#   The API-9 ZIP cannot load on an API-7/8 FE image. Rebuild the FE before smoke.
-#   branch-4.2 still has no connector SPI or public backport queue as of 2026-09-19.
-#   Typed nested access paths require a matching master BE, independently of the plugin API gate.
-#   doris-be:master-local now starts and serves the smoke after #66729's lazy-JVM/plugin isolation.
-#   That image is still the 96d0ac68 runtime. Rebuild it before claiming the API-9 runtime pin.
-#   The default remains the smoke-qualified apache/doris:be-4.1.4 compatibility lane.
+#   Source/SPI pin (connector-qualified 2026-10-10): dd456ab7a89; plugin API 13.0.
+#   SPI + Thrift rebuilt/installed with JDK 17 + Thrift 0.24 in the October 9 build-env.
+#   Connector tests: Java 25 251 passed/1 skipped; Java 17 227 passed/1 skipped.
+#   Matching FE/BE at this exact pin passed two isolated smokes and persisted-metadata FE restart.
+#   BE is ASAN; no performance or all-JNI-plugin qualification is implied. See FE-PATCHES.
+#   New capabilities and generic DML/distribution remain off; INSERT-only behavior is unchanged.
+#   DuckLake retains read-default backfill and reusable file ranges. Own type mappings are unchanged.
+#   The API-13 ZIP cannot load on the historical API-9 FE. Upgrade FE and BE together:
+#   #68785/#68822 renumbered Thrift fields; API-major equality alone is not wire compatibility.
+#   branch-4.2 still has no connector SPI as of October 10; follow master/future 5.x.
+#   The default is matching master BE; stock 4.1.4 is now an explicit experiment.
+#   The new BE distribution carries JNI API 5 and its complete isolated plugins tree.
 #   Master's <revision> is still 1.2-SNAPSHOT → ~/.m2 coordinates unchanged.
 #   Builds PATCH-FREE since upstream #66135 removed both former FE-patch anchors — NO patch to apply.
 #   The current pin is recorded in ../fe-patches/FE-PATCHES.md → "Re-vendor log" (keep both in sync).
@@ -174,7 +178,8 @@ Verify the runtime image actually carries the build you think it does:
 ```bash
 # 1. Build the FE (JDK 17) from apache/doris master — PATCH-FREE (no patch step).
 #    DORIS_THIRDPARTY can point at any doris thirdparty that has thrift+protoc installed.
-cd ~/DEV/OSS/doris && git fetch origin master && git switch --detach 8fc58e929b2151c9ff4ae71d07375a7f8e944697
+git -C ~/DEV/OSS/doris worktree add --detach ~/DEV/OSS/doris-ducklake-api13 dd456ab7a894f54c6553415223c6d5c9c7d4e035
+cd ~/DEV/OSS/doris-ducklake-api13
 JAVA_HOME=<jdk17> DORIS_THIRDPARTY=<doris thirdparty> DISABLE_BUILD_UI=ON ./build.sh --fe   # → output/fe
 # Also reinstall the SPI compile jars our gradle build needs (see the artifacts table above):
 cd fe && <mvn> install -P flatten -pl fe-connector/fe-connector-spi,fe-thrift -am \
@@ -183,8 +188,8 @@ cd fe && <mvn> install -P flatten -pl fe-connector/fe-connector-spi,fe-thrift -a
 
 # 2. Image it with the TRACKED overlay Dockerfile (jvm/doris-ducklake/compose/fe-overlay/Dockerfile),
 #    staging a minimal context so podman/docker isn't sent the multi-GB repo:
-S=~/DEV/OSS/doris/output/fe-image-stage; rm -rf $S; mkdir -p $S/output
-cp -r ~/DEV/OSS/doris/output/fe $S/output/fe
+S=~/DEV/OSS/doris-ducklake-api13/output/fe-image-stage; mkdir -p $S/output
+cp -r ~/DEV/OSS/doris-ducklake-api13/output/fe $S/output/fe
 # run -f relative to THIS integrations repo root (adjust the path if your CWD differs):
 podman build -f compose/fe-overlay/Dockerfile \
   -t doris-fe:pr62767-local \
@@ -223,7 +228,8 @@ or plugin changes so the fresh FE reloads everything.
 | FE exits 255; `fe.log` shows BDB JE `NoClassDefFoundError: …JVMSystemUtils` → `NullPointerException … CgroupV2Subsystem.getInstance … anyController is null` | The base FE image's bundled **JDK 17 is too old for this host's cgroup v2** (NPEs during container-resource detection). Native-Linux/cgroup-v2 boxes hit this; the old Docker-Desktop VM didn't. Fix: `fe.conf` `JAVA_OPTS_FOR_JDK_17` carries `-XX:-UseContainerSupport` (safe — heap is pinned `-Xmx2g`). |
 | `Unknown catalog type: ducklake` on `CREATE CATALOG` | FE built from a pin older than #66135, or a stale image. Rebuild the FE from pin `0da96f1ad3e`+ (patch-free) and re-image. |
 | `Current catalog does not support create table: dl` on `CREATE TABLE` | FE built from a pin older than #66135 (pre-`acceptedCreateTableEngineNames`). Rebuild from pin `0da96f1ad3e`+ and re-image. |
-| Plugin load `failureCount>0` / `STAGE_API_VERSION` refusal | The plugin manifest is missing or its major differs from the FE. Current ZIPs declare `9.0`; rebuild the FE at the source/SPI pin rather than merely reinstalling the ZIP into an API-7/8 image. |
+| Plugin load `failureCount>0` / `STAGE_API_VERSION` refusal | The plugin manifest is missing or its major differs from the FE. Current ZIPs declare `13.0`; rebuild the matching FE/BE pair rather than reinstalling the ZIP into an old FE. |
+| `FE/BE source mismatch` before lake allocation | A stale master BE or FE image is running. Rebuild/deploy both from `dd456ab7a89`; replacing only the plugin does not fix Thrift field-id skew. |
 | INSERT: `Unsupported compress type UNKNOWN with parquet` | (fixed) sink must set a compression — we use `ZSTD`. |
 | Read-back path doubled (`…/doris_w/s3%3A//…`) | (fixed) the BE returns an absolute path; the connector relativizes it against the table data dir. |
 
@@ -234,10 +240,10 @@ or plugin changes so the fresh FE reloads everything.
   drop our zip there or `rm -rf` it. `smoke.sh` installs into a named volume mounted at
   `…/plugins/connector/ducklake` (podman-on-macOS bind mounts don't propagate reliably,
   hence the volume + `docker cp` helper).
-- **FE↔BE wire-compat**: 4.1.4 is the stock compatibility target and passed the
-  API-9 full isolated smoke on 2026-09-19. That result does not prove every newer
-  typed access-path semantic is safe on an older BE, so keep the local-shuffle shim
-  and inspect each mixed-version change.
+- **FE↔BE wire-compat**: matching master is the default. The API-9 FE plus stock
+  4.1.4 passed its historical smoke on September 19, but API-13 source renumbers
+  query/sink Thrift fields. That old result is not a qualification of this pin.
+  The local-shuffle shim remains only for explicit stock-4.1.4 experiments.
   Avoid binlog/CCR table options on this hybrid cluster. `fe.conf` here drops the
   heap to 2g and is mounted over the image's.
 - **Network**: the substrate compose project is `trino-ducklake-dev`, so its bridge

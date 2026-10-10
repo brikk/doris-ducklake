@@ -190,12 +190,15 @@ tasks.withType<JavaCompile>().configureEach {
 // api-into-spi merge) -> 6 (#66413 forward-port Variant/Parquet + new connector capability defaults
 // isWritesDataFiles/getBeExecVersion/canServeMetadataOnlyCount) -> 7 (#67182 adds the public
 // SUPPORTS_STORAGE_PREDICATE_PRUNING enum constant) -> 8 (#67904 adds retained-schema state to
-// ConnectorMvccSnapshot) -> 9 (#68027 publishes the Hive OpenCSV scan-property contract). Even
-// additive surface changes bump the gated major. DuckLake keeps the opt-ins at their safe defaults
-// and does not emit the Hive text property. Keep this equal to the pinned FE/SPI major.
+// ConnectorMvccSnapshot) -> 9 (#68027 Hive OpenCSV) -> 10 (#66530 statement scan reuse)
+// -> 11 (#68320 generic write/DML contracts) -> 12 (#66399 Fluss scan capabilities)
+// -> 13 (#68786 binary/UUID/timestamp contracts). Current pin: dd456ab7a89.
+// DuckLake retains INSERT-only writes and its existing type mappings; new opt-ins stay off.
+// Keep this equal to the pinned FE/SPI major. FE and BE must upgrade together: #68785/#68822
+// realigned Thrift field ids and are not compatible with an older master runtime pair.
 tasks.jar {
     manifest {
-        attributes("Doris-Connector-Plugin-Api-Version" to "9.0")
+        attributes("Doris-Connector-Plugin-Api-Version" to "13.0")
     }
 }
 

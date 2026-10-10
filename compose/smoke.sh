@@ -141,6 +141,23 @@ while :; do
 done
 
 # 6. Wire-compat sanity gates.
+be_image="${DORIS_BE_IMAGE:-doris-be:master-local}"
+if [[ "$be_image" != "apache/doris:be-4.1.4" ]]; then
+    # A major-matched plugin does not establish FE/BE wire compatibility. In particular,
+    # #68785 renumbered master query options, so stale master images must fail before seeding.
+    live_versions() {
+        docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -B -e "$1" |
+            awk -F'\t' 'NR==1 {for (i=1;i<=NF;i++) {if ($i=="Version") v=i; if ($i=="Alive") a=i}}
+                NR>1 && v && a && $a=="true" {print $v}' | sort -u
+    }
+    fe_version=$(live_versions "SHOW FRONTENDS")
+    be_version=$(live_versions "SHOW BACKENDS")
+    if [[ -z "$fe_version" || -z "$be_version" || "$fe_version" != "$be_version" ]]; then
+        log "FE/BE source mismatch: FE='$fe_version', BE='$be_version'; rebuild and deploy the pair together."
+        exit 1
+    fi
+    log "Matching FE/BE runtime: $fe_version"
+fi
 log "Sanity gates (SHOW BACKENDS / SHOW FRONTENDS / SELECT 1):"
 docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
     SHOW BACKENDS\G
@@ -158,13 +175,17 @@ docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
 # exchange itself (runtime_state.h::plan_local_shuffle()) — the pre-38 behavior
 # the 4.1.4 BE implements. Drop this once the compose BE image catches up with
 # the FE's thrift. Tracked in dev-docs/ducklake-doris-friction.md.
-if [[ "${DORIS_BE_IMAGE:-apache/doris:be-4.1.4}" == "apache/doris:be-4.1.4" ]]; then
+if [[ "$be_image" == "apache/doris:be-4.1.4" ]]; then
     log "Disabling FE-side local-exchange planning (4.1.4 BE lacks TPlanNodeType 38)…"
     docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
         SET GLOBAL enable_local_shuffle_planner = false;
     " 2>&1 | tail -5
 else
-    log "Matching/custom BE '${DORIS_BE_IMAGE}': keeping FE-side local-exchange planning enabled."
+    log "Matching/custom BE '$be_image': enabling FE-side local-exchange planning."
+    # The same metadata volume may retain the old stock-BE compatibility setting.
+    docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
+        SET GLOBAL enable_local_shuffle_planner = true;
+    " 2>&1 | tail -5
 fi
 
 # 6c. Headless mode: everything above is cluster bring-up (substrate, plugin
@@ -856,7 +877,10 @@ log "  old rows with b=42: ${default_backfill:-?}/3  |  new row a=4 b=${default_
 if [[ "${default_backfill:-0}" -eq 3 && "${default_explicit:-0}" -eq 99 && "${default_nulls:-1}" -eq 0 ]]; then
     log "§12b DEFAULT-BACKFILL GREEN: pre-ADD rows read the DEFAULT (42), post-ADD row reads its explicit value (99). 🎉"
 else
-    log "§12b DEFAULT-BACKFILL CHECK: b=42 rows=${default_backfill:-?} (exp 3), a=4 b=${default_explicit:-?} (exp 99), NULL b=${default_nulls:-?} (exp 0) — inspect above."
+    log "§12b DEFAULT-BACKFILL FAIL: b=42 rows=${default_backfill:-?} (exp 3), a=4 b=${default_explicit:-?} (exp 99), NULL b=${default_nulls:-?} (exp 0)."
+    # O01 is live-green at dd456ab7a89; a regression must not reach "Smoke complete".
+    # Keep the failed fixture so the missing-file default/predicate path can be inspected.
+    exit 1
 fi
 docker exec doris-ducklake-fe mysql -h127.0.0.1 -P9030 -uroot -e "
     SWITCH ${SMOKE_CATALOG}; DROP TABLE IF EXISTS tpch.default_probe;

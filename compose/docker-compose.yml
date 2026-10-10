@@ -1,6 +1,6 @@
 name: doris-ducklake-dev
 
-# Two containers: master Doris FE (with our plugin) and stock Doris BE 4.1.4.
+# Two containers: matching master Doris FE (with our plugin) and master BE.
 #
 # Substrate (Postgres metadata DB + MinIO warehouse) is reused from
 # trino-ducklake/compose/ by attaching to its bridge network as external.
@@ -60,15 +60,11 @@ services:
       start_period: 60s
 
   doris-be:
-    # Stock 4.1.4 is the release-compatibility axis; the FE remains a locally-built
-    # master image matching the plugin API because release FE images do not include
-    # the connector SPI. 4.1.4 source includes optional position-delete fields
-    # (#65401) and Int64ToTimestampTz; the API-9 FE hybrid lane passed the full
-    # isolated smoke on 2026-09-19. Master-only functionality is tested with the separate
-    # doris-be:master-local overlay when a matching BE has been built.
-    # The local-shuffle shim (smoke.sh §6b) is still required (our P6 FE plans
-    # LOCAL_EXCHANGE_NODE=38, absent from 4.1.4's thrift enum).
-    image: ${DORIS_BE_IMAGE:-apache/doris:be-4.1.4}
+    # API-13 source dd456ab7a89 requires a matching FE/BE deployment: #68785 and
+    # #68822 realigned Thrift ids across master and the release branches.
+    # The September API-9 FE + stock-4.1.4 smoke is historical, not qualification
+    # for today's FE. A stock BE is now an explicit compatibility experiment.
+    image: ${DORIS_BE_IMAGE:-doris-be:master-local}
     container_name: doris-ducklake-be
     hostname: doris-be
     # Host-overridable: defaults to arm64 (Apple Silicon dev box); set

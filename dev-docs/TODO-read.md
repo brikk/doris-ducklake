@@ -531,7 +531,7 @@ hardcoded list should be open / discoverable"):
   own `conf/fe.conf` should carry the same commented line (Config default is
   `EnvUtils.getDorisHome() + "/plugins/connector"`); not in our patch (cosmetic, non-essential).
 - [ ] **API-surface churn on master.** Diff `fe-connector-spi`, its frozen surface and API version on every re-vendor; rebuild matching artifacts even when new methods have defaults.
-- [ ] **Avoid unsupported mixed-version table features** in the stock-BE smoke lane. The API-9 master FE plus stock 4.1.4 BE passed the full isolated compatibility smoke on 2026-09-19, but matching-master validation remains authoritative. The last matching validation is API 7 at `96d0ac68e84` until the API-9 BE is rebuilt.
+- [ ] **Avoid unsupported mixed-version table features.** Compose defaults to matching master FE/BE, with a live version check before lake allocation. API-13 source `dd456ab7a89` realigned Thrift ids and requires deploying both engines together. Two matching FE/ASAN-BE smokes and persisted-metadata FE restart passed; the API-9/stock-4.1.4 September result is historical only.
 - [x] **DuckLake delete-file parquet nullability — resolved upstream/live-validated.** Matching master FE+BE `96d0ac68e84` reads DuckLake OPTIONAL position-delete columns end to end (100 -> 93). Keep F08 separate: a historical read still needs to filter delete entries by DuckLake snapshot.
 
 ## Done — shipped milestones
