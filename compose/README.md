@@ -44,7 +44,12 @@ run generates a new ID and creates:
 
 The run fails rather than adopting an existing database or nonempty prefix. The
 sibling TPC-H generator runs once with explicit database/prefix overrides and
-DuckDB 1.5.5; the stored DuckLake `data_path` must match before the driver proceeds.
+DuckDB 1.5.6 (JDBC 1.5.6.0); the stored DuckLake `data_path` must match before the driver proceeds.
+
+Catalog **0.11.0 release** passed Java-25/Java-17 checks and the full isolated
+smoke on the API-13 runtime. The running FE contains the verified Maven Central
+release JAR, replacing the previously tested snapshot.
+See [release validation evidence](../dev-docs/VALIDATION-catalog-0.11.0-2026-10-10.md).
 Every helper, metadata query, maintenance call, and GC fixture uses that same
 identity. Standalone Python helpers require matching `SMOKE_RUN_ID`, `PG_DB`, and
 `DATA_PATH`, checked by `smoke_lake.py` before opening DuckDB.

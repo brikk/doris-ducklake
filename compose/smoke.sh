@@ -229,7 +229,7 @@ docker exec trino-ducklake-postgres psql -X -v ON_ERROR_STOP=1 -U ducklake -d po
     "CREATE DATABASE ${SMOKE_PG_DB} TEMPLATE template0;"
 
 # Reuse the TPC-H generator, but override every target; it never reads the shared lake.
-DUCKDB_VERSION=1.5.5 docker compose -f "${TRINO_COMPOSE}" run --rm --no-deps \
+DUCKDB_VERSION=1.5.6 docker compose -f "${TRINO_COMPOSE}" run --rm --no-deps \
     -e PG_HOST=trino-ducklake-postgres -e PG_DB="$SMOKE_PG_DB" \
     -e PG_USER=ducklake -e PG_PASSWORD=ducklake \
     -e S3_ENDPOINT=trino-ducklake-minio:9000 \
@@ -393,7 +393,7 @@ docker run --rm \
     -e DELETE_COUNT="$DELETE_COUNT" \
     python:3.12-slim sh -c '
         set -e
-        pip install --quiet --no-cache-dir "duckdb==1.5.5"
+        pip install --quiet --no-cache-dir "duckdb==1.5.6"
         python /script.py
     ' 2>&1 | sed "s/^/  [duckdb] /"
 
@@ -476,7 +476,7 @@ w2_helper() {  # $1 = MODE (create|verify), $2 = TABLE (default doris_w), $3 = P
         -e DATA_PATH="$SMOKE_DATA_PATH" \
         python:3.12-slim sh -c '
             set -e
-            pip install --quiet --no-cache-dir "duckdb==1.5.5"
+            pip install --quiet --no-cache-dir "duckdb==1.5.6"
             python /script.py
         ' 2>&1 | sed "s/^/  [duckdb] /"
 }
@@ -855,7 +855,7 @@ docker run --rm \
     -e DATA_PATH="$SMOKE_DATA_PATH" \
     python:3.12-slim sh -c '
         set -e
-        pip install --quiet --no-cache-dir "duckdb==1.5.5"
+        pip install --quiet --no-cache-dir "duckdb==1.5.6"
         python /script.py
     ' 2>&1 | sed "s/^/  [duckdb] /"
 

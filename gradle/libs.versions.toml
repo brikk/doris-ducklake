@@ -1,6 +1,6 @@
 [versions]
 kotlin = "2.3.10"
-duckdb = "1.5.5.0"
+duckdb = "1.5.6.0"
 minio = "8.6.0"
 postgres = "42.7.8"
 junit = "5.12.2"
@@ -9,8 +9,8 @@ detekt = "2.0.0-alpha.3"
 # Published DuckLake catalog + corpus-replay coordinates (dev.brikk.ducklake). One ref drives both
 # ducklake-catalog and ducklake-test-corpus-replay (released in lockstep); the latter pulls
 # dev.brikk.ducklake:slt-format transitively at the same version. Bump in lockstep when consuming a
-# new catalog release; -SNAPSHOT resolves from the Central Portal snapshots repo.
-ducklake-catalog = "0.7.1"
+# new catalog release; releases resolve from Maven Central, snapshots from the Central Portal repo.
+ducklake-catalog = "0.11.0"
 # brikk-sql: TEST-ONLY DuckDB->Doris SQL transpiler for the corpus-replay dialect gate.
 # Releases on Maven Central; -SNAPSHOTs via the Central Portal snapshots repo (wired in
 # buildlogic.kotlin.brikk).

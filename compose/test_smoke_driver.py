@@ -265,7 +265,7 @@ class SmokeDriverTests(unittest.TestCase):
             "S3_SECRET=minioadmin", "S3_BUCKET=ducklake", f"S3_DATA_PREFIX={PREFIX}",
             "TPCH_SCHEMA=tpch", "TPCH_SCALE_FACTOR=0.01",
         ])
-        self.assertEqual(self.records[stage_indexes[4]]["duckdb_version"], "1.5.5")
+        self.assertEqual(self.records[stage_indexes[4]]["duckdb_version"], "1.5.6")
 
         helpers = [argv for argv in self.calls if "python:3.12-slim" in argv]
         helper_scripts = []

@@ -14,6 +14,12 @@ detail on the top items, papercuts kept short. Pin / build: [`../fe-patches/FE-P
 Sister docs: [`ducklake-doris-integration-spi-plan.md`](./ducklake-doris-integration-spi-plan.md),
 [`ducklake-doris-sanity-check.md`](./ducklake-doris-sanity-check.md), [`TODO-read.md`](./TODO-read.md).
 
+**Catalog follow-up (2026-10-10):** release **0.11.0** replaced the tested
+snapshot and passed Java-25/Java-17 checks and its own full isolated smoke
+on the same API-13 runtime, with DuckDB 1.5.6 / JDBC 1.5.6.0. O01 remains
+live-green; no additional friction item is closed by this dependency bump alone.
+See the [release validation report](VALIDATION-catalog-0.11.0-2026-10-10.md).
+
 ## Already fixed on master — validated live (context; the connector works end-to-end)
 - **`COUNT(<nullable col>)`** pushdown — correct on master (was non-deterministic garbage).
 - **Position-delete** OPTIONAL-column `[CORRUPTION]` — latest-snapshot Step-7 DELETE
