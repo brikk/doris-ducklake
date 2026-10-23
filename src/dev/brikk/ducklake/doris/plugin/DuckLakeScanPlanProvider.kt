@@ -3,6 +3,7 @@ package dev.brikk.ducklake.doris.plugin
 import java.util.Locale
 import java.util.Objects
 import java.util.Optional
+import java.util.function.Supplier
 
 import dev.brikk.ducklake.catalog.DucklakeCatalog
 import dev.brikk.ducklake.catalog.DucklakeColumn
@@ -75,12 +76,12 @@ internal class DuckLakeScanPlanProvider(
         session: ConnectorSession?,
         request: ConnectorScanRequest,
     ): List<ConnectorScanRange> =
-        planScanInternal(
+        catalog.readSession(Supplier { planScanInternal(
             handle = request.tableHandle,
             filter = request.filter,
             countPushdown = request.isCountPushdown,
             limit = request.limit,
-        )
+        ) })
 
     /**
      * Read back the delete-file paths one range carries on its `iceberg_params`,
@@ -138,6 +139,7 @@ internal class DuckLakeScanPlanProvider(
 
         val tableDataPath = pathResolver.resolveTableDataPath(schema, table)
         val dataFiles = catalog.getDataFiles(dlHandle.tableId, dlHandle.snapshotId)
+        failOnUnqualifiedFinal11Files(dlHandle, dataFiles)
 
         // Correctness gate (corpus stats/count_star_optimization_time_travel):
         // a partial (cross-snapshot compacted) data file physically holds rows
@@ -189,6 +191,35 @@ internal class DuckLakeScanPlanProvider(
         // prune was a real bug: `WHERE ...` returned empty for inlined tables.)
         ranges.addAll(planInlinedDataRanges(dlHandle))
         return ranges
+    }
+
+    /**
+     * No final-1.1 rollout is exposed by this connector yet. Even an explicitly
+     * opted-in catalog supplied by an embedding caller must not send tagged
+     * history/deletes to the ordinary Iceberg reader: partial_max is advisory,
+     * and that reader cannot select snapshot-tagged Puffin blobs or positions.
+     */
+    private fun failOnUnqualifiedFinal11Files(handle: DuckLakeTableHandle, files: List<DucklakeDataFile>) {
+        if (catalog.getSpecVersion() != "1.1") return
+        val reason = when {
+            files.isNotEmpty() && handle.snapshotId != catalog.currentSnapshotId ->
+                "DuckLake 1.1 historical file scans are not supported: embedded DATA/deletion " +
+                    "snapshot filtering is required even with NULL partial_max."
+            files.any { it.deleteFilePath != null } ->
+                "DuckLake 1.1 delete-file scans are not supported: tagged Parquet positions and bare/" +
+                    "snapshot-tagged cumulative Puffin vectors require a qualified decoder. " +
+                    "Equal paths do not imply an empty deletion window."
+            // Recheck at scan time as well as connector initialization: a
+            // long-lived legacy connector must not silently open a new tier
+            // after an external native format change.
+            files.isNotEmpty() ->
+                "DuckLake 1.1 DATA scans are not supported by the Doris connector; " +
+                    "a current untagged file or COUNT request does not enable the unqualified read tier."
+            else ->
+                "DuckLake 1.1 inlined/empty scans are not supported: no distributed FE-to-BE payload " +
+                    "channel is qualified; experimental.inlined.reads does not qualify shared storage."
+        }
+        throw DorisConnectorException(reason)
     }
 
     /**
@@ -451,6 +482,9 @@ internal class DuckLakeScanPlanProvider(
         filter: Optional<ConnectorExpression>,
         dataFiles: List<DucklakeDataFile>,
     ): Boolean {
+        // Raw final-1.1 bounds/counts are not a qualified exact aggregate or
+        // prefix-trimming contract, even when all advisory fields are present.
+        if (catalog.getSpecVersion() == "1.1") return false
         if (filter.isPresent || dlHandle.pushedFilter != null || dlHandle.prunedFileIds != null) {
             return false
         }
@@ -801,7 +835,7 @@ internal class DuckLakeScanPlanProvider(
         handle: ConnectorTableHandle,
         columns: List<ConnectorColumnHandle>,
         filter: Optional<ConnectorExpression>,
-    ): Map<String, String> {
+    ): Map<String, String> = catalog.readSession(Supplier {
         val out: MutableMap<String, String> = linkedMapOf()
         // Tell PluginDrivenScanNode which BE reader to dispatch (else it
         // defaults to FORMAT_JNI and the iceberg reader bails with
@@ -844,8 +878,8 @@ internal class DuckLakeScanPlanProvider(
         // data file". Mirrors the Paimon connector's path_partition_keys.
         pathPartitionKeysProp(dlHandle, dataFiles, hivePartitionColumnIds)
             ?.let { out[PROP_PATH_PARTITION_KEYS] = it }
-        return out
-    }
+        out
+    })
 
     /**
      * Base64 schema dictionary for the requested columns, carrying the union of

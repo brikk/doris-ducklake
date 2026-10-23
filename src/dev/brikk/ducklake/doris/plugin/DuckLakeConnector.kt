@@ -2,6 +2,7 @@ package dev.brikk.ducklake.doris.plugin
 
 import java.io.IOException
 import java.util.EnumSet
+import java.util.function.Supplier
 
 import dev.brikk.ducklake.catalog.DucklakeCatalogConfig
 import dev.brikk.ducklake.catalog.JdbcDucklakeCatalog
@@ -14,6 +15,7 @@ import org.apache.doris.connector.spi.procedure.ConnectorProcedureOps
 import org.apache.doris.connector.spi.scan.ConnectorScanPlanProvider
 import org.apache.doris.connector.spi.write.ConnectorWritePlanProvider
 import org.apache.doris.connector.spi.ConnectorContext
+import org.apache.doris.connector.spi.DorisConnectorException
 
 /**
  * Read-side DuckLake [Connector]. Owns a single [JdbcDucklakeCatalog]
@@ -170,7 +172,25 @@ class DuckLakeConnector internal constructor(
                 properties, DuckLakeConnectorProperties.STORAGE_WAREHOUSE,
             )
         }
-        return JdbcDucklakeCatalog(config)
+        val result = JdbcDucklakeCatalog(config)
+        var initialized = false
+        try {
+            result.readSession(Supplier { requireQualifiedFormat(result) })
+            initialized = true
+            return result
+        } finally {
+            if (!initialized) result.close()
+        }
+    }
+
+    private fun requireQualifiedFormat(result: JdbcDucklakeCatalog) {
+        if (result.getSpecVersion() == "1.1") {
+            throw DorisConnectorException(
+                "DuckLake 1.1 reads are not qualified by the Doris connector. " +
+                    "A library read opt-in is not connector scan/CDC qualification; " +
+                    "1.1 writes and automatic migration are also disabled.",
+            )
+        }
     }
 
     @Throws(IOException::class)

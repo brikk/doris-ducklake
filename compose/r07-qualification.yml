@@ -1,0 +1,57 @@
+# Disposable qualification only. No shared FE/BE warehouse mount, no shared services.
+name: doris-r07-qualification
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: r07
+      POSTGRES_PASSWORD: r07-local-only
+      POSTGRES_DB: r07
+    ports: ["127.0.0.1:15487:5432"]
+    networks: [r07]
+  minio:
+    image: minio/minio:RELEASE.2025-01-20T14-49-07Z
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: r07local
+      MINIO_ROOT_PASSWORD: r07-local-only
+    ports: ["127.0.0.1:19087:9000"]
+    networks: [r07]
+  fe:
+    image: doris-fe:ducklake-dd456ab7-api13
+    environment:
+      FE_SERVERS: fe1:172.30.87.10:9010
+      FE_ID: "1"
+    ports: ["127.0.0.1:19387:9030", "127.0.0.1:18087:8030"]
+    volumes:
+      - ${DORIS_R07_ROOT:?set isolated staging directory}/fe.conf:/opt/apache-doris/fe/conf/fe.conf
+      - ${DORIS_R07_ROOT:?set isolated staging directory}/plugin:/opt/apache-doris/fe/plugins/connector/ducklake:ro
+    networks:
+      r07:
+        ipv4_address: 172.30.87.10
+    healthcheck:
+      test: ["CMD-SHELL", "mysql -h127.0.0.1 -P9030 -uroot -e 'SHOW FRONTENDS' >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+  be:
+    image: doris-be:ducklake-dd456ab7-api13-asan
+    platform: linux/amd64
+    depends_on:
+      fe:
+        condition: service_healthy
+    environment:
+      FE_SERVERS: fe1:172.30.87.10:9020
+      BE_ADDR: 172.30.87.20:9050
+    networks:
+      r07:
+        ipv4_address: 172.30.87.20
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+networks:
+  r07:
+    ipam:
+      config: [{subnet: 172.30.87.0/24}]

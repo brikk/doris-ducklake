@@ -1,5 +1,11 @@
 # DuckLake-on-Doris — READ-path Working TODO
 
+**2026-10-23 R07 qualification: final-1.1 remains NO-GO.** The local catalog
+candidate trial and fail-closed guards do not complete this roadmap or certify
+mixed inline/file, historical tagged scans, Puffin, CDC, full statement planning
+budgets or leases. See [executed evidence and remaining gates](VALIDATION-R07-CANDIDATE-2026-10-23.md).
+Historical green counts below refer to the legacy lane, not 1.1.
+
 **Phase R of [`PLAN.md`](./PLAN.md)** ("read side Parquet fully") — collect
 read-path items here (SELECT, pushdown, deletes-on-read, time travel,
 statistics). Sibling todo files hold the other tracks:

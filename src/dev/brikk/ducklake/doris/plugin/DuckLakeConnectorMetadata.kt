@@ -205,6 +205,7 @@ internal class DuckLakeConnectorMetadata(
         handle: ConnectorTableHandle,
         constraint: ConnectorFilterConstraint,
     ): Optional<FilterApplicationResult<ConnectorTableHandle>> {
+        if (catalog.getSpecVersion() == "1.1") return Optional.empty()
         val dlHandle = handle.asDuckLakeHandle<DuckLakeTableHandle>()
         // Already applied on a prior fixed-point iteration → stop the loop.
         if (dlHandle.pushedFilter != null) {
@@ -365,6 +366,10 @@ internal class DuckLakeConnectorMetadata(
     // reporting current cardinality. Refining to the pushed-filter / pruned-file subset is a later
     // optimization (the planner applies filter selectivity on top).
     private fun statsAtSnapshot(tableId: Long, snapshotId: Long): Optional<ConnectorTableStatistics> {
+        // Final-1.1 file totals can include later rows AND later deletions. Neither
+        // gross counts nor unknown deletes justify an estimate or exact aggregate.
+        // This connector has no snapshot-aware fallback scanner for that tier yet.
+        if (catalog.getSpecVersion() == "1.1") return Optional.empty()
         if (snapshotId == catalog.currentSnapshotId) {
             val stats = catalog.getTableStats(tableId) ?: return Optional.empty()
             return Optional.of(ConnectorTableStatistics(stats.recordCount, stats.fileSizeBytes))

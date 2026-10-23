@@ -1,4 +1,6 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.security.MessageDigest
+import java.util.zip.ZipFile
 
 plugins {
     id("buildlogic.kotlin.library")
@@ -38,13 +40,13 @@ kotlin {
 // so the test classpath resolves it with no target-JVM conflict.
 //
 // Test-classpath ordering: the ~/.m2 fe-thrift (from `mvn install -P flatten`)
-// is a FAT jar that also bundles an OLD shaded `org.apache.parquet.format.*`
+// is a FAT jar that also bundles incompatible `org.apache.parquet.format.*`
 // (a PageHeader without `setData_page_header`), which shadows the real
 // parquet-format-structures-1.17.0 and breaks the inlined-data writer test with
-// a NoSuchMethodError. The FE's own fe-thrift (output/fe/lib) is slim (no
-// parquet), so this is a fat-m2-jar test artifact, not a runtime problem. The
-// test tasks below reorder parquet-format-structures ahead of fe-thrift so the
-// real classes win — see prependParquetFormat.
+// a NoSuchMethodError. The current API-13 FE ALSO has a fat fe-thrift, but its
+// classpath places parquet-format-structures-1.18.0 before it. Tests explicitly
+// place their real 1.17.0 first — see prependParquetFormat. That runtime/test
+// version difference is recorded by the R07 qualification, not silently upgraded.
 
 // The Doris fe-connector-api / spi artifacts are built from apache/doris `master` (the
 // connector SPI merged upstream via #64304) and installed into ~/.m2 — see
@@ -65,6 +67,70 @@ repositories {
 }
 
 val dorisVersion = "1.2-SNAPSHOT"
+
+// Local qualification only. Without this property the released 0.12.0 lane is unchanged.
+// Do not use maven.repo.local: Doris's exclusive FE/SPI repository above must stay intact.
+val r07Repository = providers.gradleProperty("r07CatalogRepository")
+val r07Version = "0.13.0-SNAPSHOT"
+if (r07Repository.isPresent) {
+    kotlin.sourceSets.test { kotlin.srcDir("test/r07") }
+    repositories.exclusiveContent {
+        forRepository {
+            repositories.maven {
+                name = "r07CatalogCandidate"
+                url = uri(r07Repository.get())
+                metadataSources { gradleMetadata(); mavenPom() }
+            }
+        }
+        filter {
+            listOf("ducklake-catalog", "slt-format", "ducklake-test-corpus-replay").forEach {
+                includeVersion("dev.brikk.ducklake", it, r07Version)
+            }
+        }
+    }
+    configurations.configureEach {
+        resolutionStrategy.eachDependency {
+            if (requested.group == "dev.brikk.ducklake" && requested.name in
+                setOf("ducklake-catalog", "slt-format", "ducklake-test-corpus-replay")) {
+                useVersion(r07Version)
+            }
+            if (requested.group == "org.duckdb" && requested.name == "duckdb_jdbc") {
+                useVersion("2.0.0.0")
+            }
+        }
+    }
+}
+
+val verifyR07Candidate by tasks.registering {
+    group = "verification"
+    description = "Attests resolved R07 runtime/fixture JAR bytes (local opt-in only)."
+    doLast {
+        check(r07Repository.isPresent) { "Set -Pr07CatalogRepository to the immutable candidate repository" }
+        val expected = mapOf(
+            "ducklake-catalog-$r07Version.jar" to "5af1a80adceb751a1ea616831953734a09d14d85ce632192b31f9c31b051bc84",
+            "ducklake-catalog-$r07Version-test-fixtures.jar" to "ca33bee56b33703ea7bbe7b76153bbaccc0275478fc992d48768eb912a1a056f",
+            "ducklake-test-corpus-replay-$r07Version.jar" to "c8f847d4ba8ca8509a8b3a47c709c1e86b34e50c2c4e3c824b79e1256cba85a4",
+            "slt-format-$r07Version.jar" to "6406d8fdf2ed16c7fd59465fbeeeb5d1f6e06274357bfd4b3516f779d2bfc409",
+            "duckdb_jdbc-2.0.0.0.jar" to "5170daa90a43296705127ef3c80834ba1cd275ec9d765a9f7eee346ab0087186",
+        )
+        val resolved = configurations.testRuntimeClasspath.get().files
+        expected.forEach { (name, hash) ->
+            val jar = resolved.single { it.name == name }
+            val actual = MessageDigest.getInstance("SHA-256")
+                .digest(jar.readBytes()).joinToString("") { "%02x".format(it) }
+            check(actual == hash) { "Candidate checksum mismatch: $jar ($actual)" }
+            println("R07 SHA256 $actual $jar")
+        }
+        check(resolved.none { it.name.matches(Regex("(ducklake-catalog|ducklake-test-corpus-replay|slt-format)-0\\.12\\.0.*")) })
+    }
+}
+
+tasks.withType<Test>().configureEach {
+    if (r07Repository.isPresent) {
+        dependsOn(verifyR07Candidate)
+        systemProperty("doris.r07", "true")
+    }
+}
 
 dependencies {
     // FE supplies this via the parent classloader at runtime — compile-only.
@@ -99,7 +165,8 @@ dependencies {
     // Inlined-data reads (DuckLakeInlinedParquetWriter): the FE synthesizes a
     // temp Parquet from catalog-inlined rows so the BE can scan them. Written
     // with parquet-avro (field_id-carrying), which is FE-supplied at runtime
-    // (output/fe/lib) — versions matched to the FE. compileOnly so the plugin
+    // (output/fe/lib). Compile/test pins stay 1.17.0; the current API-13 FE ships
+    // 1.18.0 (see R07 report). compileOnly so the plugin
     // jar ships no second copy of parquet/avro/hadoop.
     compileOnly("org.apache.parquet:parquet-avro:1.17.0")
     compileOnly("org.apache.parquet:parquet-hadoop:1.17.0")
@@ -176,6 +243,62 @@ dependencies {
 
 tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
+}
+
+val verifyJava17Runtime by tasks.registering {
+    description = "Checks main classes and every runtime JAR for the Doris Java 17 classfile floor."
+    group = "verification"
+    dependsOn(tasks.classes)
+    doLast {
+        fun major(bytes: ByteArray): Int = ((bytes[6].toInt() and 255) shl 8) or (bytes[7].toInt() and 255)
+        var classes = 0
+        val lines = mutableListOf<String>()
+        sourceSets.main.get().output.classesDirs.files.filter { it.exists() }.forEach { directory ->
+            directory.walkTopDown().filter { it.extension == "class" }.forEach {
+                val version = major(it.readBytes())
+                check(version <= 61) { "Java >17 class: $it ($version)" }
+                classes++
+            }
+        }
+        configurations.runtimeClasspath.get().files.filter { it.extension == "jar" }.forEach { jar ->
+            var maximum = 0
+            ZipFile(jar).use { zip ->
+                zip.entries().asSequence().filter { it.name.endsWith(".class") }.forEach { entry ->
+                    val mrVersion = Regex("META-INF/versions/(\\d+)/.*").matchEntire(entry.name)
+                        ?.groupValues?.get(1)?.toInt()
+                    if (mrVersion == null || mrVersion <= 17) {
+                        val version = zip.getInputStream(entry).use { major(it.readNBytes(8)) }
+                        check(version <= 61) { "Java >17 class: $jar!${entry.name} ($version)" }
+                        maximum = maxOf(maximum, version)
+                        classes++
+                    }
+                }
+            }
+            lines.add("${jar.name} max=$maximum")
+        }
+        lines.add("Java17 runtime PASS: $classes classes")
+        val report = layout.buildDirectory.file("reports/java17-runtime.txt").get().asFile
+        report.parentFile.mkdirs()
+        report.writeText(lines.joinToString("\n", postfix = "\n"))
+        println(lines.last())
+    }
+}
+
+tasks.check { dependsOn(verifyJava17Runtime) }
+
+tasks.register("qualificationDependencies") {
+    description = "Records exact runtime and test-runtime coordinates for reversible qualification comparisons."
+    group = "verification"
+    doLast {
+        val report = layout.buildDirectory.file("reports/qualification-dependencies.txt").get().asFile
+        report.parentFile.mkdirs()
+        report.writeText(listOf("runtimeClasspath", "testRuntimeClasspath").joinToString("\n") { name ->
+            val artifacts = configurations.getByName(name).resolvedConfiguration.resolvedArtifacts
+                .map { "${it.moduleVersion.id} ${it.file.name}" }.sorted()
+            "[$name]\n" + artifacts.joinToString("\n", postfix = "\n")
+        })
+        println("Resolved dependency report: $report")
+    }
 }
 
 // #66211 (doris branch-catalog-spi 88abe41a4e3, "replace the always-true connector apiVersion()
@@ -259,7 +382,44 @@ fun prependParquetFormat(base: FileCollection): FileCollection {
 
 tasks.test {
     exclude("**/DorisCorpusReplayTest*")
+    exclude("**/DuckLakeR07QualificationTest*")
+    exclude("**/DuckLakeR07LiveQualificationTest*")
     classpath = prependParquetFormat(classpath)
+}
+
+tasks.register<Test>("java17PluginTest") {
+    description = "Plugin tests at the FE Java 17 runtime; test-only brikk-sql corpus tooling requires Java 25."
+    group = "verification"
+    testClassesDirs = sourceSets.test.get().output.classesDirs
+    classpath = prependParquetFormat(sourceSets.test.get().runtimeClasspath)
+    javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(17)) })
+    useJUnitPlatform()
+    include("**/plugin/*Test*")
+    exclude("**/DuckLakeR07QualificationTest*")
+    exclude("**/DuckLakeR07LiveQualificationTest*")
+}
+
+if (r07Repository.isPresent) {
+    tasks.register<Test>("r07ReadQualificationTest") {
+        description = "Targeted native R07 consumer probes; no corpus campaign or deployment."
+        group = "verification"
+        testClassesDirs = sourceSets.test.get().output.classesDirs
+        classpath = prependParquetFormat(sourceSets.test.get().runtimeClasspath)
+        javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(17)) })
+        useJUnitPlatform()
+        include("**/DuckLakeR07QualificationTest*")
+        outputs.upToDateWhen { false }
+    }
+    tasks.register<Test>("r07LiveQualificationTest") {
+        description = "Read-only connector probes against compose/r07-qualification.yml (explicit local trial)."
+        group = "verification"
+        testClassesDirs = sourceSets.test.get().output.classesDirs
+        classpath = prependParquetFormat(sourceSets.test.get().runtimeClasspath)
+        javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(17)) })
+        useJUnitPlatform()
+        include("**/DuckLakeR07LiveQualificationTest*")
+        outputs.upToDateWhen { false }
+    }
 }
 
 val corpusReplayTest by tasks.registering(Test::class) {

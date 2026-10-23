@@ -25,11 +25,11 @@ import org.assertj.core.api.Assertions.assertThat
  * text-form conversions jOOQ can hand back (blob `\xNN`, non-finite floats,
  * decimals). Pure — no cluster.
  *
- * Runs on JDK 17 (the `:doris-ducklake:test` task's launcher, matching the
- * Doris FE runtime), so parquet-format's shaded thrift is ABI-consistent — the
- * same environment the writer runs in inside the FE. (On a JDK 25 launcher the
- * shaded-thrift `PageHeader.setData_page_header` ABI break would appear; that
- * never happens on the FE's 17.)
+ * Runs on both the normal Java-25 test lane and java17PluginTest (the FE
+ * runtime). The PageHeader ABI issue was classpath shadowing, NOT the JDK:
+ * Maven-local's fat fe-thrift bundles incompatible generated Parquet classes. Both tasks prepend
+ * the real parquet-format-structures 1.17.0. The current FE also has fat
+ * fe-thrift, but its runtime classpath puts Parquet 1.18.0 before that jar.
  */
 internal class DuckLakeInlinedParquetWriterTest {
 

@@ -51,7 +51,7 @@ object DuckLakeTestCatalogBootstrap {
                 statement.execute("LOAD postgres")
                 statement.execute(
                     "ATTACH '" + escape(attachUri) + "' AS dl (DATA_PATH '" +
-                        escape(dataDir.toAbsolutePath().toString()) + "')",
+                        escape(dataDir.toAbsolutePath().toString()) + "'" + legacyFormatOptions() + ")",
                 )
 
                 statement.execute("CREATE SCHEMA dl.sales")
@@ -133,6 +133,15 @@ object DuckLakeTestCatalogBootstrap {
             dataDir,
         )
     }
+
+    // The legacy 1.5.6 peer does not recognize DUCKLAKE_VERSION. Preserve its
+    // existing 1.0 bootstrap SQL; only the explicit locked 2.0 trial needs a pin.
+    internal fun legacyFormatOptions(): String =
+        if (java.lang.Boolean.getBoolean("doris.r07")) {
+            ", DUCKLAKE_VERSION '1.0', AUTOMATIC_MIGRATION FALSE"
+        } else {
+            ""
+        }
 
     @Throws(Exception::class)
     private fun recreateDirectory(directory: Path) {

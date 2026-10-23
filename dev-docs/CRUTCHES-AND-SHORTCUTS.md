@@ -10,6 +10,26 @@ Verdict up front: **one feature is a genuine dev-only crutch (now hard-blocked
 by default); the rest are either deliberate documented degradations that fail
 LOUD, or compose test-harness config, not connector behavior.**
 
+## R07 final-1.1 qualification boundary (2026-10-23)
+
+**No Doris 1.1 rollout is qualified.** Reader construction explicitly refuses
+final-1.1 before exposing metadata, write plans or maintenance. Merely resolving
+a table handle with the library flag off was not a safe admission check.
+The released 0.12.0 dependency remains the default; a checksum-locked local
+0.13.0-SNAPSHOT trial requires `-Pr07CatalogRepository=...`.
+
+For explicitly injected opt-in catalogs in qualification tests, the planner
+additionally refuses historical file scans regardless of nullable `partial_max`,
+all final-1.1 delete-file scans (tagged Parquet and both Puffin shapes), and live
+inline rows even with the old dev flag. Current DATA scans are also refused:
+a long-lived legacy connector cannot silently open 1.1 after an external format
+change. It emits no final-1.1 exact metadata
+COUNT/LIMIT trimming, pruning or gross row-count estimate. These guards are not
+an alternative public 1.1 opt-in. The existing dev-only inline channel and absence
+of CDC are blockers, not new distributed functionality. Each scan-provider call
+now owns a read session; this does not supply a statement-wide FE session,
+complete companion traversal budgets or physical-file leases.
+
 ## 1. Genuine crutch — inlined-data reads (HARD-BLOCKED by default)
 
 - **What:** reading DuckLake inlined rows (`ducklake_inlined_data_*`) works by
@@ -113,8 +133,11 @@ DEFAULT smoke check now fails nonzero and retains the failed fixture.
   assume-skipped). The failure was NOT a JDK issue: the fat `~/.m2` fe-thrift
   (`mvn install -P flatten`) bundles a stale shaded `org.apache.parquet.format.*`
   that shadowed the real `parquet-format-structures-1.17.0` on the test
-  classpath (`NoSuchMethodError: PageHeader.setData_page_header`). The FE's own
-  fe-thrift is slim (no parquet), so it never affected runtime. Fixed by
+   classpath (`NoSuchMethodError: PageHeader.setData_page_header`). The old
+   slim-FE explanation does NOT describe the current API-13 image: the R07
+   audit finds 382 bundled Parquet classes in BOTH Maven-local and live FE
+   fe-thrift, with identical PageHeader bytes. Runtime classpath order puts
+   real parquet-format-structures 1.18.0 before fe-thrift. Tests are fixed by
   reordering `parquet-format-structures` ahead of fe-thrift on the test
   classpath (`prependParquetFormat`) + adding the `hadoop-mapreduce-client-core`
   test dep parquet-hadoop needs. The writer round-trip now has real unit

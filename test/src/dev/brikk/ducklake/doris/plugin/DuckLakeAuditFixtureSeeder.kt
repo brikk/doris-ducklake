@@ -53,7 +53,8 @@ object DuckLakeAuditFixtureSeeder {
                 statement.execute("LOAD postgres")
                 statement.execute(
                     "ATTACH '" + escape(attachUri) + "' AS dl (DATA_PATH '" +
-                        escape(dataDir.toAbsolutePath().toString()) + "')",
+                        escape(dataDir.toAbsolutePath().toString()) + "'" +
+                        DuckLakeTestCatalogBootstrap.legacyFormatOptions() + ")",
                 )
                 for (sql in statements) {
                     statement.execute(sql)
