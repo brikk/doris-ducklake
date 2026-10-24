@@ -15,6 +15,8 @@ internal class DuckLakeReadBudget(properties: Map<String, String>) {
     private var text = 4_194_304L
     private val started = System.nanoTime()
     private val millis = limit(properties, "millis", 30_000)
+    // JDBC's API is whole seconds; the original millisecond budget still rejects late output.
+    val queryTimeoutSeconds = (millis + 999) / 1000
     private var captured = false
 
     init { require(historyWindow in 0..16) { "final11.history-window must be 0..16 (0=current only)" } }

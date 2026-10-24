@@ -91,4 +91,11 @@ internal class DuckLakeR07FormatTest {
         val cancelled = java.util.concurrent.CancellationException("cancelled")
         assertThat(DuckLakeFinal11.planningFailure(cancelled)).isSameAs(cancelled)
     }
+
+    @Test fun jdbcDeadlineRoundsUpWithoutRaisingTheTotalPlanningBudget() {
+        assertThat(DuckLakeReadBudget(emptyMap()).queryTimeoutSeconds).isEqualTo(30)
+        assertThat(DuckLakeReadBudget(mapOf("final11.max-planning-millis" to "1")).queryTimeoutSeconds).isEqualTo(1)
+        assertThat(DuckLakeReadBudget(mapOf("final11.max-planning-millis" to "1001")).queryTimeoutSeconds).isEqualTo(2)
+        assertThatThrownBy { DuckLakeReadBudget(mapOf("final11.max-planning-millis" to "30001")) }.hasMessageContaining("Invalid")
+    }
 }

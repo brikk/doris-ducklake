@@ -9,6 +9,7 @@ import dev.brikk.ducklake.catalog.DucklakeOwnedFile
 import dev.brikk.ducklake.catalog.DucklakePartitionSpec
 import dev.brikk.ducklake.catalog.DucklakeQualifiedSchema
 import dev.brikk.ducklake.catalog.DucklakeQualifiedTable
+import dev.brikk.ducklake.catalog.DucklakeReadSessionControl
 import dev.brikk.ducklake.catalog.DucklakeSchema
 import dev.brikk.ducklake.catalog.DucklakeSnapshot
 import dev.brikk.ducklake.catalog.DucklakeTable
@@ -123,9 +124,14 @@ internal class DuckLakeFinal11Plan private constructor(
     companion object {
         private fun key(name: String) = name.map { if (it in 'A'..'Z') it.lowercaseChar() else it }.joinToString("")
 
-        fun capture(c: JdbcDucklakeCatalog, properties: Map<String, String>, objects: DuckLakeReadObjects): DuckLakeFinal11Plan {
+        fun capture(
+            c: JdbcDucklakeCatalog, properties: Map<String, String>, objects: DuckLakeReadObjects,
+            control: DucklakeReadSessionControl? = null,
+        ): DuckLakeFinal11Plan {
             val budget = DuckLakeReadBudget(properties)
-            return c.readSession(Supplier {
+            val owned = control ?: DucklakeReadSessionControl(budget.queryTimeoutSeconds)
+            require(owned.timeoutSeconds <= budget.queryTimeoutSeconds) { "Read control cannot extend the planning deadline" }
+            return c.readSession(owned, Supplier {
                 val snapshot = header(c, budget)
                 val capture = Capture(c, snapshot, budget, DuckLakeFinal11Files(objects, budget))
                 val current = capture.build()

@@ -1,5 +1,9 @@
 # R07 Doris implementation on the fixed candidate — October 24
 
+Subsequent controlled-session / decoded-default qualification is recorded in
+[the continuation report](VALIDATION-R07-CONTROL-DEFAULTS-2026-10-24.md).
+Hashes and commands below describe this earlier immutable checkpoint.
+
 ## Scope and decision boundary
 
 This continues `a700166`, rather than treating its NO-GO/refusal report as an

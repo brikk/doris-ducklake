@@ -18,6 +18,9 @@ build, including current and qualified recent-history scans. This supersedes
 the refusal-only checkpoint below, not the no-production/no-write boundary.
 Distributed inline payloads, required per-row historical filters and CDC remain
 closed. The new tier does not use the old temp-Parquet/shared-filesystem crutch.
+The [controlled-capture continuation](VALIDATION-R07-CONTROL-DEFAULTS-2026-10-24.md)
+adds real JDBC deadlines; API-13 still has no in-flight metadata cancellation
+registration. Scope-end cleanup is not treated as a cancellation hook.
 The API-13 engine does expose an owned filesystem; that is not a query row-payload
 transport and is not permission to stage scratch objects or clean up lake files.
 

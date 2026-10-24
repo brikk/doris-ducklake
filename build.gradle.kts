@@ -109,7 +109,7 @@ val verifyR07Candidate by tasks.registering {
     doLast {
         check(r07Repository.isPresent) { "Set -Pr07CatalogRepository to the immutable candidate repository" }
         val expected = mapOf(
-            "ducklake-catalog-$r07Version.jar" to "5af1a80adceb751a1ea616831953734a09d14d85ce632192b31f9c31b051bc84",
+            "ducklake-catalog-$r07Version.jar" to "d579fe355abc03f658b74dad7e991aca9cb4e54f1b4830c6af51ba930beb4ead",
             "ducklake-catalog-$r07Version-test-fixtures.jar" to "ca33bee56b33703ea7bbe7b76153bbaccc0275478fc992d48768eb912a1a056f",
             "ducklake-test-corpus-replay-$r07Version.jar" to "c8f847d4ba8ca8509a8b3a47c709c1e86b34e50c2c4e3c824b79e1256cba85a4",
             "slt-format-$r07Version.jar" to "6406d8fdf2ed16c7fd59465fbeeeb5d1f6e06274357bfd4b3516f779d2bfc409",

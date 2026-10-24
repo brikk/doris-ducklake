@@ -432,6 +432,129 @@ internal class DuckLakeR07LiveQualificationTest {
     )
 
     @Test
+    @org.junit.jupiter.api.Timeout(90)
+    fun controlledProductionCaptureInterruptsLockedPostgresAndOneConnectionRecovers() {
+        ensureBucket()
+        val (db, path) = produce("1.1")
+        val props = hostProperties(db, path)
+        val context = dev.brikk.ducklake.doris.plugin.cache.FakeConnectorContext("controlled", 811L)
+        val config = dev.brikk.ducklake.catalog.DucklakeCatalogConfig().apply {
+            catalogDatabaseUrl = props.getValue("metadata.url")
+            catalogDatabaseUser = "r07"
+            catalogDatabasePassword = "r07-local-only"
+            dataPath = path
+            maxCatalogConnections = 1
+            enableFinal11Reads = true
+        }
+        dev.brikk.ducklake.catalog.JdbcDucklakeCatalog(config).use { catalog ->
+            DuckLakeReadObjects(props, context.httpSecurityHook).use { objects ->
+                val original = DuckLakeFinal11Plan.capture(catalog, props, objects).invoke("getCurrentSnapshotId", emptyArray())
+                for (explicit in listOf(true, false)) {
+                    val seconds = if (explicit) 20 else 3
+                    val control = dev.brikk.ducklake.catalog.DucklakeReadSessionControl(seconds)
+                    val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+                    pg(db).use { lock ->
+                        lock.autoCommit = false
+                        lock.createStatement().use { it.execute("LOCK TABLE ducklake_snapshot IN ACCESS EXCLUSIVE MODE") }
+                        try {
+                            val started = System.nanoTime()
+                            val future = executor.submit<Throwable?> {
+                                org.assertj.core.api.Assertions.catchThrowable {
+                                    DuckLakeFinal11Plan.capture(catalog, props + ("final11.max-planning-millis" to "${seconds * 1000}"), objects, control)
+                                }
+                            }
+                            awaitLockedMetadata(db)
+                            if (explicit) assertThat(control.cancel()).isTrue()
+                            // The lock is STILL held: success cannot be attributed to fixture unlock.
+                            val failure = future.get(10, java.util.concurrent.TimeUnit.SECONDS)
+                            assertThat(failure).isNotNull()
+                            val driver = generateSequence(failure) { it.cause }.filterIsInstance<org.postgresql.util.PSQLException>().first()
+                            assertThat(driver.sqlState).isEqualTo("57014")
+                            assertThat(driver.message).contains("canceling statement")
+                            println("CONTROLLED production capture explicit=$explicit stopped BEFORE unlock after ${(System.nanoTime() - started) / 1_000_000}ms; cause=$driver")
+                        } finally {
+                            lock.rollback()
+                            executor.shutdownNow()
+                            check(executor.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS))
+                        }
+                    }
+                    // A completed control must not cancel the next borrower of the sole connection.
+                    assertThat(control.cancel()).isFalse()
+                    val fresh = DuckLakeFinal11Plan.capture(catalog, props, objects)
+                    assertThat(fresh.invoke("getCurrentSnapshotId", emptyArray())).isEqualTo(original)
+                }
+            }
+        }
+    }
+
+    private fun pg(db: String): Connection = DriverManager.getConnection(
+        "jdbc:postgresql://127.0.0.1:15487/$db", "r07", "r07-local-only",
+    )
+
+    private fun awaitLockedMetadata(db: String) {
+        val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5)
+        pg(db).use { observer ->
+            while (System.nanoTime() < deadline) {
+                val waiting = rows(observer, "SELECT COUNT(*) FROM pg_stat_activity WHERE datname=current_database() " +
+                    "AND pid<>pg_backend_pid() AND wait_event_type='Lock' AND query LIKE '%ducklake_snapshot%' AND query NOT LIKE 'LOCK TABLE%'")
+                if (waiting == listOf(listOf("1"))) return
+                Thread.sleep(25)
+            }
+        }
+        error("No actual catalog metadata statement observed waiting on fixture lock")
+    }
+
+    @Test
+    @org.junit.jupiter.api.Timeout(90)
+    fun adapterMemoizesLockedStatementTimeoutAndFeReportsDriverCauseBeforeUnlock() {
+        ensureBucket()
+        val (db, path) = produce("1.1")
+        val props = hostProperties(db, path) + ("final11.max-planning-millis" to "3000")
+        val context = dev.brikk.ducklake.doris.plugin.cache.FakeConnectorContext("deadline", 811L)
+        DuckLakeConnectorProvider().create(props, context).use { connector ->
+            val scope = Scope()
+            val session = session(scope, "locked-metadata")
+            val metadata = connector.getMetadata(session)
+            pg(db).use { lock ->
+                lock.autoCommit = false
+                lock.createStatement().use { it.execute("LOCK TABLE ducklake_snapshot IN ACCESS EXCLUSIVE MODE") }
+                try {
+                    val failure = org.assertj.core.api.Assertions.catchThrowable { metadata.getTableHandle(session, "main", "t") }
+                    assertThat(generateSequence(failure) { it.cause }.filterIsInstance<org.postgresql.util.PSQLException>().first().sqlState)
+                        .isEqualTo("57014")
+                    assertThat(org.assertj.core.api.Assertions.catchThrowable { connector.getMetadata(session).listDatabaseNames(session) })
+                        .isSameAs(failure)
+                    assertThat(scope.plans).isEqualTo(1)
+                    println("ADAPTER locked metadata timeout retains driver cause; same statement memoizes original failure BEFORE unlock: $failure")
+                } finally { lock.rollback() }
+            }
+            val next = session(Scope(), "recovered-metadata")
+            assertThat(connector.getMetadata(next).getTableHandle(next, "main", "t")).isPresent()
+        }
+        fe().use { c ->
+            val name = register(c, db, path, ", \"experimental.final11.reads\"=\"true\", \"final11.max-planning-millis\"=\"3000\"")
+            assertThat(rows(c, "SELECT i FROM $name.main.t ORDER BY i")).containsExactly(listOf("1"), listOf("2"), listOf("3"))
+            pg(db).use { lock ->
+                lock.autoCommit = false
+                lock.createStatement().use { it.execute("LOCK TABLE ducklake_snapshot IN ACCESS EXCLUSIVE MODE") }
+                try {
+                    val start = System.nanoTime()
+                    val failure = org.assertj.core.api.Assertions.catchThrowable { rows(c, "SELECT i FROM $name.main.t ORDER BY i") }
+                    assertThat(failure).isInstanceOf(java.sql.SQLException::class.java)
+                        .hasMessageContaining("canceling statement").hasMessageNotContaining("UndeclaredThrowableException")
+                    assertThat((System.nanoTime() - start) / 1_000_000).isLessThan(9000)
+                    println("FE controlled metadata SQL stopped BEFORE unlock: ${failure.message}")
+                } finally { lock.rollback() }
+            }
+            assertThat(rows(c, "SELECT i FROM $name.main.t ORDER BY i")).containsExactly(listOf("1"), listOf("2"), listOf("3"))
+        }
+        pg(db).use { c ->
+            assertThat(rows(c, "SELECT COUNT(*) FROM pg_stat_activity WHERE datname=current_database() AND state='idle in transaction'"))
+                .containsExactly(listOf("0"))
+        }
+    }
+
+    @Test
     fun oneOwnedStatementPlanSurvivesPublicationAndBudgetFailuresAreMemoized() {
         ensureBucket()
         val (db, path) = produce("1.1")
