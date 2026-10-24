@@ -18,12 +18,14 @@ internal class DuckLakeFinal11Files(private val objects: DuckLakeReadObjects, pr
             val t = c.columnType.lowercase()
             if (c.parentColumn != null || (t !in TYPES && !DECIMAL.matches(t))) return "Final-1.1 file type $t is not qualified (no degraded types)"
             if (DECIMAL.matchEntire(t)?.groupValues?.get(1)?.toInt()?.let { it > 38 } == true) return "Final-1.1 decimal exceeds lossless Doris precision"
-            if (c.initialDefault != null && t !in DEFAULT_TYPES && !DECIMAL.matches(t)) return "Final-1.1 initial default for $t is not qualified"
         }
         return null
     }
 
-    fun data(file: DucklakeDataFile, path: String, columns: List<DucklakeColumn>, snapshot: Long) {
+    fun data(
+        file: DucklakeDataFile, path: String, columns: List<DucklakeColumn>, snapshot: Long,
+        missing: (DucklakeColumn) -> Unit,
+    ) {
         require(file.fileFormat.equals("parquet", true) && file.mappingId == null) {
             "Final-1.1 requires native field-ID Parquet (add_files mappings not qualified)"
         }
@@ -39,8 +41,8 @@ internal class DuckLakeFinal11Files(private val objects: DuckLakeReadObjects, pr
             budget.step()
             val field = fields[column.columnId.toInt()]
             if (field == null) {
-                check(column.initialDefault != null || column.nullsAllowed) { "Missing required field without an initial default" }
-                column.initialDefault?.let { validateDefault(column, it) }
+                // Stable-ID absence is proved here, never inferred from a stored NULL or name.
+                missing(column)
             } else {
                 DuckLakeScalarFileTypes.check(column, field, footer, budget)
             }
@@ -119,35 +121,11 @@ internal class DuckLakeFinal11Files(private val objects: DuckLakeReadObjects, pr
         }
     }
 
-    private fun validateDefault(column: DucklakeColumn, value: String) {
-        check(value.length <= 4096) { "Initial default exceeds budget" }
-        val t = column.columnType.lowercase()
-        when {
-            t == "boolean" -> check(value in setOf("true", "false")) { "Unqualified Boolean initial default" }
-            t.startsWith("int") -> {
-                check(Regex("[-+]?\\d{1,20}").matches(value)) { "Unqualified integer initial default" }
-                val n = value.toBigInteger()
-                val bits = t.removePrefix("int").toInt()
-                check(n >= java.math.BigInteger.ONE.shiftLeft(bits - 1).negate() && n < java.math.BigInteger.ONE.shiftLeft(bits - 1)) {
-                    "Initial default overflow"
-                }
-            }
-            DECIMAL.matches(t) -> {
-                check(Regex("[-+]?\\d{1,38}(\\.\\d{1,38})?").matches(value)) { "Unqualified decimal initial default" }
-                val m = DECIMAL.matchEntire(t)!!
-                val n = value.toBigDecimal().setScale(m.groupValues[2].toInt(), java.math.RoundingMode.UNNECESSARY)
-                check(n.precision() <= m.groupValues[1].toInt()) { "Decimal initial default overflow" }
-            }
-            else -> error("Unqualified initial default")
-        }
-    }
-
     companion object {
         private const val SNAPSHOT_ID = "_ducklake_internal_snapshot_id"
         private const val ROW_ID = "_ducklake_internal_row_id"
         private val TYPES = setOf("boolean", "int8", "int16", "int32", "int64", "float32", "float64",
             "varchar", "blob", "date", "timestamp", "timestamp_s", "timestamp_ms")
-        private val DEFAULT_TYPES = setOf("boolean", "int8", "int16", "int32", "int64")
         private val DECIMAL = Regex("decimal\\((\\d+),\\s*(\\d+)\\)")
 
         internal fun vectorSlice(bytes: ByteArray, snapshot: Long): Pair<Int, Int> {

@@ -303,7 +303,9 @@ internal class DuckLakeR07LiveQualificationTest {
             "'2024-02-29 12:34:56.123456'::TIMESTAMP,'2024-02-29 12:34:56'::TIMESTAMP_S,'2024-02-29 12:34:56.123'::TIMESTAMP_MS)," +
             "(false,127,-32768,-9223372036854775808,-1.5,-2.25,-0.01,NULL,NULL,NULL)," +
             "(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL)")
-        mutate(db, path, "ALTER TABLE lake.scalars ADD COLUMN flag BOOLEAN DEFAULT true; ALTER TABLE lake.scalars ADD COLUMN dflt DECIMAL(5,2) DEFAULT 12.34")
+        mutate(db, path, "ALTER TABLE lake.scalars ADD COLUMN flag BOOLEAN DEFAULT true; ALTER TABLE lake.scalars ADD COLUMN dflt DECIMAL(5,2) DEFAULT 12.34; " +
+            "ALTER TABLE lake.scalars ADD COLUMN sd TIMESTAMP_S DEFAULT TIMESTAMP_S '2024-02-29 12:34:56'; " +
+            "ALTER TABLE lake.scalars ADD COLUMN md TIMESTAMP_MS DEFAULT TIMESTAMP_MS '2024-02-29 12:34:56.123'")
         mutate(db, path, "CREATE TABLE lake.widen(i INTEGER,f REAL); INSERT INTO lake.widen VALUES(123,1.2345678); " +
             "ALTER TABLE lake.widen ALTER COLUMN i TYPE BIGINT; ALTER TABLE lake.widen ALTER COLUMN f TYPE DOUBLE")
         mutate(db, path, "CREATE TABLE lake.replace_id(i INTEGER,k INTEGER); INSERT INTO lake.replace_id VALUES(1,888); " +
@@ -314,9 +316,10 @@ internal class DuckLakeR07LiveQualificationTest {
             val pattern = "%Y-%m-%d %H:%i:%s.%f"
             assertThat(rows(c, "SELECT CAST(b AS INT),i8,i16,i64,CAST(f AS STRING),CAST(d AS STRING),CAST(n AS STRING)," +
                 "DATE_FORMAT(ts,'$pattern'),DATE_FORMAT(secs,'$pattern'),DATE_FORMAT(millis,'$pattern')," +
-                "CAST(flag AS INT),CAST(dflt AS STRING) FROM $catalog.main.scalars WHERE b"))
+                "CAST(flag AS INT),CAST(dflt AS STRING),DATE_FORMAT(sd,'$pattern'),DATE_FORMAT(md,'$pattern') FROM $catalog.main.scalars WHERE b"))
                 .containsExactly(listOf("1", "-128", "32767", "9223372036854775807", "1.25", "2.5", "1234567890.12",
-                    "2024-02-29 12:34:56.123456", "2024-02-29 12:34:56.000000", "2024-02-29 12:34:56.123000", "1", "12.34"))
+                    "2024-02-29 12:34:56.123456", "2024-02-29 12:34:56.000000", "2024-02-29 12:34:56.123000", "1", "12.34",
+                    "2024-02-29 12:34:56.000000", "2024-02-29 12:34:56.123000"))
             assertThat(rows(c, "SELECT COUNT(*),COUNT(b),COUNT(ts),SUM(CAST(flag AS INT)) FROM $catalog.main.scalars"))
                 .containsExactly(listOf("3", "2", "1", "3"))
             assertThat(rows(c, "SELECT i8,i16,i64 FROM $catalog.main.scalars WHERE NOT b"))
@@ -607,6 +610,70 @@ internal class DuckLakeR07LiveQualificationTest {
             }
             assertThat(rows(c, "SELECT 1")).containsExactly(listOf("1"))
             println("FE JDBC query-timeout cancellation/recovery PASS; not metadata-session or file-lease recovery")
+        }
+    }
+
+    @Test
+    fun decodedOldFileDefaultsPreserveHistoryReplacementIdentityAndStoredNullsInBe() {
+        ensureBucket()
+        val (db, path) = produce("1.1")
+        mutate(db, path, "CREATE TABLE lake.evolved(i INTEGER,k INTEGER); INSERT INTO lake.evolved VALUES(1,888); " +
+            "ALTER TABLE lake.evolved DROP COLUMN k; ALTER TABLE lake.evolved ADD COLUMN k INTEGER DEFAULT 42; " +
+            "ALTER TABLE lake.evolved ADD COLUMN s VARCHAR DEFAULT 'NULL'; " +
+            "ALTER TABLE lake.evolved ADD COLUMN sn VARCHAR DEFAULT NULL; " +
+            "ALTER TABLE lake.evolved ADD COLUMN b BLOB DEFAULT '\\x00\\x5C\\xFF'::BLOB; " +
+            "ALTER TABLE lake.evolved ADD COLUMN d DATE DEFAULT DATE '2024-02-29'; " +
+            "ALTER TABLE lake.evolved ADD COLUMN ts TIMESTAMP DEFAULT TIMESTAMP '1969-12-31 23:59:59.123456'; " +
+            "ALTER TABLE lake.evolved ADD COLUMN z DECIMAL(20,3) DEFAULT 12345678901234567.125; " +
+            "ALTER TABLE lake.evolved ADD COLUMN q VARCHAR DEFAULT '42''); DROP TABLE ducklake_snapshot; --'; " +
+            "ALTER TABLE lake.evolved ADD COLUMN slash VARCHAR DEFAULT '\\x41é'")
+        val before = snapshot(db)
+        mutate(db, path, "ALTER TABLE lake.evolved RENAME COLUMN k TO renamed; " +
+            "ALTER TABLE lake.evolved ALTER COLUMN renamed TYPE BIGINT; " +
+            "ALTER TABLE lake.evolved ALTER COLUMN renamed SET DEFAULT 77; " +
+            "ALTER TABLE lake.evolved ALTER COLUMN s SET DEFAULT 'later'; " +
+            "INSERT INTO lake.evolved VALUES(2,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL); " +
+            "INSERT INTO lake.evolved(i) VALUES(3)")
+        println("DECODED DEFAULT retained comparison fixture database=$db path=$path historical=$before")
+        fe().use { c ->
+            val catalog = register(c, db, path, ", \"experimental.final11.reads\"=\"true\", \"final11.history-window\"=\"16\"")
+            val literal = "42'); DROP TABLE ducklake_snapshot; --"
+            val tail = listOf("005CFF", "2024-02-29", "1969-12-31 23:59:59.123456", "12345678901234567.125", literal, "5C783431C3A9")
+            val projection = "i,renamed,s,sn,HEX(b),CAST(d AS STRING),DATE_FORMAT(ts,'%Y-%m-%d %H:%i:%s.%f'),CAST(z AS STRING),q,HEX(slash)"
+            val actual = rows(c, "SELECT $projection FROM $catalog.main.evolved ORDER BY i")
+            assertThat(actual).containsExactly(listOf("1", "42", "NULL", null) + tail,
+                listOf("2") + List(9) { null }, listOf("3", "77", "later", null) + tail)
+            val historical = rows(c, "SELECT ${projection.replace("renamed", "k")} FROM $catalog.main.evolved FOR VERSION AS OF $before ORDER BY i")
+            assertThat(historical).containsExactly(listOf("1", "42", "NULL", null) + tail)
+            assertThat(rows(c, "SELECT COUNT(*),COUNT(renamed),COUNT(s),COUNT(b),SUM(renamed) FROM $catalog.main.evolved"))
+                .containsExactly(listOf("3", "2", "2", "2", "119"))
+            assertThat(rows(c, "SELECT i FROM $catalog.main.evolved WHERE renamed IS NULL AND s IS NULL AND b IS NULL"))
+                .containsExactly(listOf("2"))
+            println("ACTUAL DECODED DEFAULT FE/BE current=$actual historical=$historical; stored NULLs and changed insert defaults preserved")
+        }
+    }
+
+    @Test
+    fun decodedDefaultHistoryRefusesUnprojectableExpressionsAndNullParentsNeverBecomeContainers() {
+        ensureBucket()
+        val (db, path) = produce("1.1")
+        mutate(db, path, "CREATE TABLE lake.bad(i INTEGER); INSERT INTO lake.bad VALUES(1); " +
+            "ALTER TABLE lake.bad ADD COLUMN n INTEGER DEFAULT 42; " +
+            "CREATE TABLE lake.nested(i INTEGER,p STRUCT(a INTEGER)); INSERT INTO lake.nested VALUES(1,NULL)")
+        fe().use { c ->
+            val catalog = register(c, db, path, ", \"experimental.final11.reads\"=\"true\"")
+            assertThat(rows(c, "SELECT i,n FROM $catalog.main.bad")).containsExactly(listOf("1", "42"))
+            // Owned negative fixture only: an expression history WITHOUT a literal initial value.
+            // A valid literal initial value can coexist with an INSERT expression (e.g. VARCHAR
+            // 'NULL'); that value remains data and must not be incorrectly refused or evaluated.
+            pg(db).use { pg -> pg.createStatement().use { it.execute("UPDATE ducklake_column SET default_value_type='expression' WHERE column_name='n'") } }
+            assertThat(rows(c, "SELECT i,n FROM $catalog.main.bad")).containsExactly(listOf("1", "42"))
+            pg(db).use { pg -> pg.createStatement().use { it.execute("UPDATE ducklake_column SET default_value_type='expression',initial_default=NULL WHERE column_name='n'") } }
+            assertThatThrownBy { rows(c, "SELECT i,n FROM $catalog.main.bad") }.hasMessageContaining("non-literal initial-default history")
+            pg(db).use { pg -> pg.createStatement().use { it.execute("UPDATE ducklake_column SET default_value_type='literal',initial_default='42' WHERE column_name='n'") } }
+            assertThat(rows(c, "SELECT i,n FROM $catalog.main.bad")).containsExactly(listOf("1", "42"))
+            assertThatThrownBy { rows(c, "SELECT * FROM $catalog.main.nested") }.hasMessageContaining("not qualified")
+            println("ACTUAL FE/BE expression history rejects; restored fixture fresh statement recovers; nested NULL parent remains explicitly unsupported")
         }
     }
 }

@@ -21,6 +21,10 @@ closed. The new tier does not use the old temp-Parquet/shared-filesystem crutch.
 The [controlled-capture continuation](VALIDATION-R07-CONTROL-DEFAULTS-2026-10-24.md)
 adds real JDBC deadlines; API-13 still has no in-flight metadata cancellation
 registration. Scope-end cleanup is not treated as a cancellation hook.
+The same continuation replaces raw initial-default parsing in this tier with the
+public decoded missing-field API, called only after native footer field-ID absence
+is proved. Canonical SQL defaults use the real API-13 override; nested/degraded
+types and non-NULL floating-point missing-field defaults remain unqualified.
 The API-13 engine does expose an owned filesystem; that is not a query row-payload
 transport and is not permission to stage scratch objects or clean up lake files.
 

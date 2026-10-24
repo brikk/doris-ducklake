@@ -97,5 +97,9 @@ internal class DuckLakeR07FormatTest {
         assertThat(DuckLakeReadBudget(mapOf("final11.max-planning-millis" to "1")).queryTimeoutSeconds).isEqualTo(1)
         assertThat(DuckLakeReadBudget(mapOf("final11.max-planning-millis" to "1001")).queryTimeoutSeconds).isEqualTo(2)
         assertThatThrownBy { DuckLakeReadBudget(mapOf("final11.max-planning-millis" to "30001")) }.hasMessageContaining("Invalid")
+        val text = DuckLakeReadBudget(emptyMap())
+        text.literal("x".repeat(4_194_300))
+        text.path("s3:x")
+        assertThatThrownBy { text.literal("1") }.hasMessageContaining("path/default-byte budget")
     }
 }

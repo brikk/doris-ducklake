@@ -7,4 +7,5 @@ internal interface DuckLakeQualifiedReadCatalog : DucklakeCatalog {
     fun atSnapshot(snapshotId: Long): DuckLakeQualifiedReadCatalog
     fun qualifiedDataPath(dataFileId: Long): String
     fun qualifiedPositionDeletes(dataFileId: Long): List<DuckLakePositionDelete>
+    fun qualifiedColumnDefaultSql(tableId: Long, columnId: Long, snapshotId: Long): String?
 }

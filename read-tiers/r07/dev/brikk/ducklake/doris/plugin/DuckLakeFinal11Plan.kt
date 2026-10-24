@@ -44,7 +44,7 @@ internal class DuckLakeFinal11Plan private constructor(
         }
         val index = when (name) {
             "listSchemas" -> 0
-            "getTable" -> 2
+            "getTable", "qualifiedColumnDefaultSql" -> 2
             "getSchema", "listTables", "getTableById", "getTableColumns", "getAllColumnsWithParentage",
             "getDataFiles", "getInlinedDataInfos", "hasInlinedDeletes", "getPartitionSpecs" -> 1
             else -> -1
@@ -63,6 +63,7 @@ internal class DuckLakeFinal11Plan private constructor(
         val paths: Map<Long, String>,
         val deletes: Map<Long, List<DuckLakePositionDelete>>,
         val unsupported: String?,
+        val defaultSql: Map<Long, String> = emptyMap(),
     )
 
     fun invoke(name: String, args: Array<out Any?>): Any? {
@@ -92,6 +93,7 @@ internal class DuckLakeFinal11Plan private constructor(
         "getPartitionSpecs" -> { at(args[1]); table(args[0]).specs }
         "qualifiedDataPath" -> plannedFile(args[0]).paths[args[0]]!!
         "qualifiedPositionDeletes" -> plannedFile(args[0]).deletes[args[0]].orEmpty()
+        "qualifiedColumnDefaultSql" -> { at(args[2]); table(args[0]).defaultSql[args[1]] }
         else -> namespace(name, args)
     }
 
@@ -257,17 +259,27 @@ internal class DuckLakeFinal11Plan private constructor(
         private fun physical(plan: Table, metadata: Map<Long, DucklakeFileReadMetadata>): Table {
             val paths = linkedMapOf<Long, String>()
             val positions = linkedMapOf<Long, List<DuckLakePositionDelete>>()
+            val defaults = linkedMapOf<Long, String>()
             for (file in plan.files) {
                 budget.step()
                 val owner = data[file.dataFileId] ?: error("Missing retained DATA ownership")
                 active(owner, plan.metadata.tableId)
                 paths[file.dataFileId] = owner.resolvedPath
                 if (plan.unsupported == null) {
-                    inspector.data(file, owner.resolvedPath, plan.columns, current)
+                    inspector.data(file, owner.resolvedPath, plan.columns, current) { column ->
+                        defaults.getOrPut(column.columnId) {
+                            // The public API reloads target schema/history. Reserve work for that
+                            // bounded materialization too; this is not a new paged/lazy interface.
+                            budget.step(plan.columns.size * 2 + snapshot.schemaVersion.toInt() + 1)
+                            DuckLakeFileDefaults.sql(column, c.getMissingFileColumnDefaultDecoded(
+                                plan.metadata.tableId, column.columnId, current,
+                            )).also { budget.literal(it) }
+                        }
+                    }
                     positions[file.dataFileId] = positionDeletes(file, metadata.getValue(file.dataFileId))
                 }
             }
-            return plan.copy(paths = paths.toMap(), deletes = positions.toMap())
+            return plan.copy(paths = paths.toMap(), deletes = positions.toMap(), defaultSql = defaults.toMap())
         }
 
         private fun positionDeletes(file: DucklakeDataFile, metadata: DucklakeFileReadMetadata): List<DuckLakePositionDelete> {

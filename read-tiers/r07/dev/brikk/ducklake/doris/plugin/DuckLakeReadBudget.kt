@@ -38,6 +38,11 @@ internal class DuckLakeReadBudget(properties: Map<String, String>) {
         check(text >= 0) { "Final-1.1 total path-byte budget exceeded" }
     }
     fun transfer(amount: Int) { step(); require(amount >= 0); bytes -= amount; check(bytes >= 0) { "Final-1.1 total footer/vector byte budget exceeded" } }
+    fun literal(value: String) {
+        step()
+        text -= value.toByteArray(Charsets.UTF_8).size
+        check(text >= 0) { "Final-1.1 total path/default-byte budget exceeded" }
+    }
     fun finish() { step(); captured = true }
 
     private fun limit(properties: Map<String, String>, name: String, maximum: Int): Int {

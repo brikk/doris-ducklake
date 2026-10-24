@@ -102,14 +102,20 @@ internal class DuckLakeConnectorMetadata(
         val rows = loadTopLevelColumns(handle)
         val connectorColumns = ArrayList<ConnectorColumn>(rows.size)
         for (col in rows) {
+            val qualified = catalog as? DuckLakeQualifiedReadCatalog
+            val defaultSql = qualified?.qualifiedColumnDefaultSql(handle.tableId, col.columnId, handle.snapshotId)
             connectorColumns.add(
                 ConnectorColumn(
                     col.columnName,
                     DuckLakeTypeMapping.fromDucklakeType(col.columnType, enableTimestampTz),
                     "", // comment — DuckLake doesn't track per-column comments yet
                     col.nullsAllowed,
-                    backfillDefaultValue(col),
-                ),
+                    // Pinned FE FileScanNode gates read defaults on defaultValue != null,
+                    // then parses defaultValueSql. Both carry generated literals, never raw text.
+                    if (qualified != null) defaultSql else backfillDefaultValue(col),
+                ).let { column ->
+                    if (qualified != null) column.withDefaultValueSql(defaultSql) else column
+                },
             )
         }
         return ConnectorTableSchema(
