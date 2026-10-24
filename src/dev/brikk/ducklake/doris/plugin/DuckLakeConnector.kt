@@ -16,6 +16,7 @@ import org.apache.doris.connector.spi.scan.ConnectorScanPlanProvider
 import org.apache.doris.connector.spi.write.ConnectorWritePlanProvider
 import org.apache.doris.connector.spi.ConnectorContext
 import org.apache.doris.connector.spi.DorisConnectorException
+import org.apache.doris.connector.spi.ConnectorValidationContext
 
 /**
  * Read-side DuckLake [Connector]. Owns a single [JdbcDucklakeCatalog]
@@ -23,9 +24,11 @@ import org.apache.doris.connector.spi.DorisConnectorException
  * set will grow as features land (see `dev-docs/TODO-read.md`).
  */
 class DuckLakeConnector internal constructor(
-    private val properties: Map<String, String>,
+    properties: Map<String, String>,
     private val context: ConnectorContext,
 ) : Connector {
+    private val properties = java.util.Map.copyOf(properties)
+    private val final11: DuckLakeFinal11Support = DuckLakeFinal11(this.properties, context)
 
     @Volatile
     private var catalog: JdbcDucklakeCatalog? = null
@@ -41,7 +44,7 @@ class DuckLakeConnector internal constructor(
 
     override fun getMetadata(session: ConnectorSession?): ConnectorMetadata =
         DuckLakeConnectorMetadata(
-            catalog(),
+            catalog().let { if (final11.enabled) final11.view(it, session) else it },
             properties[DuckLakeConnectorProperties.ENABLE_MAPPING_TIMESTAMP_TZ].toBoolean(),
         )
 
@@ -59,6 +62,7 @@ class DuckLakeConnector internal constructor(
                         cat,
                         DuckLakePathResolver(cat, warehouse),
                         properties,
+                        if (final11.enabled) { session -> final11.view(cat, session) } else null,
                     )
                     scanPlanProvider = local
                 }
@@ -68,6 +72,7 @@ class DuckLakeConnector internal constructor(
     }
 
     override fun getWritePlanProvider(): ConnectorWritePlanProvider {
+        requireWritableTier()
         var local = writePlanProvider
         if (local == null) {
             synchronized(this) {
@@ -96,6 +101,7 @@ class DuckLakeConnector internal constructor(
      * semantics.
      */
     override fun getProcedureOps(): ConnectorProcedureOps {
+        requireWritableTier()
         var local = procedureOps
         if (local == null) {
             synchronized(this) {
@@ -172,6 +178,7 @@ class DuckLakeConnector internal constructor(
                 properties, DuckLakeConnectorProperties.STORAGE_WAREHOUSE,
             )
         }
+        final11.configure(config)
         val result = JdbcDucklakeCatalog(config)
         var initialized = false
         try {
@@ -184,13 +191,28 @@ class DuckLakeConnector internal constructor(
     }
 
     private fun requireQualifiedFormat(result: JdbcDucklakeCatalog) {
-        if (result.getSpecVersion() == "1.1") {
+        if (result.getSpecVersion() == "1.1" && !final11.enabled) {
             throw DorisConnectorException(
                 "DuckLake 1.1 reads are not qualified by the Doris connector. " +
                     "A library read opt-in is not connector scan/CDC qualification; " +
                     "1.1 writes and automatic migration are also disabled.",
             )
         }
+    }
+
+    // The real pre-create SPI surfaces admission failures before ExternalCatalog's
+    // database-listing catch can turn them into a misleading missing database.
+    override fun preCreateValidation(context: ConnectorValidationContext?) {
+        runCatching {
+            val source = catalog()
+            if (final11.enabled) final11.validate(source)
+        }.onFailure { failure ->
+            runCatching { close() }.exceptionOrNull()?.let(failure::addSuppressed)
+        }.getOrThrow()
+    }
+
+    private fun requireWritableTier() {
+        if (final11.enabled) throw DorisConnectorException("Final-1.1 is read-only: writes and maintenance are disabled")
     }
 
     @Throws(IOException::class)
@@ -210,7 +232,7 @@ class DuckLakeConnector internal constructor(
         // The only real leak is on plugin RELOAD/UNLOAD (fe-core tears the loader down but the
         // still-registered driver pins it). That needs a plugin-unload hook, not Connector.close();
         // deferred — see dev-docs/TODO-read.md. Low severity (reloads are rare admin actions).
-        catalog?.close()
+        try { catalog?.close() } finally { final11.close() }
     }
 
     internal fun properties(): Map<String, String> = properties

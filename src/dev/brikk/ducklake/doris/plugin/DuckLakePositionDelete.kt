@@ -21,6 +21,8 @@ import java.util.Objects
 internal data class DuckLakePositionDelete(
     @get:JvmName("path") val path: String,
     @get:JvmName("fileFormat") val fileFormat: String,
+    val contentOffset: Long? = null,
+    val contentSize: Long? = null,
 ) : Serializable {
 
     init {

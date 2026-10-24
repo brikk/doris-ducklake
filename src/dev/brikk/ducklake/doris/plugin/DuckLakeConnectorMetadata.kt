@@ -438,7 +438,9 @@ internal class DuckLakeConnectorMetadata(
         // everything by (tableId, snapshotId), so the wall-clock time was never read
         // back — the pin is fully carried by snapshotId. The former `snap` argument
         // (only ever read for the now-removed timestamp) is therefore gone.
-        return ConnectorMvccSnapshot.builder().snapshotId(snapshotId).build()
+        val builder = ConnectorMvccSnapshot.builder().snapshotId(snapshotId)
+        if (catalog is DuckLakeQualifiedReadCatalog) builder.retainSchema(true).schemaId(snapshotId)
+        return builder.build()
     }
 
     // Threads a resolved MVCC / time-travel snapshot onto the table handle BEFORE planScan,
@@ -474,6 +476,7 @@ internal class DuckLakeConnectorMetadata(
     // is the compose smoke (real BE), gated by fe-core's SPI_READY_TYPES + "ducklake".
 
     override fun beginTransaction(session: ConnectorSession?): ConnectorTransaction {
+        requireWritableTier()
         val transactionId = requireNotNull(session) {
             "beginTransaction requires a session to allocate the transaction id"
         }.allocateTransactionId()
@@ -490,6 +493,7 @@ internal class DuckLakeConnectorMetadata(
     // the declaration that this connector can create databases — the boolean could only
     // restate that and drifted out of sync. Behaviour is identical: we still create.
     override fun createDatabase(session: ConnectorSession?, database: String, properties: Map<String, String>?) {
+        requireWritableTier()
         catalog.createSchema(database)
     }
 
@@ -503,6 +507,7 @@ internal class DuckLakeConnectorMetadata(
         ifExists: Boolean,
         force: Boolean,
     ) {
+        requireWritableTier()
         if (ifExists && catalog.getSchema(database, catalog.currentSnapshotId) == null) {
             return
         }
@@ -517,6 +522,7 @@ internal class DuckLakeConnectorMetadata(
     }
 
     override fun createTable(session: ConnectorSession?, request: ConnectorCreateTableRequest) {
+        requireWritableTier()
         // Iceberg-style PARTITIONED BY (...) → DuckLake partition fields. A Doris
         // DISTRIBUTED BY clause (CRC32 hash, not murmur3) is rejected here rather than
         // mis-mapped — see DuckLakeCreatePartitionMapper.
@@ -536,8 +542,13 @@ internal class DuckLakeConnectorMetadata(
     }
 
     override fun dropTable(session: ConnectorSession?, tableHandle: ConnectorTableHandle) {
+        requireWritableTier()
         val handle = tableHandle.asDuckLakeHandle<DuckLakeTableHandle>()
         catalog.dropTable(handle.database, handle.table)
+    }
+
+    private fun requireWritableTier() {
+        check(catalog !is DuckLakeQualifiedReadCatalog) { "Final-1.1 statement metadata is read-only" }
     }
 
     private fun loadTopLevelColumns(handle: DuckLakeTableHandle): List<DucklakeColumn> {

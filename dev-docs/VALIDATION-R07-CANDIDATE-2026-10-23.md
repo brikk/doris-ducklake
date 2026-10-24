@@ -1,5 +1,9 @@
 # Doris R07 consumer qualification — local catalog 58ef4d7 trial
 
+Historical checkpoint at `a700166`. The [October 24 continuation](VALIDATION-R07-IMPLEMENTATION-2026-10-24.md)
+adds an explicit, bounded file-read tier and positive 1.1 SQL qualification;
+the refusal-only state described below is not the final implementation status.
+
 ## Decision and authorization boundary
 
 **NO-GO for Doris final-1.1 reads / R07 completion.** This is an executed local

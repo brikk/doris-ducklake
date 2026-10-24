@@ -4,8 +4,10 @@ This is **qualification, not deployment or 1.1 enablement**. It does not use the
 normal smoke driver (which includes writes/maintenance), the shared Trino
 substrate, the shared Doris containers, or any shared FE/BE filesystem mount.
 Only native fixture producers create disposable catalogs; Doris only reads them.
-The public connector must reject final-1.1, including already-initialized MySQL
-1.1; that is a Doris qualification limit, **not** a library 1.0-only read ceiling.
+The public connector must reject final-1.1 by default. The candidate build now
+also tests the explicit `experimental.final11.reads=true` PostgreSQL/S3 file tier
+and bounded recent history, not MySQL/Quack/inline/CDC parity. Other routes being
+unqualified in Doris is **not** a library MySQL 1.0-only read ceiling.
 
 Prerequisites: the local API-13 FE/ASAN BE images at `dd456ab7a89`, Java 25 compiler,
 Java 17 test runtime, Docker, and the immutable candidate repository. Verify image
@@ -38,8 +40,21 @@ mise exec -- ./gradlew r07LiveQualificationTest \
 The live test allocates unique PostgreSQL databases and S3 prefixes and prints
 their names. It verifies matched peers, actual S3-backed 1.0 scans (field IDs,
 rename, initial default, SQL NULL/literal NULL, bytes, dates and nullable counts),
-and rejection of native final-1.1 before scans. It neither implements CDC nor
-claims a final-1.1 BE scan. A failure retains fixtures for investigation.
+and default-off admission rejection. Opted-in tests execute actual 1.1 SQL,
+current/historical native-file and deletion-vector scans, retained schemas,
+bounded statement planning and recovery. They do not implement CDC or distributed
+inline payloads. A failure retains fixtures for investigation.
+
+The separate producer gate is intentionally NOT connector green acceptance:
+
+```sh
+mise exec -- ./gradlew r07LongPartitionNativeTest \
+  -Pr07CatalogRepository="$candidate" --no-daemon --no-configuration-cache
+```
+
+It preserves the long escaped partition input that signed `417a9117f5` cannot
+write into this MinIO harness. Report its failure, without changing the input,
+pin or outcome to make native qualification appear green.
 
 Run the maintained regression lanes separately from these explicit probes:
 

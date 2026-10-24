@@ -13,6 +13,7 @@ import dev.brikk.ducklake.catalog.DucklakePartitionSpec
 import dev.brikk.ducklake.catalog.DucklakePartitionTransform
 
 import org.apache.doris.connector.spi.ConnectorSession
+import org.apache.doris.connector.spi.ConnectorStatementScope
 import org.apache.doris.connector.spi.DorisConnectorException
 import org.apache.doris.connector.spi.handle.ConnectorColumnHandle
 import org.apache.doris.connector.spi.handle.ConnectorTableHandle
@@ -45,6 +46,7 @@ internal class DuckLakeScanPlanProvider(
     catalog: DucklakeCatalog,
     pathResolver: DuckLakePathResolver,
     catalogProperties: Map<String, String>,
+    private val catalogForStatement: ((ConnectorSession?) -> DucklakeCatalog)? = null,
 ) : ConnectorScanPlanProvider {
 
     private val catalog: DucklakeCatalog =
@@ -76,7 +78,7 @@ internal class DuckLakeScanPlanProvider(
         session: ConnectorSession?,
         request: ConnectorScanRequest,
     ): List<ConnectorScanRange> =
-        catalog.readSession(Supplier { planScanInternal(
+        statementProvider(session, request.tableHandle)?.planScan(session, request) ?: catalog.readSession(Supplier { planScanInternal(
             handle = request.tableHandle,
             filter = request.filter,
             countPushdown = request.isCountPushdown,
@@ -200,6 +202,7 @@ internal class DuckLakeScanPlanProvider(
      * and that reader cannot select snapshot-tagged Puffin blobs or positions.
      */
     private fun failOnUnqualifiedFinal11Files(handle: DuckLakeTableHandle, files: List<DucklakeDataFile>) {
+        if (catalog is DuckLakeQualifiedReadCatalog) return
         if (catalog.getSpecVersion() != "1.1") return
         val reason = when {
             files.isNotEmpty() && handle.snapshotId != catalog.currentSnapshotId ->
@@ -588,7 +591,8 @@ internal class DuckLakeScanPlanProvider(
         partitions: PartitionContext,
         pushDownRowCount: Long,
     ): DuckLakeScanRange {
-        val absolutePath = pathResolver.resolveFilePath(
+        val absolutePath = (catalog as? DuckLakeQualifiedReadCatalog)?.qualifiedDataPath(file.dataFileId)
+            ?: pathResolver.resolveFilePath(
             file.path, file.pathIsRelative, tableDataPath,
         )
         // Body-absent partition columns to constant-fill from the path (empty
@@ -692,7 +696,8 @@ internal class DuckLakeScanPlanProvider(
             }
         val hasHiveLayout = partitionNameMaps.values.any { it.isNotEmpty() }
         val hasIdentityField =
-            activeSpec?.fields?.any { it.transform == DucklakePartitionTransform.IDENTITY } == true
+            catalog !is DuckLakeQualifiedReadCatalog &&
+                activeSpec?.fields?.any { it.transform == DucklakePartitionTransform.IDENTITY } == true
 
         // Neither an active spec nor a hive-layout file → nothing partitioned.
         if (activeSpec == null && !hasHiveLayout) {
@@ -806,6 +811,7 @@ internal class DuckLakeScanPlanProvider(
         file: DucklakeDataFile,
         tableDataPath: String,
     ): List<DuckLakePositionDelete> {
+        if (catalog is DuckLakeQualifiedReadCatalog) return catalog.qualifiedPositionDeletes(file.dataFileId)
         val deletePath = file.deleteFilePath
         if (deletePath == null) {
             return listOf()
@@ -835,7 +841,8 @@ internal class DuckLakeScanPlanProvider(
         handle: ConnectorTableHandle,
         columns: List<ConnectorColumnHandle>,
         filter: Optional<ConnectorExpression>,
-    ): Map<String, String> = catalog.readSession(Supplier {
+    ): Map<String, String> = statementProvider(session, handle)?.getScanNodeProperties(session, handle, columns, filter)
+        ?: catalog.readSession(Supplier {
         val out: MutableMap<String, String> = linkedMapOf()
         // Tell PluginDrivenScanNode which BE reader to dispatch (else it
         // defaults to FORMAT_JNI and the iceberg reader bails with
@@ -880,6 +887,17 @@ internal class DuckLakeScanPlanProvider(
             ?.let { out[PROP_PATH_PARTITION_KEYS] = it }
         out
     })
+
+    private fun statementProvider(session: ConnectorSession?, handle: ConnectorTableHandle): DuckLakeScanPlanProvider? {
+        val resolve = catalogForStatement ?: return null
+        check(session != null && session.statementScope !== ConnectorStatementScope.NONE) {
+            "Final-1.1 scans require an owned FE statement scope"
+        }
+        val view = resolve(session)
+        check(view is DuckLakeQualifiedReadCatalog) { "Missing qualified final-1.1 statement plan" }
+        val pinned = view.atSnapshot(handle.asDuckLakeHandle<DuckLakeTableHandle>().snapshotId)
+        return DuckLakeScanPlanProvider(pinned, DuckLakePathResolver(pinned, null), catalogProperties)
+    }
 
     /**
      * Base64 schema dictionary for the requested columns, carrying the union of

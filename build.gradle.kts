@@ -17,7 +17,8 @@ detekt {
     buildUponDefaultConfig = true
     config.setFrom(rootProject.file("config/detekt/detekt.yml"))
     baseline = file("detekt-baseline.xml")
-    source.setFrom("src", "test/src")
+    source.setFrom("src", "test/src",
+        if (providers.gradleProperty("r07CatalogRepository").isPresent) "read-tiers/r07" else "read-tiers/released")
 }
 
 // Doris FE pins to JDK 17, so emit JDK 17 bytecode/ABI — but compile with the project-wide
@@ -72,6 +73,7 @@ val dorisVersion = "1.2-SNAPSHOT"
 // Do not use maven.repo.local: Doris's exclusive FE/SPI repository above must stay intact.
 val r07Repository = providers.gradleProperty("r07CatalogRepository")
 val r07Version = "0.13.0-SNAPSHOT"
+kotlin.sourceSets.main { kotlin.srcDir(if (r07Repository.isPresent) "read-tiers/r07" else "read-tiers/released") }
 if (r07Repository.isPresent) {
     kotlin.sourceSets.test { kotlin.srcDir("test/r07") }
     repositories.exclusiveContent {
@@ -331,6 +333,7 @@ tasks.jar {
 // iceberg reference (api/spi/extension-spi/filesystem-api/logging) plus
 // fe-thrift, which is provided by fe-core at runtime.
 val pluginZip by tasks.registering(Zip::class) {
+    if (r07Repository.isPresent) dependsOn(verifyR07Candidate)
     dependsOn(tasks.jar)
     archiveBaseName.set("doris-ducklake")
     archiveClassifier.set("plugin")
@@ -384,6 +387,7 @@ tasks.test {
     exclude("**/DorisCorpusReplayTest*")
     exclude("**/DuckLakeR07QualificationTest*")
     exclude("**/DuckLakeR07LiveQualificationTest*")
+    exclude("**/DuckLakeR07LongPartitionNativeTest*")
     classpath = prependParquetFormat(classpath)
 }
 
@@ -397,6 +401,7 @@ tasks.register<Test>("java17PluginTest") {
     include("**/plugin/*Test*")
     exclude("**/DuckLakeR07QualificationTest*")
     exclude("**/DuckLakeR07LiveQualificationTest*")
+    exclude("**/DuckLakeR07LongPartitionNativeTest*")
 }
 
 if (r07Repository.isPresent) {
@@ -418,6 +423,16 @@ if (r07Repository.isPresent) {
         javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(17)) })
         useJUnitPlatform()
         include("**/DuckLakeR07LiveQualificationTest*")
+        outputs.upToDateWhen { false }
+    }
+    tasks.register<Test>("r07LongPartitionNativeTest") {
+        description = "Strict long-path native producer gate; failures remain visible, not connector acceptance."
+        group = "verification"
+        testClassesDirs = sourceSets.test.get().output.classesDirs
+        classpath = prependParquetFormat(sourceSets.test.get().runtimeClasspath)
+        javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(17)) })
+        useJUnitPlatform()
+        include("**/DuckLakeR07LongPartitionNativeTest*")
         outputs.upToDateWhen { false }
     }
 }

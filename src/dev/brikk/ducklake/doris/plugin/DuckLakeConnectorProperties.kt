@@ -17,6 +17,7 @@ internal object DuckLakeConnectorProperties {
     const val METADATA_USER = "metadata.user"
     const val METADATA_PASSWORD = "metadata.password"
     const val STORAGE_WAREHOUSE = "storage.warehouse"
+    const val ENABLE_FINAL11_READS = "experimental.final11.reads"
 
     // Mirrors the in-tree iceberg connector's ENABLE_MAPPING_TIMESTAMP_TZ
     // (fe-connector-iceberg IcebergConnectorProperties): default false maps a

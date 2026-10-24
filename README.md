@@ -27,14 +27,15 @@ Connector for the DuckLake format using **PostgreSQL** as the catalog metadata
 backend (the shared, multi-process shape a Doris FE+BE cluster needs). Tested
 with DuckDB 1.5.6 (JDBC 1.5.6.0) for cross-engine compatibility.
 
-**Final-1.1 / R07: not qualified.** The connector explicitly refuses 1.1 reads,
-writes and maintenance; the legacy dev-only inline flag does not enable it.
-The default dependency remains catalog **0.12.0**. A reversible, checksum-locked
-local **0.13.0-SNAPSHOT / JDBC 2.0.0.0** trial verified legacy S3 scans and
-fail-closed 1.1 boundaries, not a 1.1 rollout. See the
-[qualification report](dev-docs/VALIDATION-R07-CANDIDATE-2026-10-23.md) and
-[isolated harness](compose/R07-QUALIFICATION.md). Feature tables below describe
-the existing legacy tier, not final-1.1 support.
+**Final-1.1 / R07: guarded experimental file tier, not a rollout.** The default
+dependency remains **0.12.0** and 1.1 reads remain off. The checksum-locked local
+**0.13.0-SNAPSHOT / JDBC 2.0.0.0** build adds `experimental.final11.reads=true`
+for bounded PostgreSQL/S3 native-file planning, with optional recent-snapshot
+history (`final11.history-window`, 0 by default, at most 16). Unsupported inline,
+snapshot-filtering, mapping and type cases still reject; all 1.1 writes/DDL/
+maintenance stay disabled. See the [declared scope and evidence](dev-docs/VALIDATION-R07-IMPLEMENTATION-2026-10-24.md)
+and [isolated harness](compose/R07-QUALIFICATION.md). Feature tables below still
+describe the legacy tier, not blanket 1.1 support or production approval.
 
 ## Architecture — why this is read-focused, and different from Trino
 

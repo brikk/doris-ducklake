@@ -295,6 +295,17 @@ internal class DuckLakeScanRange private constructor(builder: Builder) :
         private fun toThrift(pd: DuckLakePositionDelete): TIcebergDeleteFileDesc {
             val t = TIcebergDeleteFileDesc()
             t.setPath(pd.path)
+            if (pd.contentOffset != null) {
+                check(pd.fileFormat == "puffin" && pd.contentOffset >= 0 && (pd.contentSize ?: 0) > 0) {
+                    "Invalid qualified deletion-vector slice"
+                }
+                // content is a public Java field, unlike snake_case generated
+                // fields. Kotlin assignment bypasses setContent's isset bit!
+                t.setContent(3)
+                t.setContentOffset(pd.contentOffset)
+                t.setContentSizeInBytes(pd.contentSize!!)
+                return t
+            }
             // DuckLake's catalog records the delete file's format on the
             // ducklake_delete_file.format column ("parquet" in v1). The BE
             // reader's iceberg path needs TFileFormatType (an enum); map by

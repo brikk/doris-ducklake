@@ -12,6 +12,15 @@ LOUD, or compose test-harness config, not connector behavior.**
 
 ## R07 final-1.1 qualification boundary (2026-10-23)
 
+**Updated October 24:** the [implementation continuation](VALIDATION-R07-IMPLEMENTATION-2026-10-24.md)
+adds a default-off, bounded PostgreSQL/S3 native-file tier in the exact candidate
+build, including current and qualified recent-history scans. This supersedes
+the refusal-only checkpoint below, not the no-production/no-write boundary.
+Distributed inline payloads, required per-row historical filters and CDC remain
+closed. The new tier does not use the old temp-Parquet/shared-filesystem crutch.
+The API-13 engine does expose an owned filesystem; that is not a query row-payload
+transport and is not permission to stage scratch objects or clean up lake files.
+
 **No Doris 1.1 rollout is qualified.** Reader construction explicitly refuses
 final-1.1 before exposing metadata, write plans or maintenance. Merely resolving
 a table handle with the library flag off was not a safe admission check.
