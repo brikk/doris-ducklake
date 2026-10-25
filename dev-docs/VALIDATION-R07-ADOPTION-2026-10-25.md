@@ -1,5 +1,41 @@
 # R07 latest catalog adoption — October 25
 
+## Bounded quality repair: QG-02
+
+The final-1.1 facade now dispatches equals/hashCode/toString/close before loading
+its plan. Equality/hash are object identity; toString uses only local identity and
+snapshot coordinates. Close remains a no-op on this non-owning view: connector and
+statement ownership are unchanged. Metadata methods retain the existing deferred
+capture and statement-scoped success/failure memoization.
+
+Three actual-facade regressions failed on the original code and pass after the fix:
+unused Object/lifecycle methods do not capture, a failed capture does not poison
+Object/close, and two facades share the same statement-scoped failure exactly once.
+The context injects a capture failure before SQL/S3, proving those methods never
+enter capture; no engine hook, fake plan or new production testing seam is added.
+
+`check java17PluginTest` passes on unchanged catalog `6730bb8`: **265/239 passing
+tests** on the overlapping Java25/17 lanes (266/240 totals, one unchanged legacy skip
+each), zero failures/errors, lint and Java17 runtime scan (24,767 classes). All three
+new cases execute successfully in each lane. This is defect verification, not a new
+17-case live FE/BE round or production rollout. Existing live evidence below retains
+its original artifact identity.
+
+```sh
+GRADLE_USER_HOME=/tmp/opencode/doris-r07-gradle mise exec -- ./gradlew \
+  check java17PluginTest \
+  -Pr07CatalogRepository=/tmp/opencode/catalog-r07-6730bb8/maven-repository \
+  --no-daemon --no-configuration-cache
+```
+
+Evidence: `/tmp/opencode/r07-step3-doris-final.log`, `r07-step3-doris-final-xml/`;
+before-fix failures: `r07-step3-doris-red-tests.log`, `r07-step3-doris-red-xml/`.
+The initial test getter compilation errors remain in `r07-step3-doris-red.log`.
+The default released-lane JAR was rebuilt byte-identically (`d3a8299e...`), with no
+candidate plan classes; the released plugin ZIP remains byte-identical (`832270f2...`)
+to the full hashes recorded below. No repaired candidate was staged into an engine.
+The following adoption report describes the preceding live-qualified revision.
+
 Qualification only, continuing clean `3448107ad3a0ea7375863e69cf4e442633354e25`.
 Verified implementation: `f025a93ebe201109cdce282da98c10307b069cda`.
 This supersedes the candidate/API-gap statements in the preceding

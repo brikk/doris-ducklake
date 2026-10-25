@@ -39,13 +39,22 @@ internal class DuckLakeFinal11(private val properties: Map<String, String>, priv
         }
         fun proxy(snapshot: Long?): DuckLakeQualifiedReadCatalog = Proxy.newProxyInstance(
             DuckLakeQualifiedReadCatalog::class.java.classLoader, arrayOf(DuckLakeQualifiedReadCatalog::class.java),
-        ) { _, method, args ->
-            val plan = loaded.value.getOrThrow()
-            if (method.name == "atSnapshot") {
-                val selected = args!![0] as Long
-                plan.requireFrame(selected)
-                proxy(selected)
-            } else plan.dispatch(method.name, args ?: emptyArray(), snapshot)
+        ) { facade, method, args ->
+            // Object methods and closing this non-owning view must never capture or consume a plan budget.
+            when (method.name) {
+                "equals" -> facade === args?.singleOrNull()
+                "hashCode" -> System.identityHashCode(facade)
+                "toString" -> "DuckLakeQualifiedReadCatalog@${Integer.toHexString(System.identityHashCode(facade))}(snapshot=${snapshot ?: "current"})"
+                "close" -> null // The connector/statement owns the resources, not this facade.
+                else -> {
+                    val plan = loaded.value.getOrThrow()
+                    if (method.name == "atSnapshot") {
+                        val selected = args!![0] as Long
+                        plan.requireFrame(selected)
+                        proxy(selected)
+                    } else plan.dispatch(method.name, args ?: emptyArray(), snapshot)
+                }
+            }
         } as DuckLakeQualifiedReadCatalog
         return proxy(null)
     }
