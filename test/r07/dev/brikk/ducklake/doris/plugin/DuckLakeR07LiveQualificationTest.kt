@@ -788,6 +788,80 @@ internal class DuckLakeR07LiveQualificationTest {
     }
 
     @Test
+    fun physicalMetadataTypesAndNegativePositionsRefuseBeforePayloadAndFreshSqlRecovers() {
+        ensureBucket()
+        val (db, path) = produce("1.1")
+        val table = pg(db).use { rows(it, "SELECT table_id FROM ducklake_table WHERE table_name='t'").single().single()!! }
+        val originalStart = pg(db).use { rows(it, "SELECT row_id_start FROM ducklake_data_file WHERE table_id=$table").single().single() }
+        fun sql(text: String) { pg(db).use { it.createStatement().use { s -> s.execute(text) } } }
+        val context = dev.brikk.ducklake.doris.plugin.cache.FakeConnectorContext("physical-types", 811L)
+        DuckLakeConnectorProvider().create(hostProperties(db, path), context).use { connector ->
+            fe().use { fe ->
+                val name = register(fe, db, path, ", \"experimental.final11.reads\"=\"true\", \"final11.history-window\"=\"2\"")
+                val query = "SELECT i FROM $name.main.t ORDER BY i"
+                fun recovered() { assertThat(rows(fe, query)).containsExactly(listOf("1"), listOf("2"), listOf("3")) }
+                recovered() // Initialize the FE namespace before corruption; cold masking is a separate limitation.
+                fun refused(message: String) {
+                    val s = session(Scope(), UUID.randomUUID().toString())
+                    val failure = org.assertj.core.api.Assertions.catchThrowable { connector.getMetadata(s).getTableHandle(s, "main", "t") }
+                    assertThat(failure).hasMessageContaining(message)
+                    assertThat(generateSequence(failure) { it.cause }.filterIsInstance<org.postgresql.util.PSQLException>().toList()).isEmpty()
+                    assertThatThrownBy { connector.getMetadata(s).listDatabaseNames(s) }.isSameAs(failure)
+                    assertThatThrownBy { rows(fe, query) }.hasMessageContaining(message)
+                }
+                try {
+                    sql("ALTER TABLE ducklake_data_file ALTER COLUMN footer_size TYPE NUMERIC USING footer_size+0.5")
+                    refused("physical") // Admission/type failure, NOT an executed JDBC statement failure.
+                } finally { sql("ALTER TABLE ducklake_data_file ALTER COLUMN footer_size TYPE BIGINT USING floor(footer_size)::bigint") }
+                recovered()
+                try {
+                    sql("UPDATE ducklake_data_file SET row_id_start=-1 WHERE table_id=$table")
+                    refused("identity/lifetime")
+                } finally { sql("UPDATE ducklake_data_file SET row_id_start=${originalStart ?: "NULL"} WHERE table_id=$table") }
+                recovered()
+                val positional = "ducklake_inlined_delete_$table"
+                try {
+                    sql("CREATE TABLE $positional(file_id BIGINT,row_id NUMERIC,begin_snapshot BIGINT)")
+                    refused("physical layout") // Even an EMPTY optional table must have the exact physical layout.
+                    sql("ALTER TABLE $positional ALTER COLUMN row_id TYPE BIGINT")
+                    recovered() // Layout validation is scoped to each owned capture, not a poisoned global cache.
+                    sql("INSERT INTO $positional VALUES(0,-1,${snapshot(db)})")
+                    refused("Negative")
+                    sql("UPDATE $positional SET row_id=0,begin_snapshot=-1")
+                    assertThatThrownBy { rows(fe, query) }.hasMessageContaining("inline data/deletes")
+                    sql("UPDATE $positional SET begin_snapshot=${snapshot(db)}")
+                    assertThatThrownBy { rows(fe, query) }.hasMessageContaining("inline data/deletes")
+                    val older = snapshot(db) - 1
+                    // API13 resolves current table metadata before pinning: current live
+                    // inline deletes must STILL refuse, even for an older SQL request.
+                    assertThatThrownBy { rows(fe, "SELECT i FROM $name.main.t FOR VERSION AS OF $older ORDER BY i") }
+                        .hasMessageContaining("inline data/deletes")
+                    val config = dev.brikk.ducklake.catalog.DucklakeCatalogConfig().apply {
+                        catalogDatabaseUrl = "jdbc:postgresql://127.0.0.1:15487/$db"
+                        catalogDatabaseUser = "r07"
+                        catalogDatabasePassword = "r07-local-only"
+                        dataPath = path
+                        maxCatalogConnections = 1
+                        enableFinal11Reads = true
+                    }
+                    dev.brikk.ducklake.catalog.JdbcDucklakeCatalog(config).use { catalog ->
+                        val props = hostProperties(db, path) + ("final11.history-window" to "2")
+                        DuckLakeReadObjects(props, context.httpSecurityHook).use { objects ->
+                            val plan = DuckLakeFinal11Plan.capture(catalog, props, objects)
+                            // Separate host-capture proof, not a claim of successful historical FE SQL:
+                            // positive current refusal must NOT poison the supported older frame.
+                            assertThat(plan.dispatch("getDataFiles", arrayOf(table.toLong(), older), older) as List<*>)
+                                .hasSize(1)
+                        }
+                    }
+                } finally { sql("DROP TABLE IF EXISTS $positional") }
+                recovered()
+            }
+        }
+        println("Physical fractional footer/optional position-layout and negative identity refusals are NOT JDBC query-failure evidence; repaired SQL recovers")
+    }
+
+    @Test
     fun absentInlineRegistryPositionsDoNotHideLaterLiveRowsAndTerminalBudgetIsRequired() {
         ensureBucket()
         val (db, path) = produce("1.1")

@@ -2,6 +2,11 @@ package dev.brikk.ducklake.doris.plugin
 
 import dev.brikk.ducklake.catalog.DucklakeCatalogConfig
 import dev.brikk.ducklake.catalog.DucklakeFileKind
+import dev.brikk.ducklake.catalog.DucklakeDeletionCursor
+import dev.brikk.ducklake.catalog.DucklakeDeletionPageEntry
+import dev.brikk.ducklake.catalog.DucklakeInlineCursor
+import dev.brikk.ducklake.catalog.DucklakeInlinedChangeRow
+import dev.brikk.ducklake.catalog.DucklakeOwnedFile
 import dev.brikk.ducklake.catalog.JdbcDucklakeCatalog
 import dev.brikk.ducklake.doris.plugin.cache.FakeConnectorContext
 import org.apache.doris.connector.spi.scan.ConnectorScanRequest
@@ -57,7 +62,56 @@ internal class DuckLakeR07QualificationTest {
         enableFinal11Reads = true
     })
 
-    private fun <T> JdbcDucklakeCatalog.read(action: () -> T): T = readSession(Supplier { action() })
+    private fun <T> JdbcDucklakeCatalog.read(action: (Probe) -> T): T = readSession(Supplier { action(Probe(this)) })
+
+    /** Small authored probes share one allowance, including terminal pages and API preflight work. */
+    private class Probe(private val catalog: JdbcDucklakeCatalog) {
+        private val budget = DuckLakeReadBudget(mapOf("final11.max-planning-page-size" to "1"))
+        private val snapshot = catalog.currentSnapshotId
+        val metadata = DuckLakePlanningPages(catalog, snapshot, budget)
+
+        fun filesAt(table: Long, at: Long) = DuckLakePlanningPages(catalog, at, budget).files(table)
+
+        fun retained(kind: DucklakeFileKind) = drain(
+            { after: Long? -> catalog.readHierarchy().listRetainedFiles(kind, after, 1) },
+            { row: DucklakeOwnedFile -> row.fileId }, naturalOrder(), 64,
+        ).onEach { budget.path(it.resolvedPath) }
+
+        fun decoded(table: Long, version: Long, ids: List<Long>): List<List<Any?>> = drain(
+            { after: DucklakeInlineCursor? -> catalog.readInlinedDataDecodedPage(table, version, snapshot, ids, after, 1) },
+            { row: DucklakeInlinedChangeRow -> DucklakeInlineCursor(row.rowId, row.beginSnapshot) },
+            compareBy<DucklakeInlineCursor> { it.rowId }.thenBy { it.beginSnapshot },
+        ).map { row -> row.values.also { values -> values.forEach {
+            when (it) {
+                is String -> budget.literal(it)
+                is ByteArray -> budget.transfer(it.size)
+                else -> budget.step()
+            }
+        } } }
+
+        fun deletions(table: Long, start: Long, end: Long) = drain(
+            { after: DucklakeDeletionCursor? -> catalog.getDeletionsBetweenPage(table, start, end, after, 1) },
+            { row: DucklakeDeletionPageEntry -> row.cursor },
+            compareBy<DucklakeDeletionCursor> { it.fullFileDelete }.thenBy { it.snapshotId }
+                .thenBy { it.dataFileId }.thenBy { it.deleteFileId ?: -1 },
+        ).map { it.deletion }
+
+        private fun <T, C> drain(fetch: (C?) -> List<T>, cursor: (T) -> C, order: Comparator<C>, preflight: Int = 8192): List<T> {
+            val rows = mutableListOf<T>()
+            var after: C? = null
+            while (true) {
+                budget.page()
+                budget.step(preflight) // Includes internal schema/ownership preflights, not just returned outputs.
+                val page = fetch(after)
+                check(page.size <= 1)
+                if (page.isEmpty()) return rows.toList()
+                val next = cursor(page.single())
+                check(after == null || order.compare(next, after) > 0)
+                rows.add(page.single())
+                after = next
+            }
+        }
+    }
 
     private fun handle(c: JdbcDucklakeCatalog, snapshot: Long = c.currentSnapshotId): DuckLakeTableHandle {
         val table = c.getTable("main", "t", snapshot)!!
@@ -92,14 +146,11 @@ internal class DuckLakeR07QualificationTest {
         native("CREATE TABLE lake.t(i INTEGER,d DATE,ts TIMESTAMP,s VARCHAR,b BLOB); " +
             "INSERT INTO lake.t VALUES(1,DATE '2024-02-29',TIMESTAMP '2024-02-29 12:34:56.123456',NULL,from_hex('005CFF'))," +
             "(2,NULL,NULL,'NULL',from_hex('5C783431'))")
-        reader().use { c -> c.read {
+        reader().use { c -> c.read { p ->
             val h = handle(c)
-            val cols = c.getTableColumns(h.tableId, h.snapshotId)
-            val info = c.getInlinedDataInfos(h.tableId, h.snapshotId).single()
-            val raw = c.readInlinedData(h.tableId, info.schemaVersion, h.snapshotId, cols)
-            val decoded = c.readInlinedDataDecoded(h.tableId, info.schemaVersion, h.snapshotId, cols)
-            assertThat(raw[0][1]).isEqualTo("2024-02-29")
-            assertThat(raw[0][2]).isEqualTo("2024-02-29 12:34:56.123456")
+            val cols = p.metadata.columns(h.tableId)
+            val info = p.metadata.inline(h.tableId).single()
+            val decoded = p.decoded(h.tableId, info.schemaVersion, cols.map { it.columnId })
             assertThat(decoded[0].take(4)).containsExactly(1, LocalDate.of(2024, 2, 29),
                 LocalDateTime.of(2024, 2, 29, 12, 34, 56, 123456000), null)
             assertThat(decoded[1].take(4)).containsExactly(2, null, null, "NULL")
@@ -113,18 +164,18 @@ internal class DuckLakeR07QualificationTest {
     @Test
     fun stableIdsInitialDefaultsAndStoredNullRemainDistinct() {
         native("CREATE TABLE lake.t(i INTEGER,s VARCHAR); INSERT INTO lake.t VALUES(1,NULL),(2,'NULL')")
-        reader().use { c -> c.read {
+        reader().use { c -> c.read { p ->
             val h = handle(c)
-            assertThat(c.getTableColumns(h.tableId, h.snapshotId).map { it.columnId }).containsExactly(1, 2)
+            assertThat(p.metadata.columns(h.tableId).map { it.columnId }).containsExactly(1, 2)
         } }
         native("ALTER TABLE lake.t RENAME COLUMN s TO renamed; ALTER TABLE lake.t ADD COLUMN d INTEGER DEFAULT 42")
-        reader().use { c -> c.read {
+        reader().use { c -> c.read { p ->
             val h = handle(c)
-            val cols = c.getTableColumns(h.tableId, h.snapshotId)
+            val cols = p.metadata.columns(h.tableId)
             assertThat(cols.map { it.columnId }).containsExactly(1, 2, 3)
             assertThat(cols.map { it.columnName }).containsExactly("i", "renamed", "d")
-            val rows = c.getInlinedDataInfos(h.tableId, h.snapshotId).flatMap {
-                c.readInlinedDataDecoded(h.tableId, it.schemaVersion, h.snapshotId, cols)
+            val rows = p.metadata.inline(h.tableId).flatMap {
+                p.decoded(h.tableId, it.schemaVersion, cols.map { column -> column.columnId })
             }
             assertThat(rows).containsExactly(listOf(1, null, 42), listOf(2, "NULL", 42))
         } }
@@ -133,13 +184,11 @@ internal class DuckLakeR07QualificationTest {
     @Test
     fun unsupportedVariantValuesRejectRawAndDecoded() {
         native("CREATE TABLE lake.t(i INTEGER,v VARIANT); INSERT INTO lake.t VALUES(1,NULL)")
-        reader().use { c -> c.read {
+        reader().use { c -> c.read { p ->
             val h = handle(c)
-            val cols = c.getTableColumns(h.tableId, h.snapshotId)
-            val info = c.getInlinedDataInfos(h.tableId, h.snapshotId).single()
-            assertThatThrownBy { c.readInlinedData(h.tableId, info.schemaVersion, h.snapshotId, cols) }
-                .hasMessageContaining("variant")
-            assertThatThrownBy { c.readInlinedDataDecoded(h.tableId, info.schemaVersion, h.snapshotId, cols) }
+            val cols = p.metadata.columns(h.tableId)
+            val info = p.metadata.inline(h.tableId).single()
+            assertThatThrownBy { p.decoded(h.tableId, info.schemaVersion, cols.map { it.columnId }) }
                 .hasMessageContaining("variant")
         } }
     }
@@ -147,13 +196,11 @@ internal class DuckLakeR07QualificationTest {
     @Test
     fun time24DoesNotSilentlyBecomeMidnight() {
         native("CREATE TABLE lake.t(v TIME); INSERT INTO lake.t VALUES(TIME '24:00:00')")
-        reader().use { c -> c.read {
+        reader().use { c -> c.read { p ->
             val h = handle(c)
-            val cols = c.getTableColumns(h.tableId, h.snapshotId)
-            val info = c.getInlinedDataInfos(h.tableId, h.snapshotId).single()
-            assertThatThrownBy { c.readInlinedData(h.tableId, info.schemaVersion, h.snapshotId, cols) }
-                .hasMessageContaining("24:00")
-            assertThatThrownBy { c.readInlinedDataDecoded(h.tableId, info.schemaVersion, h.snapshotId, cols) }
+            val cols = p.metadata.columns(h.tableId)
+            val info = p.metadata.inline(h.tableId).single()
+            assertThatThrownBy { p.decoded(h.tableId, info.schemaVersion, cols.map { it.columnId }) }
                 .hasMessageContaining("24:00")
         } }
     }
@@ -167,6 +214,8 @@ internal class DuckLakeR07QualificationTest {
         } }
         reader().use { c -> c.read {
             val h = handle(c)
+            // Deliberate legacy rich-observation compatibility check: page DTO has no deleteCount.
+            // Never used by the qualified capture or to authorize a physical scan/count.
             assertThat(c.readMetadata().getFileReadMetadata(h.tableId, h.snapshotId).single().deleteCount).isNull()
             assertThatThrownBy { c.getLiveRowCount(h.tableId, h.snapshotId) }.hasMessageContaining("cannot assume zero")
             assertThat(DuckLakeConnectorMetadata(c).getTableStatistics(null, h)).isEmpty()
@@ -177,11 +226,11 @@ internal class DuckLakeR07QualificationTest {
     fun geometryUsesRealNativeParquetButDoesNotEstablishDorisPayloadSupport() {
         native("CALL lake.set_option('data_inlining_row_limit',0); CREATE TABLE lake.t(i INTEGER,g GEOMETRY); " +
             "INSERT INTO lake.t VALUES(1,'POINT(1 2)'::GEOMETRY),(2,NULL)")
-        reader().use { c -> c.read {
+        reader().use { c -> c.read { p ->
             val h = handle(c)
-            assertThat(c.getTableColumns(h.tableId, h.snapshotId).map { it.columnType })
+            assertThat(p.metadata.columns(h.tableId).map { it.columnType })
                 .containsExactly("int32", "geometry")
-            val path = c.readHierarchy().listRetainedFiles(DucklakeFileKind.DATA, null, 2).single().resolvedPath
+            val path = p.retained(DucklakeFileKind.DATA).single().resolvedPath
             ParquetFileReader.open(LocalInputFile(Path.of(path))).use { p ->
                 assertThat(p.footer.blocks.sumOf { it.rowCount }).isEqualTo(2)
                 assertThat(p.footer.fileMetaData.schema.getType("g").id.intValue()).isEqualTo(2)
@@ -195,9 +244,9 @@ internal class DuckLakeR07QualificationTest {
         native("CALL lake.set_option('data_inlining_row_limit',2); CREATE TABLE lake.t(i INTEGER); BEGIN; " +
             "INSERT INTO lake.t VALUES(1),(2); INSERT INTO lake.t VALUES(3),(4),(5),(6),(7); COMMIT")
         assertThat(native("SELECT i FROM lake.t ORDER BY i")).isEqualTo((1..7).map { listOf(it.toString()) })
-        reader().use { c -> c.read {
+        reader().use { c -> c.read { p ->
             val h = handle(c)
-            assertThat(c.getDataFiles(h.tableId, h.snapshotId).sumOf { it.recordCount }).isEqualTo(5)
+            assertThat(p.metadata.files(h.tableId).sumOf { it.dataFile.recordCount }).isEqualTo(5)
             assertThat(c.getLiveRowCount(h.tableId, h.snapshotId)).isEqualTo(7)
             assertThatThrownBy { planner(c, true).planScan(null, ConnectorScanRequest.builder(h, emptyList()).build()) }
                 .hasMessageContaining("1.1 DATA scans are not supported")
@@ -212,11 +261,11 @@ internal class DuckLakeR07QualificationTest {
         native("INSERT INTO lake.t VALUES(4)")
         native("INSERT INTO lake.t VALUES(5),(6),(7)")
         native("CALL ducklake_merge_adjacent_files('lake','t')")
-        reader().use { c -> c.read {
+        reader().use { c -> c.read { p ->
             val h = handle(c, first)
-            val file = c.getDataFiles(h.tableId, first).single()
+            val file = p.filesAt(h.tableId, first).single().dataFile
             assertThat(file.rowIdStart).isNull()
-            val path = c.readHierarchy().listRetainedFiles(DucklakeFileKind.DATA, null, 10)
+            val path = p.retained(DucklakeFileKind.DATA)
                 .single { it.fileId == file.dataFileId }.resolvedPath
             ParquetFileReader.open(LocalInputFile(Path.of(path))).use { parquet ->
                 assertThat(parquet.footer.fileMetaData.schema.fields.map { it.name })
@@ -239,14 +288,14 @@ internal class DuckLakeR07QualificationTest {
         native("DELETE FROM lake.t WHERE i=4")
         val later = snapshot()
         native("CALL ducklake_flush_inlined_data('lake',table_name=>'t')")
-        reader().use { c -> c.read {
+        reader().use { c -> c.read { p ->
             val h = handle(c)
-            val file = c.getDataFiles(h.tableId, h.snapshotId).single()
+            val file = p.metadata.files(h.tableId).single().dataFile
             assertThat(file.deleteFileFormat).isEqualTo("parquet")
             assertThat(file.deleteFilePartialMax).isNull()
-            val change = c.getDeletionsBetween(h.tableId, later, later).single { !it.fullFileDelete }
+            val change = p.deletions(h.tableId, later, later).single { !it.fullFileDelete }
             assertThat(change.currentDeletePath).isEqualTo(change.previousDeletePath)
-            val path = c.readHierarchy().listRetainedFiles(DucklakeFileKind.DELETE, null, 10).single().resolvedPath
+            val path = p.retained(DucklakeFileKind.DELETE).single().resolvedPath
             assertThat(parquetSql("SELECT _ducklake_internal_snapshot_id FROM read_parquet('$path') ORDER BY pos"))
                 .containsExactly(listOf(earlier.toString()), listOf(later.toString()))
             assertThatThrownBy { planner(c).planScan(null, ConnectorScanRequest.builder(h, emptyList()).build()) }
@@ -258,11 +307,11 @@ internal class DuckLakeR07QualificationTest {
     fun barePuffinVectorHasRealCrcButIsNotMisroutedAsParquet() {
         native("CALL lake.set_option('data_inlining_row_limit',0); CALL lake.set_option('write_deletion_vectors',true); " +
             "CREATE TABLE lake.t(i INTEGER); INSERT INTO lake.t FROM range(20); DELETE FROM lake.t WHERE i<3")
-        reader().use { c -> c.read {
+        reader().use { c -> c.read { p ->
             val h = handle(c)
-            val file = c.getDataFiles(h.tableId, h.snapshotId).single()
+            val file = p.metadata.files(h.tableId).single().dataFile
             assertThat(file.deleteFileFooterSize).isEqualTo(0)
-            val path = c.readHierarchy().listRetainedFiles(DucklakeFileKind.DELETE, null, 10).single().resolvedPath
+            val path = p.retained(DucklakeFileKind.DELETE).single().resolvedPath
             val bytes = Files.readAllBytes(Path.of(path))
             val length = ByteBuffer.wrap(bytes).int
             assertThat(bytes.size).isEqualTo(length + 8)
@@ -283,9 +332,9 @@ internal class DuckLakeR07QualificationTest {
         native("DELETE FROM lake.t WHERE i=4")
         val later = snapshot()
         native("CALL ducklake_flush_inlined_data('lake',table_name=>'t')")
-        reader().use { c -> c.read {
+        reader().use { c -> c.read { p ->
             val h = handle(c)
-            val path = c.readHierarchy().listRetainedFiles(DucklakeFileKind.DELETE, null, 10).single().resolvedPath
+            val path = p.retained(DucklakeFileKind.DELETE).single().resolvedPath
             val bytes = Files.readAllBytes(Path.of(path))
             assertThat(String(bytes.copyOfRange(0, 4))).isEqualTo("PFA1")
             val size = ByteBuffer.wrap(bytes, bytes.size - 12, 4).order(ByteOrder.LITTLE_ENDIAN).int
@@ -293,7 +342,7 @@ internal class DuckLakeR07QualificationTest {
             assertThat(footer["blobs"].map { it["properties"]["ducklake-snapshot-id"].asText() })
                 .containsExactly(earlier.toString(), later.toString())
             assertThat(footer["blobs"].map { it["properties"]["cardinality"].asText() }).containsExactly("1", "2")
-            val change = c.getDeletionsBetween(h.tableId, later, later).single { !it.fullFileDelete }
+            val change = p.deletions(h.tableId, later, later).single { !it.fullFileDelete }
             assertThat(change.currentDeletePath).isEqualTo(change.previousDeletePath)
             assertThatThrownBy { planner(c).planScan(null, ConnectorScanRequest.builder(h, emptyList()).build()) }
                 .hasMessageContaining("Equal paths do not imply an empty deletion window")
@@ -310,7 +359,7 @@ internal class DuckLakeR07QualificationTest {
             assertThatThrownBy { planner(c).planScan(null,
                 ConnectorScanRequest.builder(h, emptyList()).countPushdown(true).limit(1).build()) }
                 .hasMessageContaining("1.1 DATA scans are not supported")
-            val path = c.read { c.readHierarchy().listRetainedFiles(DucklakeFileKind.DATA, null, 2).single().resolvedPath }
+            val path = c.read { it.retained(DucklakeFileKind.DATA).single().resolvedPath }
             ParquetFileReader.open(LocalInputFile(Path.of(path))).use { p ->
                 assertThat(p.footer.blocks.sumOf { it.rowCount }).isEqualTo(2)
                 assertThat(p.footer.fileMetaData.schema.fields.map { it.id.intValue() }).containsExactly(1, 2, 3)

@@ -132,6 +132,10 @@ internal class DuckLakeFinal11Plan private constructor(
             require(owned.timeoutSeconds <= budget.queryTimeoutSeconds) { "Read control cannot extend the planning deadline" }
             return c.readSession(owned, Supplier {
                 val snapshot = header(c, budget)
+                // The new library checks physical planning types once in this owned
+                // context: up to257 layout rows plus257 PostgreSQL dimension rows.
+                // Reserve that internal work too, before the first planning API call.
+                budget.step(514)
                 val capture = Capture(c, snapshot, budget, DuckLakeFinal11Files(objects, budget))
                 val current = capture.build()
                 val start = if (budget.historyWindow == 0) snapshot.snapshotId else maxOf(0L, snapshot.snapshotId - budget.historyWindow + 1)
@@ -172,6 +176,7 @@ internal class DuckLakeFinal11Plan private constructor(
         private val retainedFiles: Pair<Map<Long, DucklakeOwnedFile>, Map<Long, DucklakeOwnedFile>>? = null,
         private val shapes: MutableMap<Long, Shape> = linkedMapOf(),
         private val partitions: MutableSet<List<Pair<Long, Long?>>> = hashSetOf(),
+        private val emptyPositionsThrough: MutableMap<Long, Long> = linkedMapOf(),
     ) {
         private data class Shape(
             val schemas: List<DucklakeSchema>, val tables: List<DucklakeTable>,
@@ -183,7 +188,9 @@ internal class DuckLakeFinal11Plan private constructor(
         private val current = snapshot.snapshotId
         private val pages = DuckLakePlanningPages(c, current, budget)
 
-        fun at(snapshot: DucklakeSnapshot): Capture = Capture(c, snapshot, budget, inspector, data to deletes, shapes, partitions)
+        fun at(snapshot: DucklakeSnapshot): Capture = Capture(
+            c, snapshot, budget, inspector, data to deletes, shapes, partitions, emptyPositionsThrough,
+        )
 
         fun build(): DuckLakeFinal11Plan {
             // Schema-version coordinates are the catalog's immutable schema dictionary.
@@ -234,8 +241,11 @@ internal class DuckLakeFinal11Plan private constructor(
             budget.step()
             val columns = shape.columns.getValue(table.tableId)
             val infos = pages.inline(table.tableId)
-            budget.step()
-            val inlineDeletes = c.hasInlinedDeletes(table.tableId, current)
+            // A COMPLETE empty [0,S] probe also proves any narrower [0,older] empty
+            // in this same owned view. Never share a positive probe or failed layout.
+            val inlineDeletes = if ((emptyPositionsThrough[table.tableId] ?: -1) >= current) false else {
+                pages.hasInlineDeletes(table.tableId).also { if (!it) emptyPositionsThrough[table.tableId] = current }
+            }
             val entries = pages.files(table.tableId)
             val files = entries.map { it.dataFile }
             files.mapNotNull { it.mappingId }.distinct().forEach(pages::mapping)

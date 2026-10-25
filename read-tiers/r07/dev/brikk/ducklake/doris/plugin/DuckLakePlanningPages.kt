@@ -50,6 +50,21 @@ internal class DuckLakePlanningPages(
         budget.step(10)
     }
 
+    fun hasInlineDeletes(table: Long): Boolean {
+        // Existence/refusal only, NOT an enumeration or a file-local position plan.
+        // Empty is terminal; one validated row suffices to refuse the whole table.
+        budget.page()
+        budget.step(10) // Bounded physical-layout and visible-snapshot preflights.
+        val page = catalog.getInlinedFileDeletesBetweenPage(table, 0, snapshot, null, 1)
+        check(page.size <= 1) { "Oversized inline-delete probe" }
+        if (page.isNotEmpty()) return true
+        // The windowed API intentionally excludes negative begin snapshots. Keep
+        // the bounded legacy EXISTS as a conservative refusal witness for those
+        // malformed older rows too; an empty valid window must not authorize them.
+        budget.step(3)
+        return catalog.hasInlinedDeletes(table, snapshot)
+    }
+
     fun files(table: Long): List<DucklakeDataFilePageEntry> = drain(4096,
         { after, size -> catalog.getDataFilesPage(table, snapshot, after, size) }, { it.cursor },
         compareBy<DucklakeDataFileCursor> { it.dataFileId }.thenBy { it.deleteFileId ?: -1L }) {
