@@ -1,5 +1,9 @@
 # R07 controlled capture and decoded defaults — October 24
 
+Subsequent SQL-paged capture and corrected history-kind qualification is recorded
+in [the paging continuation](VALIDATION-R07-PAGING-2026-10-25.md). Hashes and
+counts below describe this earlier immutable checkpoint.
+
 ## Scope
 
 Continuation of `3228a80092bba5757bca391817e73e65f7090c7d`, qualification only.

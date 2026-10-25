@@ -79,6 +79,8 @@ internal class DuckLakeR07FormatTest {
         assertThatThrownBy { bytes.transfer(2) }.hasMessageContaining("byte budget")
         assertThatThrownBy { DuckLakeReadBudget(mapOf("final11.max-planning-work" to "0")) }.hasMessageContaining("Invalid")
         assertThatThrownBy { DuckLakeReadBudget(mapOf("final11.history-window" to "17")) }.hasMessageContaining("0..16")
+        assertThat(DuckLakeReadBudget(mapOf("final11.max-planning-page-size" to "1")).pageSize).isEqualTo(1)
+        assertThatThrownBy { DuckLakeReadBudget(mapOf("final11.max-planning-page-size" to "129")) }.hasMessageContaining("maximum 128")
     }
 
     @Test fun checkedPlanningFailuresRetainTheirCauseAndRuntimeFailuresKeepIdentity() {

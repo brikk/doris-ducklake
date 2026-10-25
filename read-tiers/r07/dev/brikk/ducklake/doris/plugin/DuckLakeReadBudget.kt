@@ -4,7 +4,7 @@ import java.util.concurrent.CancellationException
 
 /** One budget for the whole catalog plan, not a new allowance for each companion page/table. */
 internal class DuckLakeReadBudget(properties: Map<String, String>) {
-    val pageSize = 128
+    val pageSize = limit(properties, "page-size", 128)
     val maxTables = limit(properties, "tables", 128)
     val maxSchemas = limit(properties, "schemas", 64)
     val historyWindow = properties["final11.history-window"]?.toInt() ?: 0
@@ -41,7 +41,7 @@ internal class DuckLakeReadBudget(properties: Map<String, String>) {
     fun literal(value: String) {
         step()
         text -= value.toByteArray(Charsets.UTF_8).size
-        check(text >= 0) { "Final-1.1 total path/default-byte budget exceeded" }
+        check(text >= 0) { "Final-1.1 total path/default-byte budget exceeded (including metadata)" }
     }
     fun finish() { step(); captured = true }
 

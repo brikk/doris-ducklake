@@ -3,12 +3,9 @@ package dev.brikk.ducklake.doris.plugin
 import dev.brikk.ducklake.catalog.DucklakeColumn
 import dev.brikk.ducklake.catalog.DucklakeDataFile
 import dev.brikk.ducklake.catalog.DucklakeFileKind
-import dev.brikk.ducklake.catalog.DucklakeFileReadMetadata
 import dev.brikk.ducklake.catalog.DucklakeInlinedDataInfo
 import dev.brikk.ducklake.catalog.DucklakeOwnedFile
 import dev.brikk.ducklake.catalog.DucklakePartitionSpec
-import dev.brikk.ducklake.catalog.DucklakeQualifiedSchema
-import dev.brikk.ducklake.catalog.DucklakeQualifiedTable
 import dev.brikk.ducklake.catalog.DucklakeReadSessionControl
 import dev.brikk.ducklake.catalog.DucklakeSchema
 import dev.brikk.ducklake.catalog.DucklakeSnapshot
@@ -164,9 +161,7 @@ internal class DuckLakeFinal11Plan private constructor(
                 "Invalid SQL-server capabilities"
             }
             check(!c.isEncrypted()) { "Encrypted final-1.1 files are not qualified" }
-            check(snapshot.schemaVersion in 0..256) {
-                "Final-1.1 schema-version budget exceeded; bounded inline-info companion API needed for larger catalogs"
-            }
+            check(snapshot.schemaVersion >= 0) { "Negative schema version" }
             return snapshot
         }
     }
@@ -175,33 +170,46 @@ internal class DuckLakeFinal11Plan private constructor(
         private val c: JdbcDucklakeCatalog, private val snapshot: DucklakeSnapshot,
         private val budget: DuckLakeReadBudget, private val inspector: DuckLakeFinal11Files,
         private val retainedFiles: Pair<Map<Long, DucklakeOwnedFile>, Map<Long, DucklakeOwnedFile>>? = null,
+        private val shapes: MutableMap<Long, Shape> = linkedMapOf(),
+        private val partitions: MutableSet<List<Pair<Long, Long?>>> = hashSetOf(),
     ) {
+        private data class Shape(
+            val schemas: List<DucklakeSchema>, val tables: List<DucklakeTable>,
+            val columns: Map<Long, List<DucklakeColumn>>, val specs: Map<Long, List<DucklakePartitionSpec>>,
+        )
         private val hierarchy = c.readHierarchy()
         private val data = retainedFiles?.first ?: retained(DucklakeFileKind.DATA)
         private val deletes = retainedFiles?.second ?: retained(DucklakeFileKind.DELETE)
         private val current = snapshot.snapshotId
+        private val pages = DuckLakePlanningPages(c, current, budget)
 
-        fun at(snapshot: DucklakeSnapshot): Capture = Capture(c, snapshot, budget, inspector, data to deletes)
+        fun at(snapshot: DucklakeSnapshot): Capture = Capture(c, snapshot, budget, inspector, data to deletes, shapes, partitions)
 
         fun build(): DuckLakeFinal11Plan {
-            val schemas = hierarchy.listSchemas(current)
-            check(schemas.size <= budget.maxSchemas && schemas.all { it.names.size == 1 }) { "Final-1.1 root-schema/node budget exceeded" }
-            budget.step(schemas.size)
-            val tables = currentTables(schemas)
-            val plans = tables.associate { it.table.tableId to table(it.table) }
+            // Schema-version coordinates are the catalog's immutable schema dictionary.
+            // Only COMPLETE validated shapes are shared, within this one owned capture.
+            val shape = shapes.getOrPut(snapshot.schemaVersion) {
+                val schemas = pages.schemas()
+                val tables = currentTables(schemas)
+                val columns = tables.associate { it.tableId to pages.columns(it.tableId) }
+                val specs = tables.associate { it.tableId to pages.specs(it.tableId, columns.getValue(it.tableId)) }
+                Shape(schemas, tables, columns, specs)
+            }
+            val plans = shape.tables.associate { it.tableId to table(it, shape) }
             val root = c.getDataPath() ?: error("Missing stored catalog data path")
+            budget.literal(root)
             budget.step(plans.values.sumOf { it.paths.size })
-            return DuckLakeFinal11Plan(snapshot, root, java.util.List.copyOf(schemas.map { it.metadata.schema }), plans, budget)
+            return DuckLakeFinal11Plan(snapshot, root, java.util.List.copyOf(shape.schemas), plans, budget)
         }
 
-        private fun currentTables(schemas: List<DucklakeQualifiedSchema>): List<DucklakeQualifiedTable> {
-            val tables = mutableListOf<DucklakeQualifiedTable>()
+        private fun currentTables(schemas: List<DucklakeSchema>): List<DucklakeTable> {
+            val tables = mutableListOf<DucklakeTable>()
             for (schema in schemas) {
                 budget.step()
-                tables.addAll(hierarchy.listTables(schema.metadata.schema.schemaId, current).also { budget.step(it.size) })
+                tables.addAll(pages.tables(schema.schemaId, budget.maxTables - tables.size))
                 check(tables.size <= budget.maxTables) { "Final-1.1 total table budget exceeded" }
             }
-            check(tables.map { it.table.tableId }.distinct().size == tables.size) { "Duplicate table identity" }
+            check(tables.map { it.tableId }.distinct().size == tables.size) { "Duplicate table identity" }
             return tables
         }
 
@@ -222,32 +230,26 @@ internal class DuckLakeFinal11Plan private constructor(
             }
         }
 
-        private fun table(table: DucklakeTable): Table {
+        private fun table(table: DucklakeTable, shape: Shape): Table {
             budget.step()
-            val columns = c.getTableColumns(table.tableId, current)
-            check(columns.size <= 1024) { "Column budget exceeded" }
-            check(columns.map { it.columnId }.distinct().size == columns.size && columns.all { it.columnId in 0..Int.MAX_VALUE.toLong() }) {
-                "Ambiguous/out-of-range native field IDs"
-            }
-            budget.step(columns.size)
-            // Legacy materialized inline-info API: reserve its schema-key-bounded
-            // worst-case probes before calling it; this is not a paged API.
-            budget.step(((snapshot.schemaVersion + 1) * 10).toInt())
-            val infos = c.getInlinedDataInfos(table.tableId, current)
+            val columns = shape.columns.getValue(table.tableId)
+            val infos = pages.inline(table.tableId)
+            budget.step()
             val inlineDeletes = c.hasInlinedDeletes(table.tableId, current)
-            val files = c.getDataFiles(table.tableId, current)
-            check(files.map { it.dataFileId }.distinct().size == files.size) { "Duplicate active DATA identity" }
-            budget.step(files.size + infos.size)
+            val entries = pages.files(table.tableId)
+            val files = entries.map { it.dataFile }
+            files.mapNotNull { it.mappingId }.distinct().forEach(pages::mapping)
             val unsupported = inspector.unsupported(columns, infos.any { it.hasLiveRows }, inlineDeletes)
                 ?: if (files.any { it.mappingId != null }) "Final-1.1 add_files/Hive name mappings are not qualified" else null
-            val specs = c.getPartitionSpecs(table.tableId, current)
-            budget.step(specs.sumOf { it.fields.size } + specs.size)
-            check(specs.sumOf { it.fields.size } <= 64) { "Partition-field budget exceeded" }
-            val records = c.readMetadata().getFileReadMetadata(table.tableId, current)
-            check(records.size == files.size) { "Duplicate/incomplete active file metadata" }
-            val metadata = records.associateBy { it.dataFileId }
-            check(metadata.size == records.size) { "Duplicate active rich-file identity" }
-            check(metadata.keys == files.map { it.dataFileId }.toSet()) { "Incomplete active file metadata" }
+            val specs = shape.specs.getValue(table.tableId)
+            val partitionKey = files.map { it.dataFileId to it.partitionId }
+            // Partition values are unversioned facts of immutable DATA identities.
+            // Empty active-file enumeration proves the joined value relation empty.
+            if (files.isNotEmpty() && partitionKey !in partitions) {
+                pages.partitionValues(table.tableId, entries, specs)
+                partitions.add(partitionKey)
+            }
+            val metadata = entries.associate { it.cursor.dataFileId to it.cursor.deleteFileId }
             val copiedSpecs = java.util.List.copyOf(specs.map { it.copy(fields = java.util.List.copyOf(it.fields)) })
             val plan = Table(table, java.util.List.copyOf(columns), java.util.List.copyOf(files), java.util.List.copyOf(infos),
                 copiedSpecs, emptyMap(), emptyMap(), unsupported)
@@ -256,7 +258,7 @@ internal class DuckLakeFinal11Plan private constructor(
             }
         }
 
-        private fun physical(plan: Table, metadata: Map<Long, DucklakeFileReadMetadata>): Table {
+        private fun physical(plan: Table, metadata: Map<Long, Long?>): Table {
             val paths = linkedMapOf<Long, String>()
             val positions = linkedMapOf<Long, List<DuckLakePositionDelete>>()
             val defaults = linkedMapOf<Long, String>()
@@ -270,7 +272,7 @@ internal class DuckLakeFinal11Plan private constructor(
                         defaults.getOrPut(column.columnId) {
                             // The public API reloads target schema/history. Reserve work for that
                             // bounded materialization too; this is not a new paged/lazy interface.
-                            budget.step(plan.columns.size * 2 + snapshot.schemaVersion.toInt() + 1)
+                            budget.step(plan.columns.size * 2 + 1)
                             DuckLakeFileDefaults.sql(column, c.getMissingFileColumnDefaultDecoded(
                                 plan.metadata.tableId, column.columnId, current,
                             )).also { budget.literal(it) }
@@ -282,8 +284,7 @@ internal class DuckLakeFinal11Plan private constructor(
             return plan.copy(paths = paths.toMap(), deletes = positions.toMap(), defaultSql = defaults.toMap())
         }
 
-        private fun positionDeletes(file: DucklakeDataFile, metadata: DucklakeFileReadMetadata): List<DuckLakePositionDelete> {
-            val id = metadata.deleteFileId
+        private fun positionDeletes(file: DucklakeDataFile, id: Long?): List<DuckLakePositionDelete> {
             if (id == null) { check(file.deleteFilePath == null) { "Incomplete delete association" }; return emptyList() }
             val delete = deletes[id] ?: error("Missing retained DELETE ownership")
             active(delete, file.tableId)

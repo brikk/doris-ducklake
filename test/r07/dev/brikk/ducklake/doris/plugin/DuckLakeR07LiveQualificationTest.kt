@@ -189,7 +189,7 @@ internal class DuckLakeR07LiveQualificationTest {
         mutate(db, path, "DELETE FROM lake.vectors WHERE i=4")
         mutate(db, path, "CALL ducklake_flush_inlined_data('lake',table_name=>'vectors')")
         fe().use { c ->
-            val catalog = register(c, db, path, ", \"experimental.final11.reads\"=\"true\", \"final11.history-window\"=\"16\"")
+            val catalog = register(c, db, path, ", \"experimental.final11.reads\"=\"true\", \"final11.history-window\"=\"${window(db, firstParquet)}\"")
             for (table in listOf("tagged", "vectors")) {
                 assertThat(rows(c, "SELECT i FROM $catalog.main.$table ORDER BY i"))
                     .containsExactly(listOf("1"), listOf("3"), listOf("5"))
@@ -211,7 +211,7 @@ internal class DuckLakeR07LiveQualificationTest {
     }
 
     private fun assertNativeVectorWireSlices(db: String, path: String, historical: Long) {
-        val props = hostProperties(db, path) + ("final11.history-window" to "16")
+        val props = hostProperties(db, path) + ("final11.history-window" to window(db, historical).toString())
         val context = dev.brikk.ducklake.doris.plugin.cache.FakeConnectorContext("wire", 811L)
         DuckLakeConnectorProvider().create(props, context).use { connector ->
             val session = session(Scope(), "native-wire-slices")
@@ -259,6 +259,15 @@ internal class DuckLakeR07LiveQualificationTest {
         mutate(db, path, "DELETE FROM lake.g WHERE i=4")
         val beforeVector = snapshot(db)
         mutate(db, path, "CALL lake.set_option('data_inlining_row_limit',0); CALL lake.set_option('write_deletion_vectors',true); DELETE FROM lake.g WHERE i=6")
+        // Qualify the SAME historical coordinates before adding unrelated large-table fixtures.
+        // The total page ceiling includes terminal pages for every retained frame/table.
+        fe().use { c ->
+            val historical = register(c, db, path, ", \"experimental.final11.reads\"=\"true\", \"final11.history-window\"=\"${window(db, firstFile)}\"")
+            assertThat(rows(c, "SELECT i FROM $historical.main.g FOR VERSION AS OF $beforeVector ORDER BY i"))
+                .containsExactly(listOf("1"), listOf("2"), listOf("3"), listOf("5"), listOf("6"), listOf("7"))
+            assertThatThrownBy { rows(c, "SELECT i FROM $historical.main.g FOR VERSION AS OF $firstFile") }
+                .hasMessageContaining("per-row snapshot filtering")
+        }
         mutate(db, path, "CREATE TABLE lake.many_groups(i INTEGER); INSERT INTO lake.many_groups SELECT range::INTEGER FROM range(300000)")
         val escapedPartition = "é/%?".repeat(2)
         mutate(db, path, "CREATE TABLE lake.part(i INTEGER,p VARCHAR); ALTER TABLE lake.part SET PARTITIONED BY(p); " +
@@ -271,7 +280,7 @@ internal class DuckLakeR07LiveQualificationTest {
                 .isGreaterThan(1)
         }
         fe().use { c ->
-            val catalog = register(c, db, path, ", \"experimental.final11.reads\"=\"true\", \"final11.history-window\"=\"16\"")
+            val catalog = register(c, db, path, ", \"experimental.final11.reads\"=\"true\"")
             assertThat(rows(c, "SELECT i FROM $catalog.main.g ORDER BY i"))
                 .containsExactly(listOf("1"), listOf("2"), listOf("3"), listOf("5"), listOf("7"))
             assertThat(rows(c, "SELECT COUNT(*) FROM $catalog.main.g")).containsExactly(listOf("5"))
@@ -281,10 +290,6 @@ internal class DuckLakeR07LiveQualificationTest {
                 .containsExactly(listOf("1", escapedPartition), listOf("2", null), listOf("3", "short"))
             assertThat(rows(c, "SELECT i FROM $catalog.main.part WHERE p='$escapedPartition'"))
                 .containsExactly(listOf("1"))
-            assertThat(rows(c, "SELECT i FROM $catalog.main.g FOR VERSION AS OF $beforeVector ORDER BY i"))
-                .containsExactly(listOf("1"), listOf("2"), listOf("3"), listOf("5"), listOf("6"), listOf("7"))
-            assertThatThrownBy { rows(c, "SELECT i FROM $catalog.main.g FOR VERSION AS OF $firstFile") }
-                .hasMessageContaining("per-row snapshot filtering")
             println("POSITIVE FINAL11: NULL contiguous start, embedded absolute ID gap, physical-position DV, multiple real row groups")
         }
     }
@@ -292,6 +297,10 @@ internal class DuckLakeR07LiveQualificationTest {
     private fun snapshot(db: String): Long = DriverManager.getConnection(
         "jdbc:postgresql://127.0.0.1:15487/$db", "r07", "r07-local-only",
     ).use { rows(it, "SELECT MAX(snapshot_id) FROM ducklake_snapshot").single().single()!!.toLong() }
+
+    private fun window(db: String, earliest: Long): Int = (snapshot(db) - earliest + 1).toInt().also {
+        require(it in 1..16) { "Fixture exceeds the unchanged bounded history window" }
+    }
 
     @Test
     fun losslessScalarTypesWideningAndReplacementIdsAreActuallyReadByBe() {
@@ -636,7 +645,9 @@ internal class DuckLakeR07LiveQualificationTest {
             "INSERT INTO lake.evolved(i) VALUES(3)")
         println("DECODED DEFAULT retained comparison fixture database=$db path=$path historical=$before")
         fe().use { c ->
-            val catalog = register(c, db, path, ", \"experimental.final11.reads\"=\"true\", \"final11.history-window\"=\"16\"")
+            assertThatThrownBy { register(c, db, path, ", \"experimental.final11.reads\"=\"true\", \"final11.history-window\"=\"16\"") }
+                .hasMessageContaining("total page budget exceeded")
+            val catalog = register(c, db, path, ", \"experimental.final11.reads\"=\"true\", \"final11.history-window\"=\"${window(db, before)}\"")
             val literal = "42'); DROP TABLE ducklake_snapshot; --"
             val tail = listOf("005CFF", "2024-02-29", "1969-12-31 23:59:59.123456", "12345678901234567.125", literal, "5C783431C3A9")
             val projection = "i,renamed,s,sn,HEX(b),CAST(d AS STRING),DATE_FORMAT(ts,'%Y-%m-%d %H:%i:%s.%f'),CAST(z AS STRING),q,HEX(slash)"
@@ -670,10 +681,160 @@ internal class DuckLakeR07LiveQualificationTest {
             assertThat(rows(c, "SELECT i,n FROM $catalog.main.bad")).containsExactly(listOf("1", "42"))
             pg(db).use { pg -> pg.createStatement().use { it.execute("UPDATE ducklake_column SET default_value_type='expression',initial_default=NULL WHERE column_name='n'") } }
             assertThatThrownBy { rows(c, "SELECT i,n FROM $catalog.main.bad") }.hasMessageContaining("non-literal initial-default history")
+            try {
+                for (initial in listOf("NULL", "'42'")) {
+                    pg(db).use { pg -> pg.createStatement().use {
+                        it.execute("UPDATE ducklake_column SET default_value_type='unknown',initial_default=$initial WHERE column_name='n'")
+                    } }
+                    assertThatThrownBy { rows(c, "SELECT i,n FROM $catalog.main.bad") }.hasMessageContaining("unknown initial-default history kind")
+                }
+            } finally {
+                pg(db).use { pg -> pg.createStatement().use {
+                    it.execute("UPDATE ducklake_column SET default_value_type='literal',initial_default='42' WHERE column_name='n'")
+                } }
+            }
             pg(db).use { pg -> pg.createStatement().use { it.execute("UPDATE ducklake_column SET default_value_type='literal',initial_default='42' WHERE column_name='n'") } }
             assertThat(rows(c, "SELECT i,n FROM $catalog.main.bad")).containsExactly(listOf("1", "42"))
             assertThatThrownBy { rows(c, "SELECT * FROM $catalog.main.nested") }.hasMessageContaining("not qualified")
             println("ACTUAL FE/BE expression history rejects; restored fixture fresh statement recovers; nested NULL parent remains explicitly unsupported")
+        }
+    }
+
+    @Test
+    fun oneItemPagesCaptureMoreSchemasTablesAndNativeVersionsBeyond256() {
+        ensureBucket()
+        val (db, path) = produce("1.1")
+        mutate(db, path, "CREATE SCHEMA lake.s1; CREATE SCHEMA lake.s2; " +
+            "CREATE TABLE lake.s1.a(k INTEGER); INSERT INTO lake.s1.a VALUES(11); " +
+            "CREATE TABLE lake.s1.b(k INTEGER); INSERT INTO lake.s1.b VALUES(12); " +
+            "CREATE TABLE lake.s2.c(k INTEGER,p VARCHAR); ALTER TABLE lake.s2.c SET PARTITIONED BY(p); " +
+            "INSERT INTO lake.s2.c VALUES(13,'a/b'),(14,NULL); " +
+            (1..260).joinToString("; ") { if (it % 2 == 1) "ALTER TABLE lake.t RENAME COLUMN i TO j" else "ALTER TABLE lake.t RENAME COLUMN j TO i" })
+        pg(db).use { pg ->
+            assertThat(rows(pg, "SELECT max(schema_version) FROM ducklake_snapshot").single().single()!!.toLong()).isGreaterThan(256)
+        }
+        fe().use { c ->
+            val catalog = register(c, db, path, ", \"experimental.final11.reads\"=\"true\", \"final11.max-planning-page-size\"=\"1\"")
+            assertThat(rows(c, "SELECT a.k,b.k,c.k,t.added FROM $catalog.s1.a a CROSS JOIN $catalog.s1.b b " +
+                "CROSS JOIN $catalog.s2.c c CROSS JOIN $catalog.main.t t WHERE t.i=1 AND c.k=13"))
+                .containsExactly(listOf("11", "12", "13", "42"))
+            assertThat(rows(c, "SELECT k,p FROM $catalog.s2.c ORDER BY k"))
+                .containsExactly(listOf("13", "a/b"), listOf("14", null))
+            assertThat(rows(c, "SELECT a.i FROM $catalog.main.t a JOIN $catalog.main.t b ON a.i=b.i ORDER BY a.i"))
+                .containsExactly(listOf("1"), listOf("2"), listOf("3"))
+        }
+        val context = dev.brikk.ducklake.doris.plugin.cache.FakeConnectorContext("schema-budget", 811L)
+        DuckLakeConnectorProvider().create(hostProperties(db, path) + mapOf(
+            "final11.max-planning-schemas" to "2", "final11.max-planning-page-size" to "1",
+        ), context).use { connector ->
+            val s = session(Scope(), "schema-budget")
+            val metadata = connector.getMetadata(s)
+            val original = runCatching { metadata.getTableHandle(s, "main", "t") }.exceptionOrNull()
+            assertThat(original).isInstanceOf(IllegalStateException::class.java).hasMessageContaining("node budget")
+            assertThatThrownBy { connector.getMetadata(s).getTableHandle(s, "s1", "a") }.isSameAs(original)
+        }
+        println("SQL one-item pages: 3 schemas/4 tables/native schema version>256, defaults and self join within unchanged ceilings")
+    }
+
+    @Test
+    fun realAdapterRejectsOversizeDuplicateAndCyclicMetadataThenFreshStatementRecovers() {
+        ensureBucket()
+        val (db, path) = produce("1.1")
+        val context = dev.brikk.ducklake.doris.plugin.cache.FakeConnectorContext("paged-negatives", 811L)
+        DuckLakeConnectorProvider().create(hostProperties(db, path) + ("final11.max-planning-page-size" to "1"), context).use { connector ->
+            val snapshot = snapshot(db)
+            val tableId = pg(db).use { rows(it, "SELECT table_id FROM ducklake_table WHERE table_name='t'").single().single()!! }
+            fun sql(statement: String) { pg(db).use { it.createStatement().use { s -> s.execute(statement) } } }
+            fun failure() {
+                val s = session(Scope(), UUID.randomUUID().toString())
+                assertThatThrownBy { connector.getMetadata(s).getTableHandle(s, "main", "t") }
+                    .isInstanceOf(IllegalStateException::class.java)
+            }
+            // The oversized cell is rejected by bounded library SQL, not trimmed by this adapter.
+            try {
+                sql("UPDATE ducklake_column SET column_name=repeat('x',16385) WHERE table_id=$tableId AND column_name='i'")
+                val s = session(Scope(), "oversize")
+                assertThatThrownBy { connector.getMetadata(s).getTableHandle(s, "main", "t") }.hasMessageContaining("text")
+            } finally { sql("UPDATE ducklake_column SET column_name='i' WHERE table_id=$tableId AND length(column_name)=16385") }
+            try {
+                sql("UPDATE ducklake_column SET parent_column=column_id WHERE table_id=$tableId AND column_name='i'")
+                failure()
+            } finally { sql("UPDATE ducklake_column SET parent_column=NULL WHERE table_id=$tableId AND column_name='i'") }
+            // Duplicate seek key at a one-item boundary: add one owned active history row.
+            try {
+                sql("INSERT INTO ducklake_column SELECT * FROM ducklake_column WHERE table_id=$tableId AND column_name='i'")
+                val s = session(Scope(), "duplicate")
+                assertThatThrownBy { connector.getMetadata(s).getTableHandle(s, "main", "t") }.hasMessageContaining("Duplicate")
+            } finally {
+                sql("DELETE FROM ducklake_column WHERE ctid IN (SELECT ctid FROM ducklake_column WHERE table_id=$tableId AND column_name='i' ORDER BY ctid OFFSET 1)")
+            }
+            try {
+                sql("INSERT INTO ducklake_name_mapping(mapping_id,column_id,source_name,target_field_id,parent_column,is_partition) " +
+                    "VALUES(303,11,'i',1,NULL,false),(303,22,'renamed',2,11,true)")
+                sql("UPDATE ducklake_data_file SET mapping_id=303 WHERE table_id=$tableId")
+                val s = session(Scope(), "mapping-registry-not-target-ids")
+                val metadata = connector.getMetadata(s)
+                val h = metadata.getTableHandle(s, "main", "t").orElseThrow()
+                assertThatThrownBy { metadata.getTableSchema(s, h) }.hasMessageContaining("Hive name mappings")
+            } finally {
+                sql("UPDATE ducklake_data_file SET mapping_id=NULL WHERE table_id=$tableId")
+                sql("DELETE FROM ducklake_name_mapping WHERE mapping_id=303")
+            }
+            val recovered = session(Scope(), "repaired")
+            val h = connector.getMetadata(recovered).getTableHandle(recovered, "main", "t").orElseThrow() as DuckLakeTableHandle
+            assertThat(h.snapshotId).isEqualTo(snapshot)
+        }
+        println("Real adapter SQL-bounded oversize/duplicate boundary/cycle refusals; metadata repaired and fresh statement recovers")
+    }
+
+    @Test
+    fun absentInlineRegistryPositionsDoNotHideLaterLiveRowsAndTerminalBudgetIsRequired() {
+        ensureBucket()
+        val (db, path) = produce("1.1")
+        mutate(db, path, "CALL lake.set_option('data_inlining_row_limit',100); CREATE TABLE lake.inline_later(i INTEGER); " +
+            "INSERT INTO lake.inline_later VALUES(91); ALTER TABLE lake.inline_later ADD COLUMN j INTEGER; " +
+            "INSERT INTO lake.inline_later VALUES(92,1)")
+        val identities = pg(db).use { rows(it, "SELECT table_id,table_name FROM ducklake_inlined_data_tables ORDER BY schema_version") }
+        assertThat(identities.size).isEqualTo(2)
+        val absent = identities.first()[1]!!
+        // Retain registry identity but temporarily hide the first physical table. Not a producer claim.
+        pg(db).use { it.createStatement().use { s -> s.execute("ALTER TABLE $absent RENAME TO ${absent}_retained") } }
+        try {
+            val context = dev.brikk.ducklake.doris.plugin.cache.FakeConnectorContext("inline-pages", 811L)
+            DuckLakeConnectorProvider().create(hostProperties(db, path) + ("final11.max-planning-page-size" to "1"), context).use { connector ->
+                val s = session(Scope(), "later-live-registry")
+                val metadata = connector.getMetadata(s)
+                val handle = metadata.getTableHandle(s, "main", "inline_later").orElseThrow()
+                assertThatThrownBy { metadata.getTableSchema(s, handle) }
+                    .hasMessageContaining("inline")
+            }
+            val config = dev.brikk.ducklake.catalog.DucklakeCatalogConfig().apply {
+                catalogDatabaseUrl = "jdbc:postgresql://127.0.0.1:15487/$db"
+                catalogDatabaseUser = "r07"
+                catalogDatabasePassword = "r07-local-only"
+                dataPath = path
+                maxCatalogConnections = 1
+                enableFinal11Reads = true
+            }
+            dev.brikk.ducklake.catalog.JdbcDucklakeCatalog(config).use { catalog ->
+                catalog.readSession(java.util.function.Supplier {
+                    val head = catalog.currentSnapshotId
+                    // Exactly one nonempty schema page fits. Its REQUIRED terminal page does not.
+                    val pages = DuckLakePlanningPages(catalog, head, DuckLakeReadBudget(mapOf("final11.max-planning-pages" to "1")))
+                    assertThatThrownBy { pages.schemas() }.hasMessageContaining("page budget")
+                    val complete = DuckLakePlanningPages(catalog, head, DuckLakeReadBudget(emptyMap())).inline(identities.first()[0]!!.toLong())
+                    assertThat(complete.map { it.hasLiveRows }).containsExactly(false, true)
+                })
+            }
+        } finally {
+            pg(db).use { it.createStatement().use { s -> s.execute("ALTER TABLE ${absent}_retained RENAME TO $absent") } }
+        }
+        // Restore metadata AND native data, then prove a new real FE/BE query sees both rows.
+        mutate(db, path, "CALL ducklake_flush_inlined_data('lake',table_name=>'inline_later')")
+        fe().use { c ->
+            val catalog = register(c, db, path, ", \"experimental.final11.reads\"=\"true\", \"final11.max-planning-page-size\"=\"1\"")
+            assertThat(rows(c, "SELECT i,j FROM $catalog.main.inline_later ORDER BY i"))
+                .containsExactly(listOf("91", null), listOf("92", "1"))
         }
     }
 }
