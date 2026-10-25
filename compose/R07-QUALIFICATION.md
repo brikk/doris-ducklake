@@ -21,7 +21,7 @@ daemons, or stop the shared services.
 ```sh
 export GRADLE_USER_HOME=/tmp/opencode/doris-r07-gradle
 export DORIS_R07_ROOT=/tmp/opencode/doris-r07
-candidate=/tmp/opencode/catalog-r07-58ef4d7/maven-repository
+candidate=/tmp/opencode/catalog-r07-6730bb8/maven-repository
 mise exec -- ./gradlew verifyR07Candidate r07ReadQualificationTest pluginZip \
   -Pr07CatalogRepository="$candidate" --no-daemon --no-configuration-cache
 ```
@@ -36,6 +36,12 @@ docker compose -f compose/r07-qualification.yml up -d
 mise exec -- ./gradlew r07LiveQualificationTest \
   -Pr07CatalogRepository="$candidate" --no-daemon --no-configuration-cache
 ```
+
+If recreating the owned FE for a fresh namespace, recreate its owned BE as a
+matched pair and verify `SHOW BACKENDS` reports a live `dd456ab7` heartbeat before
+qualification. A retained BE entrypoint can otherwise assume registration in the
+old FE and exit waiting for heartbeat. Do not count readiness failures as SQL
+qualification or change PostgreSQL capacity to compensate for retained catalogs.
 
 The live test allocates unique PostgreSQL databases and S3 prefixes and prints
 their names. It verifies matched peers, actual S3-backed 1.0 scans (field IDs,

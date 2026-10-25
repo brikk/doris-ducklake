@@ -1,5 +1,9 @@
 # R07 SQL-paged bounded capture — October 25
 
+Latest6730bb8 adoption and requalification:
+[R07 adoption](VALIDATION-R07-ADOPTION-2026-10-25.md). The older candidate/API-gap
+statements below describe this report's historical10f81f9 run only.
+
 Continuation of `a6aa725d0de6f39836ee33625a1a2e309d992390`, qualification only.
 No formal release, push, deployment, default-on, migration, 1.1 write, cleanup,
 catalog/Trino edit, source/extension/corpus repin, new skip or baseline rewrite.
