@@ -4,14 +4,16 @@ import java.util.Properties
 
 import org.apache.doris.connector.spi.Connector
 import org.apache.doris.thrift.TIcebergTableSink
+import org.apache.doris.thrift.TPaimonFileDesc
 import org.apache.doris.thrift.TQueryOptions
+import org.apache.doris.thrift.TReportExecStatusParams
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 
-/** Pins the installed SPI and regenerated wire contract to dd456ab7a89, not mutable Maven coordinates. */
+/** Pins the installed SPI and regenerated wire contract to 62e3d81a42b, not mutable Maven coordinates. */
 internal class DorisBaselineContractTest {
     @Test
-    fun installedSpiReportsApi13() {
+    fun installedSpiReportsApi24() {
         val properties = Properties()
         val resource = requireNotNull(
             Connector::class.java.getResourceAsStream(
@@ -19,7 +21,7 @@ internal class DorisBaselineContractTest {
             ),
         ) { "SPI API version resource missing" }
         resource.use { properties.load(it) }
-        assertThat(properties.getProperty("api.version")).isEqualTo("13.0")
+        assertThat(properties.getProperty("api.version")).isEqualTo("24.0")
     }
 
     @Test
@@ -32,5 +34,13 @@ internal class DorisBaselineContractTest {
     fun icebergSinkIdsMatchTheRealignedWriteContract() {
         assertThat(TIcebergTableSink._Fields.STATIC_PARTITION_NULL_KEYS.thriftFieldId).isEqualTo(19.toShort())
         assertThat(TIcebergTableSink._Fields.NAN_COUNT_FIELD_IDS.thriftFieldId).isEqualTo(20.toShort())
+    }
+
+    @Test
+    fun externalReportAndPaimonIdsMatchTheApi24Runtime() {
+        // #68837 changed these wire meanings after API 13. A matching manifest
+        // alone must not certify the old generated Thrift against the new FE/BE.
+        assertThat(TReportExecStatusParams._Fields.PAIMON_COMMIT_MESSAGES.thriftFieldId).isEqualTo(34.toShort())
+        assertThat(TPaimonFileDesc._Fields.ORIGINAL_FILE_PATH.thriftFieldId).isEqualTo(20.toShort())
     }
 }

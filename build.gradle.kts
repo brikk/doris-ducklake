@@ -44,22 +44,26 @@ kotlin {
 // is a FAT jar that also bundles incompatible `org.apache.parquet.format.*`
 // (a PageHeader without `setData_page_header`), which shadows the real
 // parquet-format-structures-1.17.0 and breaks the inlined-data writer test with
-// a NoSuchMethodError. The current API-13 FE ALSO has a fat fe-thrift, but its
-// classpath places parquet-format-structures-1.18.0 before it. Tests explicitly
+// a NoSuchMethodError. The API-24 FE ALSO has a fat fe-thrift, but its
+// classpath places parquet-format-structures-1.18.1 before it. Tests explicitly
 // place their real 1.17.0 first — see prependParquetFormat. That runtime/test
-// version difference is recorded by the R07 qualification, not silently upgraded.
+// version difference is recorded by the re-vendor validation, not silently upgraded.
 
 // The Doris fe-connector-api / spi artifacts are built from apache/doris `master` (the
 // connector SPI merged upstream via #64304) and installed into ~/.m2 — see
 // fe-patches/FE-PATCHES.md "Re-vendor log". Master's <revision> is 1.2-SNAPSHOT, so the
-// coordinates below are unchanged. We scope mavenLocal to org.apache.doris via
-// exclusiveContent so it can't shadow other deps.
+// coordinates below are unchanged. A pin-specific repository can qualify a new
+// baseline without overwriting the current mavenLocal artifacts. Both choices
+// are scoped to org.apache.doris so they can't shadow other dependencies.
 // dev.brikk.house (brikk-sql transpiler) resolves from the Central Portal snapshots repo,
 // wired centrally by the buildlogic.kotlin.brikk convention plugin (applied above).
 repositories {
     // org.apache.doris: FE SPI built from apache/doris master, installed into ~/.m2.
     exclusiveContent {
-        forRepository { mavenLocal() }
+        forRepository {
+            val candidate = providers.gradleProperty("dorisRepository")
+            if (candidate.isPresent) maven { url = uri(candidate.get()) } else mavenLocal()
+        }
         filter { includeGroup("org.apache.doris") }
     }
     // dev.brikk.ducklake catalog + corpus-replay: released versions resolve from mavenCentral;
@@ -166,9 +170,10 @@ dependencies {
     }
     // Inlined-data reads (DuckLakeInlinedParquetWriter): the FE synthesizes a
     // temp Parquet from catalog-inlined rows so the BE can scan them. Written
-    // with parquet-avro (field_id-carrying), which is FE-supplied at runtime
-    // (output/fe/lib). Compile/test pins stay 1.17.0; the current API-13 FE ships
-    // 1.18.0 (see R07 report). compileOnly so the plugin
+    // with parquet-avro (field_id-carrying). Compile/test pins stay 1.17.0;
+    // API-24 FE core Parquet is 1.18.1. Its experimental inline-writer classpath
+    // is not qualified by the native-file re-vendor (see validation report).
+    // compileOnly so the plugin
     // jar ships no second copy of parquet/avro/hadoop.
     compileOnly("org.apache.parquet:parquet-avro:1.17.0")
     compileOnly("org.apache.parquet:parquet-hadoop:1.17.0")
@@ -317,13 +322,14 @@ tasks.register("qualificationDependencies") {
 // SUPPORTS_STORAGE_PREDICATE_PRUNING enum constant) -> 8 (#67904 adds retained-schema state to
 // ConnectorMvccSnapshot) -> 9 (#68027 Hive OpenCSV) -> 10 (#66530 statement scan reuse)
 // -> 11 (#68320 generic write/DML contracts) -> 12 (#66399 Fluss scan capabilities)
-// -> 13 (#68786 binary/UUID/timestamp contracts). Current pin: dd456ab7a89.
+// -> 13 (#68786 binary/UUID/timestamp contracts) -> 24 (#69298 query task scheduling).
+// Current pin: 62e3d81a42b; matching FE/ASAN-BE qualification is recorded in FE-PATCHES.md.
 // DuckLake retains INSERT-only writes and its existing type mappings; new opt-ins stay off.
 // Keep this equal to the pinned FE/SPI major. FE and BE must upgrade together: #68785/#68822
 // realigned Thrift field ids and are not compatible with an older master runtime pair.
 tasks.jar {
     manifest {
-        attributes("Doris-Connector-Plugin-Api-Version" to "13.0")
+        attributes("Doris-Connector-Plugin-Api-Version" to "24.0")
     }
 }
 

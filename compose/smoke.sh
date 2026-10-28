@@ -84,7 +84,7 @@ log "Installing plugin from $(basename "$zip_path") into named volume…"
 # into the VM, so we use a named volume + docker cp (daemon-API streaming,
 # bypasses host↔VM file sharing). The FE service mounts the same volume at
 # /opt/apache-doris/fe/plugins/connector/ducklake.
-VOL_NAME=doris-ducklake-dev_fe-plugin-ducklake
+VOL_NAME=doris-ducklake-api24-62e3d81a-fe-plugin-ducklake
 docker volume create "${VOL_NAME}" >/dev/null
 # Create a helper container that we'll cp into, then run unzip in.
 helper=$(docker create -v "${VOL_NAME}:/dest" alpine \
@@ -141,7 +141,7 @@ while :; do
 done
 
 # 6. Wire-compat sanity gates.
-be_image="${DORIS_BE_IMAGE:-doris-be:master-local}"
+be_image="${DORIS_BE_IMAGE:-doris-be:ducklake-62e3d81a-api24-asan}"
 if [[ "$be_image" != "apache/doris:be-4.1.4" ]]; then
     # A major-matched plugin does not establish FE/BE wire compatibility. In particular,
     # #68785 renumbered master query options, so stale master images must fail before seeding.
@@ -154,6 +154,11 @@ if [[ "$be_image" != "apache/doris:be-4.1.4" ]]; then
     be_version=$(live_versions "SHOW BACKENDS")
     if [[ -z "$fe_version" || -z "$be_version" || "$fe_version" != "$be_version" ]]; then
         log "FE/BE source mismatch: FE='$fe_version', BE='$be_version'; rebuild and deploy the pair together."
+        exit 1
+    fi
+    expected_source="${DORIS_EXPECTED_SOURCE:-62e3d81a42b}"
+    if [[ "$fe_version" != "doris-0.0.0-${expected_source}" ]]; then
+        log "Unexpected FE/BE source: '$fe_version'; expected exact pin '$expected_source'."
         exit 1
     fi
     log "Matching FE/BE runtime: $fe_version"
@@ -878,7 +883,7 @@ if [[ "${default_backfill:-0}" -eq 3 && "${default_explicit:-0}" -eq 99 && "${de
     log "§12b DEFAULT-BACKFILL GREEN: pre-ADD rows read the DEFAULT (42), post-ADD row reads its explicit value (99). 🎉"
 else
     log "§12b DEFAULT-BACKFILL FAIL: b=42 rows=${default_backfill:-?} (exp 3), a=4 b=${default_explicit:-?} (exp 99), NULL b=${default_nulls:-?} (exp 0)."
-    # O01 is live-green at dd456ab7a89; a regression must not reach "Smoke complete".
+    # O01 is live-green at 62e3d81a42b; a regression must not reach "Smoke complete".
     # Keep the failed fixture so the missing-file default/predicate path can be inspected.
     exit 1
 fi

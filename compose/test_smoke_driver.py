@@ -77,8 +77,10 @@ def fake_docker():
         sql = " ".join(option_values(argv, "-e")[0].split())
         if "-B" in argv and sql in {"SHOW FRONTENDS", "SHOW BACKENDS"}:
             print("Alive\tVersion")
-            version = "doris-0.0.0-dd456ab7a89"
+            version = "doris-0.0.0-62e3d81a42b"
             if scenario == "stale_master_be" and sql == "SHOW BACKENDS":
+                version = "doris-0.0.0-96d0ac68e84"
+            if scenario == "stale_matched_pair":
                 version = "doris-0.0.0-96d0ac68e84"
             print(f"true\t{version}")
         elif sql == "SHOW BACKENDS":
@@ -124,7 +126,13 @@ class SmokeDriverTests(unittest.TestCase):
     def test_default_requires_matching_master_and_preserves_complete_plugin_layout(self):
         compose = (SOURCE / "docker-compose.yml").read_text()
         overlay = (SOURCE / "be-overlay" / "Dockerfile").read_text()
-        self.assertIn("image: ${DORIS_BE_IMAGE:-doris-be:master-local}", compose)
+        self.assertIn("image: ${DORIS_FE_IMAGE:-doris-fe:ducklake-62e3d81a-api24}", compose)
+        self.assertIn("image: ${DORIS_BE_IMAGE:-doris-be:ducklake-62e3d81a-api24-asan}", compose)
+        volume = "doris-ducklake-api24-62e3d81a-fe-plugin-ducklake"
+        self.assertIn(f"name: {volume}", compose)
+        self.assertIn(f"VOL_NAME={volume}", (SOURCE / "smoke.sh").read_text())
+        self.assertIn("name: doris-ducklake-api24-62e3d81a-fe-meta", compose)
+        self.assertIn("name: doris-ducklake-api24-62e3d81a-be-storage", compose)
         self.assertNotIn("apache/doris:be-4.1.3", compose)
         self.assertIn("ARG BASE_IMAGE=apache/doris:be-4.1.4", overlay)
         self.assertIn("COPY ${OUTPUT_PATH}/be/plugins ${DORIS_BE_HOME}/plugins", overlay)
@@ -379,6 +387,12 @@ class SmokeDriverTests(unittest.TestCase):
     def test_stale_master_be_fails_before_lake_allocation(self):
         self.assertNotEqual(self.run_driver(scenario="stale_master_be").returncode, 0)
         self.assertIn("FE/BE source mismatch", self.output)
+        self.assertEqual(self.allocation_calls(), [])
+        self.assert_no_catalog_mutation()
+
+    def test_matching_but_stale_pair_fails_before_lake_allocation(self):
+        self.assertNotEqual(self.run_driver(scenario="stale_matched_pair").returncode, 0)
+        self.assertIn("Unexpected FE/BE source", self.output)
         self.assertEqual(self.allocation_calls(), [])
         self.assert_no_catalog_mutation()
 

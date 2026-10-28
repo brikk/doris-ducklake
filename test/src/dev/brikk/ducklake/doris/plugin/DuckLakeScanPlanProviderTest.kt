@@ -68,8 +68,15 @@ internal class DuckLakeScanPlanProviderTest {
 
             val plan = connector.getScanPlanProvider()
             assertThat(plan).isNotNull()
-            // API 13 retains read backfill by default; Paimon opts out, DuckLake must not.
+            // API 24 retains read backfill by default; Paimon opts out, DuckLake must not.
             assertThat(plan.applyColumnDefaultsOnRead()).isTrue()
+            // The new scheduling/cache hooks are not a feature opt-in. DuckLake
+            // still plans synchronously and pins files through its own handle.
+            assertThat(plan.supportsBatchScan(null, handle)).isFalse()
+            assertThat(plan.streamingSplitEstimate(null, handle, Optional.empty(), false)).isEqualTo(-1L)
+            assertThat(metadata.supportsNativePartitionPlanning(null, handle)).isFalse()
+            assertThat(metadata.getSqlCacheVersion(null, handle)).isEmpty()
+            assertThat(metadata.getPartitionViewVersion(null, handle)).isEmpty()
             // getScanRangeType()/ConnectorScanRangeType was removed from the SPI (every
             // range is a file scan now), so there is no range-type to assert on the provider.
 

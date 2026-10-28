@@ -15,8 +15,8 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
  > from FE core into loadable connector plugins* + the whole `fe/fe-connector` tree, incl.
  > `fe-connector-api` / `fe-connector-spi`). We now vendor from **`~/DEV/OSS/doris`, branch
  > `master`** (apache/doris), **not** the retired brikk fork `branch-catalog-spi`. Current
- > source/SPI pin: **`dd456ab7a89`** (apache/doris master, connector-qualified 2026-10-10).
- > Last runtime-validated FE/BE pin: **`dd456ab7a89`** (2026-10-10, ASAN BE). Master's `<revision>` is still
+  > source/SPI pin: **`62e3d81a42b`** (apache/doris master, connector-qualified 2026-10-28).
+  > Last runtime-validated FE/BE pin: **`62e3d81a42b`** (2026-10-28, ASAN BE). Master's `<revision>` is still
  > `1.2-SNAPSHOT`, so the installed `~/.m2` coordinates are unchanged.
  > **SPI-surface note:** #66407 merged `fe-connector-api` INTO `fe-connector-spi` and renamed the
  > `org.apache.doris.connector.api.*` packages to `…spi.*`. We now depend on **only** the
@@ -24,13 +24,79 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
  > **PATCH-FREE** (unchanged since #66135). The `Doris-Connector-Plugin-Api-Version` gate (#66211) has
  > stepped **1 -> 5 (#66407) -> 6 (#66413) -> 7 (#67182) -> 8 (#67904) -> 9 (#68027)**;
  > then **10 (#66530) -> 11 (#68320) -> 12 (#66399) -> 13 (#68786)**;
- > we stamp **`13.0`** in `build.gradle.kts` to match the source/SPI pin.
- > **Deploy together:** the API-13 ZIP needs an API-13 FE, and #68785/#68822 require
+  > then **14 -> 15 -> 17 -> 18 -> 19 -> 20 -> 21 -> 22 -> 23 -> 24 (#69298)**;
+  > we stamp **`24.0`** in `build.gradle.kts` to match the source/SPI pin.
+  > **Deploy together:** the API-24 ZIP needs an API-24 FE; #68837 and #68785/#68822 require
  > matching regenerated FE/BE Thrift. Matching-engine smoke qualification passed; the September
  > API-9 FE + stock-4.1.4 smoke does not qualify the new artifacts.
  > Keep this note, the Re-vendor log, and `compose/README.md` in sync.
 
 ### Re-vendor log
+
+- **2026-10-28 -> source/SPI/runtime pin `62e3d81a42b`**
+  (`[fix](iceberg) Refresh table before classifying expired files (#69703)`).
+  Full SHA `62e3d81a42b2b74ee2a5a577969df62edee06b78`, **410 commits** beyond
+  `dd456ab7a89`. Dedicated detached worktree
+  `/home/jayson/DEV/OSS/doris-ducklake-api24-62e3d81a`; staged shared Duckbridge work
+  is byte-identical to its preflight inventory. **Matching FE/ASAN-BE qualification
+  passed, including persisted-metadata FE restart.** No Doris production patch.
+
+  **Compatibility:** connector API **13 -> 24**, JNI **5 -> 6**, BE execution
+  version **19**, Thrift **0.24.0**, Maven `1.2-SNAPSHOT`. #68837 changes external
+  report field 34 and moves Paimon original-file-path to 20; matching API majors
+  are not wire qualification. Existing query/Iceberg sink IDs remain pinned.
+  SPI default additions require no production connector adaptation. DuckLake keeps
+  INSERT-only writes, synchronous planning, current type mappings, read defaults,
+  reusable ranges and capability opt-outs. No automatic feature adoption.
+
+  **Build:** October 27 environment
+  `apache/doris@sha256:4d63f788e85d35ab4f29804e3a4cdd93fe0c70c4ce954e6fbf333ac21a45ab9d`,
+  JDK 17, six workers; heavy phases sequential, staging disk-backed. Lance-C
+  `a51ab47a...`, gperftools 2.18.1 and librdkafka 2.16.0 verified. FE and full ASAN
+  BE/JNI/CDC built; glibc gate passed, **9 plugins / 6 static layout checks** pass.
+  CDC's initial Maven-repository environment failure was repaired without disabling
+  CDC or patching source. Two datasketches binary test fixtures were normalized
+  by the upstream build; no production source changed.
+
+  **Connector checks:** unchanged catalog **0.12.0**, JDBC **1.5.6.0**. Java 25:
+  **254 passed / 1 skipped**; Java 17 plugin suite: **228 passed / 1 skipped**;
+  no failures. Detekt, Java-17 runtime scan, assembly and **19** cluster-free smoke
+  tests passed. Actual ZIP API **24.0**, no bundled host JARs. A pin-local
+  `-PdorisRepository` override qualified the SDK before its controlled promotion
+  to `mavenLocal()`; the old closure is backed up. FE host SPI/Thrift JARs match
+  the exported SDK byte-for-byte.
+
+  **Runtime:** two complete isolated smokes passed:
+  `9f1088d848a647f9a83216e510e651e3` and `f1ffb36ced4843c687b004e811d6cb13`.
+  They own only their generated PostgreSQL databases/catalogs and S3 prefixes.
+  Reads/counts, OPTIONAL position deletes (100 -> 93), DDL, INSERT, buckets,
+  CTAS and maintenance/foreign-file checks are green. Restart preserved FE
+  `172.30.124.10`, name and cluster ID `1376005475`. Native S3 left the JNI registry
+  uninitialized, no plugins loaded and no `jvm_*` metrics. No observed sanitizer
+  or crash diagnostic in the captured BE logs.
+
+  **Targeted correctness:** four ASC/DESC + NULLS FIRST/LAST TopN results match
+  DuckDB over a **three-row-group** Parquet file with a real position-delete file;
+  scanner V2 is enabled and EXPLAIN shows the TopN filter target. Counts and
+  pre-epoch microsecond timestamps / embedded-NUL/trailing-zero BLOB bytes match.
+  DEFAULT projection/predicates passed **100 rounds / 300 exact queries** across
+  restart. Reordered, partial-column and bucketed INSERTs agree with DuckDB.
+
+  **Artifacts:** FE `doris-fe:ducklake-62e3d81a-api24`, image
+  `sha256:f41c6a1710c66f0d0ab0334d5431af85c2002e8399de09ae10b8559bccb8c22a`;
+  BE `doris-be:ducklake-62e3d81a-api24-asan`, image
+  `sha256:ccca761cae5bc1e6122b4449c21d01117d74a095ce203cf9f4d27094ede8a2de`.
+  Source-qualified compose defaults select these immutable names; old generic/API-13
+  tags and volumes are retained. No production rollout or release-performance claim.
+
+  **Still open:** F08, F11/F12, production inline transport and other review findings.
+  Native timestamp support is not our nanosecond mapping. No broad corpus replay,
+  R07 live repin/campaign or Duckbridge JDBC qualification. Experimental FE-side inline
+  writer classpath is not requalified (host core Parquet is now 1.18.1).
+  Full hashes, commands, evidence and rollback:
+  [`VALIDATION-DORIS-API24-2026-10-28.md`](../dev-docs/VALIDATION-DORIS-API24-2026-10-28.md).
+  Mandatory Duckbridge build-reuse handoff:
+  [`HANDOFF-DUCKBRIDGE-DORIS-62e3d81a-API24.md`](../dev-docs/HANDOFF-DUCKBRIDGE-DORIS-62e3d81a-API24.md).
 
 - **2026-10-10 -> source/SPI pin `dd456ab7a89`**
   (`[improvement](mtmv) Judge a base table column change by the MV query it reaches (#68646)`).

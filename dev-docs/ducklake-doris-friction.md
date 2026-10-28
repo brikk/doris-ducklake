@@ -4,13 +4,20 @@ Open items from implementing the DuckLake `fe-connector` plugin against apache/d
 **Ordered by priority for master/future 5.x readiness** (top = fix first). Full
 detail on the top items, papercuts kept short. Pin / build: [`../fe-patches/FE-PATCHES.md`](../fe-patches/FE-PATCHES.md).
 
-> **Current validated runtime: apache/doris `master` @ `dd456ab7a89`, 2026-10-10**
-> — connector API **13.0**, JNI API **5.0**, matching FE + **ASAN BE**. Two isolated
-> smokes, persisted-metadata FE restart and 50 exact DEFAULT checks passed.
+> **Current validated runtime: apache/doris `master` @ `62e3d81a42b`, 2026-10-28**
+> — connector API **24.0**, JNI API **6.0**, matching FE + **ASAN BE**. Two isolated
+> smokes, persisted-metadata restart, TopN/type/write probes and 300 exact DEFAULT
+> queries passed. [Full evidence](VALIDATION-DORIS-API24-2026-10-28.md).
 > This is correctness validation, not release-performance qualification. `branch-4.2`
 > still lacks `fe/fe-connector`; master/future 5.x remains the plugin target.
 > Older findings below retain their dated evidence; an item not explicitly revalidated
 > here is not a fresh live result on this pin.
+
+**October 28 boundary:** no capability/type/feature opt-in, dependency repin or R07
+campaign was performed. F08/F11/F12 and production inline transport remain open.
+The dev-only FE inline-writer classpath was not requalified; host core Parquet is
+1.18.1 while compile/test pins remain 1.17.0. Native-file smoke is not JNI/JDBC
+qualification for Duckbridge; see its explicit build-reuse handoff.
 Sister docs: [`ducklake-doris-integration-spi-plan.md`](./ducklake-doris-integration-spi-plan.md),
 [`ducklake-doris-sanity-check.md`](./ducklake-doris-sanity-check.md), [`TODO-read.md`](./TODO-read.md).
 

@@ -1,4 +1,6 @@
 # Disposable qualification only. No shared FE/BE warehouse mount, no shared services.
+# Historical API-13 R07 evidence lane: use its matching API-13 plugin, not the
+# default API-24 build. The API-24 re-vendor does not rerun or repin this campaign.
 name: doris-r07-qualification
 services:
   postgres:

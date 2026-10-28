@@ -5,7 +5,7 @@
 > table format (spec v1.0). It targets the `fe-connector` catalog SPI, which
 > **merged into Apache Doris `master`** (`#64304` *decouple external catalogs
 > from FE core into loadable connector plugins*, + the `fe/fe-connector` tree);
-> we target apache/doris `master` (source/SPI pin `dd456ab7a89`, plugin API **13.0**), **not** the
+> we target apache/doris `master` (source/SPI pin `62e3d81a42b`, plugin API **24.0**), **not** the
 > now-retired brikk fork `branch-catalog-spi`. The SPI is not in any tagged
 > Doris *release* yet, so a stock released Doris build still can't load it —
 > build the FE from master (see [`fe-patches/`](fe-patches/); PATCH-FREE). The
@@ -14,10 +14,10 @@
 > DuckLake adapter for an OLAP engine today, use
 > [`trino-ducklake`](../trino-ducklake/) instead.
 
-As checked on 2026-10-10, released **4.1.4**, **4.1.4.1**, and `branch-4.2`
-do not contain `fe/fe-connector`. Master/future 5.x is the plugin target.
-An API-13 plugin requires an API-13 FE; the `dd456ab7a89` re-vendor also requires
-upgrading FE and BE together because master Thrift field ids changed.
+As checked on 2026-10-28, latest stable is **4.1.5**; the fetched `branch-4.2`
+still lacks `fe/fe-connector`. Master/future 5.x is the plugin target.
+An API-24 plugin requires an API-24 FE; the `62e3d81a42b` re-vendor also requires
+matching FE/BE and the complete JNI-6 distribution because wire contracts changed.
 Connector and matching FE/BE isolated smoke qualification are green on this pin.
 The BE is an ASAN validation build, not a performance-qualified release build.
 The September API-9 FE + stock-4.1.4 smoke is historical evidence only; it does
@@ -65,6 +65,11 @@ toolchain (Kotlin emits 17 bytecode). Managed via [mise](https://mise.jdx.dev/)
 ```shell
 ./gradlew assemble        # builds the plugin zip
 ```
+
+Install the matching Doris SPI/Thrift closure first (see the
+[build/qualification report](dev-docs/VALIDATION-DORIS-API24-2026-10-28.md)).
+For isolated qualification, `-PdorisRepository=/path/to/pinned/repository` selects
+only the `org.apache.doris` artifacts; the default remains `mavenLocal()`.
 
 The plugin zip is at
 `build/distributions/doris-ducklake-<version>-plugin.zip` — a
@@ -149,7 +154,7 @@ non-degraded core only.
 | `timestamp` | DATETIMEV2(6) | Yes | Yes | Microsecond precision (DuckLake native) |
 | `timestamp_s` | DATETIMEV2(0) | Yes | Yes | Second precision |
 | `timestamp_ms` | DATETIMEV2(3) | Yes | Yes | Millisecond precision |
-| `timestamp_ns` | DATETIMEV2(6) | Yes | — | Degraded — Doris caps datetime scale at 6; nanos clamp to micros (does not round-trip on write) |
+| `timestamp_ns` | DATETIMEV2(6) | Yes | — | Degraded — our connector still maps to microseconds; native `TIMESTAMP_NS` support has not been adopted here |
 | `timestamptz` | DATETIMEV2(6) / TIMESTAMPTZ | Yes | — | Degraded (BE-gated) by default — read as naive UTC micros; the 4.1.x BE can't read a UTC-micros parquet column into a zone-aware slot, so zone-aware typing is deferred (correct UTC values). Set `enable.mapping.timestamp_tz=true` to map to zone-aware `TIMESTAMPTZ` on a master/nightly BE (see Configuration) |
 | `time` | STRING | Yes | — | Degraded — Doris has no first-class TIME |
 | `timetz` | STRING | Yes | — | Degraded |
