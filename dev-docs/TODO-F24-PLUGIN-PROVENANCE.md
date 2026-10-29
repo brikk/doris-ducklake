@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-**F24-A/B implemented and verified (F24-01–07). F24-C through E remain open.**
+**F24-A/B/C implemented and verified (F24-01–10). F24-D/E remain open.**
 Audited 2026-10-29 against connector `9b44463` and pristine Doris
 `62e3d81a42b2b74ee2a5a577969df62edee06b78` (connector API 24 / JNI 6).
 F22 is handled separately. F25's SQL/result assertions are not silently included here.
@@ -26,6 +26,13 @@ daemon-scoped claim, complete rollback snapshot, confirmed stopped installation
 and fresh-process boundary. Its 64-test run includes disposable real-Docker
 transport/lifecycle checks with a simulated FE, not real Doris/provider loading.
 The retained Doris stacks remain unchanged; the legacy-target mismatch still refuses.
+
+[F24-C implementation and evidence](VALIDATION-F24-C-2026-10-29.md) adds the exact
+load-time inventory gate and run-owned qualification/failure receipts, tested before
+allocation and `--up-only` success. All 78 Python tests pass, including controlled
+loaded-state failures. The real read-only inventory attempt is blocked by the
+retained BE's unavailability; no successful real loaded-B claim is made. D/E's
+remaining matrix and real Doris A/B acceptance are not closed by these mock results.
 
 ## Exact audit
 
@@ -107,7 +114,7 @@ inputs, keep the identity out of its own inputs, and separately record the final
 JAR/ZIP hashes. This is accidental-staleness protection, not signed supply-chain
 authentication or a guarantee against arbitrary non-cooperating filesystem writes.
 
-## Implementation TODO — 7/13 complete
+## Implementation TODO — 10/13 complete
 
 Implement in order; each item has an observable exit criterion. No item below is
 completed merely because it is feasible or because the earlier manual re-vendor
@@ -183,7 +190,7 @@ sub-item/acceptance checklist; the Project Todos are the coarse backlog groups.
     cluster ID and priority-network configuration. Keep runtime images pinned.
   - Test stopped/absent/already-running FE states and restart timeout.
 
-- [ ] **F24-08 — Attest the admitted provider through the existing SQL inventory.**
+- [x] **F24-08 — Attest the admitted provider through the existing SQL inventory.**
   - Require exactly one DuckLake `CONNECTOR` row, `SOURCE='EXTERNAL'`, and a non-null
     `EXTENSION_VERSION` exactly matching the selected bundle's expected build identity.
   - Query the intended FE directly. Missing, stale, null, duplicate/conflicting or
@@ -191,14 +198,14 @@ sub-item/acceptance checklist; the Project Todos are the coarse backlog groups.
   - Test old loaded build A after disk replacement with B, even when both stamp API 24.
     Do not read a version out of the live disk file and call that loaded-code attestation.
 
-- [ ] **F24-09 — Put all identity gates before allocation and `--up-only` success.**
+- [x] **F24-09 — Put all identity gates before allocation and `--up-only` success.**
   - Run installed-file, fresh-process, provider-identity and existing exact FE/BE
     source checks before the UUID/database/S3/lake allocation boundary.
   - `--up-only` must satisfy the same provider gate. The explicit stock-BE experiment
     is not permission to skip FE plugin provenance; keep its qualification label separate.
   - Every failure path must show zero lake allocations/mutations in the command recorder.
 
-- [ ] **F24-10 — Write a run-owned deployment/qualification receipt.**
+- [x] **F24-10 — Write a run-owned deployment/qualification receipt.**
   - Record selected ZIP/JAR/file-set hashes, content identity, SDK identity, runtime
     image IDs/source versions, target project/container/volume, new process start,
     SQL inventory result and gate outcomes. Do not include credentials.

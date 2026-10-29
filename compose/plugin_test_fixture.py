@@ -45,5 +45,6 @@ def compose_target():
     return {"name": "doris-ducklake-dev", "services": {"doris-fe": {
         "container_name": "doris-ducklake-fe", "image": "doris-fe:ducklake-62e3d81a-api24",
         "volumes": [{"type": "volume", "source": "fe-plugin-ducklake",
-                     "target": "/opt/apache-doris/fe/plugins/connector/ducklake"}]}},
+                     "target": "/opt/apache-doris/fe/plugins/connector/ducklake"}]},
+        "doris-be": {"container_name": "doris-ducklake-be", "image": "doris-be:ducklake-62e3d81a-api24-asan"}},
         "volumes": {"fe-plugin-ducklake": {"name": "doris-ducklake-api24-62e3d81a-fe-plugin-ducklake"}}}

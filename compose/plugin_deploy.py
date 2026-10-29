@@ -1,7 +1,7 @@
-"""F24-B: daemon-scoped ownership and fail-closed stopped-FE plugin replacement.
+"""F24-B/C: serialized stopped replacement and load-time provider attestation.
 
-The claim is held until the supplied smoke command exits. This is not the F24-C
-loaded-provider attestation. Only cooperating clients honor this Docker claim.
+The claim is held through attestation and until the supplied smoke command exits.
+Only cooperating clients honor this Docker claim. F25 correctness remains separate.
 """
 
 import argparse
@@ -19,6 +19,7 @@ import uuid
 
 from plugin_preflight import docker_json, file_hash, require, sha256, target_from_compose, verify_bundle
 from plugin_volume import snapshot, verify_backup
+from plugin_attest import ProviderAttestation
 
 
 OWNER = "dev.brikk.ducklake.deployment.owner"
@@ -73,10 +74,17 @@ class Deployment:
         self.prior = None
 
     def event(self, name, **values):
-        self.state["events"].append({"event": name, "at": datetime.now(timezone.utc).isoformat(), **values})
-        path = self.evidence / "lifecycle.json"
+        self.state["events"].append({"event": name, "at": self.timestamp(), **values})
+        self.write_record("lifecycle.json", self.state)
+
+    @staticmethod
+    def timestamp():
+        return datetime.now(timezone.utc).isoformat()
+
+    def write_record(self, name, value):
+        path = self.evidence / name
         temporary = path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(self.state, indent=2, sort_keys=True) + "\n")
+        temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
         temporary.replace(path)
 
     def revalidate(self):
@@ -303,7 +311,7 @@ class Deployment:
         self.wait_ready()
 
     def fail_closed(self):
-        if not self.install_boundary or self.ready:
+        if not self.install_boundary or self.state.get("deployment_attested"):
             return
         try:
             instance = self.fe()
@@ -315,7 +323,36 @@ class Deployment:
             self.state["unsafe_fe_state"] = True
             self.event("failed-fe-stop-unconfirmed", error=str(error))
 
+    def confirm_process(self):
+        instance = self.fe()
+        require(instance is not None and instance["State"]["Running"] and
+                process_record(instance) == self.state["new_process"], "FE process changed after fresh startup")
+        require(file_hash(self.compose.parent / ".fe.conf.runtime") == self.state["runtime_config_sha256"],
+                "Runtime config changed after fresh startup")
+        return instance
+
     def run(self, command=()):
+        try:
+            self._run(command)
+            require(self.state.get("deployment_attested"), "Deployment attestation was not completed")
+            self.write_record("run-result.json", {"schema": "doris-plugin-run-result-v1", "owner": self.token,
+                              "status": "command-completed" if command else "attested-only", "run_success": True,
+                              "deployment_attested": True, "smoke_correctness_passed": False, "f25_complete": False,
+                              "finished_at": self.timestamp()})
+        except BaseException as error:
+            # Retain the successful observation as history, but never leave a
+            # current passing receipt behind after a failed overall invocation.
+            receipt = self.evidence / "deployment-attested.json"
+            if receipt.exists():
+                receipt.rename(self.evidence / "deployment-attested-before-error.json")
+            self.write_record("run-result.json", {"schema": "doris-plugin-run-result-v1", "owner": self.token,
+                              "status": "failed", "run_success": False,
+                              "deployment_attested": bool(self.state.get("deployment_attested")),
+                              "smoke_correctness_passed": False, "f25_complete": False,
+                              "error": str(error), "finished_at": self.timestamp()})
+            raise
+
+    def _run(self, command=()):
         print(f"[smoke] Lifecycle evidence: {self.evidence}", flush=True)
         with self.ownership():
             try:
@@ -327,7 +364,7 @@ class Deployment:
                 self.state["prior_process"] = self.prior
                 source = Path(__file__).resolve().parent
                 self.state["tooling_sha256"] = {name: file_hash(source / name) for name in
-                    ("plugin_deploy.py", "plugin_volume.py", "plugin_preflight.py", "smoke.sh", "smoke_run.sh")}
+                    ("plugin_deploy.py", "plugin_attest.py", "plugin_volume.py", "plugin_preflight.py", "smoke.sh", "smoke_run.sh")}
                 runtime = self.compose.parent / ".fe.conf.runtime"
                 require(not runtime.exists() or runtime.is_file(), "Runtime config is not a regular file")
                 require(self.prior is None or runtime.is_file(), "Existing FE runtime configuration is missing")
@@ -348,6 +385,7 @@ class Deployment:
                 self.start()
                 self.state["lifecycle_complete"] = True
                 self.event("lifecycle-complete-not-provider-attested")
+                ProviderAttestation(self, docker, inspect).run()
                 if command:
                     child = subprocess.Popen([*command, str(self.evidence / "lifecycle.json")], start_new_session=True)
                     try:

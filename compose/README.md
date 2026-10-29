@@ -101,10 +101,10 @@ adopted just because its container name matches. Image overrides are reported fr
 the rendered configuration. Actual FE/volume names are resolved there, not guessed
 independently by the driver.
 
-**This is not loaded-provider attestation.** F24-B now supplies the cooperating
-claim and confirmed stop/install/start path; F24-C's SQL loaded-build gate is still
-open. Historical validation refers to its original artifact bytes, not a newly
-stamped bundle. See
+F24-C now adds the load-time SQL provider gate to the cooperating claim and
+confirmed stop/install/start path. Historical validation still refers to its
+original artifact bytes, not a newly stamped bundle. Real Doris A/B acceptance
+remains separate. See
 [F24-A implementation/evidence](../dev-docs/VALIDATION-F24-A-2026-10-29.md).
 
 ### Serialized replacement and recovery (F24-B)
@@ -132,11 +132,12 @@ ZIP/identity JSON, verified `previous.tar`/`previous.json` and incremental
 `lifecycle.json`, plus completed prepare/install/verification reports. A deployment
 failure keeps FE stopped when installation/startup is uncertain. No automatic
 rollback or cleanup of those recovery artifacts occurs. These are lifecycle
-records, **not loaded-provider/F25 correctness receipts**.
+records. The lifecycle file alone is not a loaded-provider or correctness receipt;
+C's additional records are described below.
 
 An occupied claim refuses even if its owner died. Do not steal it based on age.
-Inspect its exact ID/owner label and lifecycle evidence, establish that the client
-and any installer are no longer active, then perform deliberate recovery. If
+Inspect its exact ID/owner label and lifecycle evidence, establish that the client,
+smoke continuation and any installer are no longer active, then perform deliberate recovery. If
 worker/FE stopping cannot be confirmed, the code deliberately retains the claim.
 Restore only a verified complete backup while holding the same claim and with FE
 confirmed stopped; a saved prior ZIP+identity receipt can use the normal path.
@@ -146,6 +147,34 @@ identity or `--down`. See [B evidence and recovery boundaries](../dev-docs/VALID
 `--down` remains an explicit destructive teardown, now serialized and ownership-
 checked too. It is not a plugin-replacement or claim-recovery command. The retained
 legacy-volume mismatch still refuses; this work does not delete or migrate it.
+
+### Loaded-provider gate and receipts (F24-C)
+
+Both full and `--up-only` runs require exactly one load-time
+`information_schema.extensions` row for `ducklake / CONNECTOR / EXTERNAL` with
+`EXTENSION_VERSION` equal to the selected bundle's build ID. Null, missing, stale,
+duplicate/conflicting or built-in identity fails before any lake allocation.
+The intended fresh FE is queried directly by container ID; disk hashes alone are
+never called loaded-code proof. Because API-24's inventory scan needs an available
+BE, it runs after BE readiness and exact runtime source checks, not before BE startup.
+
+The parent rechecks installed files and stable process/config identity, writes
+`deployment-attested.json`, and only then enters the smoke continuation. The
+receipt records exact artifacts/SDK, target, image/source/process identities,
+SQL inventory and required gate outcomes. Stock BE remains an explicitly labelled
+compatibility experiment and cannot skip FE/provider provenance.
+
+`run-result.json` separately records invocation completion or failure after claim
+cleanup. A failed later smoke/cleanup retires the observation to
+`deployment-attested-before-error.json`, never a current passing receipt. Require
+matching owners and a successful run result; pending or historical observations
+are not successful runs. All records explicitly leave F25 correctness unclaimed,
+even when the current smoke command exits zero. Old run evidence is retained.
+
+The retained BE was not started for this implementation: a read-only live inventory
+attempt was blocked by its unavailability. Positive C tests use controlled mocks,
+not a real Doris classloader. Full loaded-state matrix and real loaded A/B acceptance
+remain F24-D/E. See [C evidence and limits](../dev-docs/VALIDATION-F24-C-2026-10-29.md).
 
 Cluster-free isolation regressions (Python standard library only):
 

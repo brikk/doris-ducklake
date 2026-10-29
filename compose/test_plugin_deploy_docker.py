@@ -16,18 +16,35 @@ import tempfile
 import unittest
 import uuid
 
-from plugin_deploy import Deployment, OWNER, claim_name, docker, inspect
-from plugin_preflight import target_from_compose
+from plugin_deploy import Deployment, OWNER, claim_name, docker, inspect, process_record
+from plugin_preflight import target_from_compose, docker_json
 from plugin_test_fixture import write_plugin
 
 
 @unittest.skipUnless(os.environ.get("F24_DOCKER_TEST") == "1", "opt-in disposable Docker transport test")
 class DockerDeploymentTests(unittest.TestCase):
+    @staticmethod
+    def lifecycle_only(deployment):
+        """Exercise B primitives, not run()/C. A SQL stub cannot qualify Doris."""
+        with deployment.ownership():
+            deployment.revalidate()
+            deployment.fe_image = docker_json("image", "inspect", deployment.target["fe_image"])[0]["Id"]
+            deployment.prior = process_record(deployment.fe())
+            deployment.state["prior_process"] = deployment.prior
+            if deployment.prior["running"]:
+                deployment.state["prior_cluster_id"] = deployment.metadata_cluster_id(deployment.prior["id"])
+            deployment.preserve_candidate()
+            deployment.backup()
+            deployment.install()
+            deployment.start()
+            deployment.state["lifecycle_complete"] = True
+            deployment.event("lifecycle-only-test-not-provider-attested")
+
     def test_transport_restart_backup_claim_collision_and_interrupted_owner(self):
         base = Path("/tmp/opencode")
-        with tempfile.TemporaryDirectory(prefix="f24-b-docker-", dir=base) as temporary:
+        with tempfile.TemporaryDirectory(prefix="f24-c-transport-", dir=base) as temporary:
             root = Path(temporary)
-            identifier = "f24-b-" + uuid.uuid4().hex[:16]
+            identifier = "f24-c-transport-" + uuid.uuid4().hex[:16]
             compose = root / "compose.json"
             volume = identifier + "-plugin"
             meta = identifier + "-meta"
@@ -65,10 +82,10 @@ class DockerDeploymentTests(unittest.TestCase):
                        "(p/'.previous').write_text('previous manifest')")
                 original = inspect(fe)
                 first = Deployment(compose, preflight, root / "evidence", startup_timeout=5)
-                first.run()
+                self.lifecycle_only(first)
                 second = Deployment(compose, preflight, root / "other-checkout", startup_timeout=5)
                 docker("stop", "--time", "1", fe)
-                second.run()
+                self.lifecycle_only(second)
                 after = inspect(fe)
                 self.assertEqual(original["Id"], after["Id"])
                 self.assertGreater(after["State"]["StartedAt"], original["State"]["StartedAt"])
@@ -78,6 +95,7 @@ class DockerDeploymentTests(unittest.TestCase):
                 for deployment in (first, second):
                     self.assertTrue(deployment.state["lifecycle_complete"])
                     self.assertFalse(deployment.state["loaded_provider_verified"])
+                    self.assertFalse((deployment.evidence / "deployment-attested.json").exists())
                     self.assertNotIn("DO-NOT-RECORD", (deployment.evidence / "lifecycle.json").read_text())
 
                 holder = Deployment(compose, preflight, root / "holder")
@@ -118,11 +136,11 @@ class DockerDeploymentTests(unittest.TestCase):
                            "killed_owner_claim_retained": True,
                            "old_files": json.loads((first.evidence / "previous.json").read_text())["files"],
                            "artifact": artifact}
-                retained = base / "f24-b-docker-evidence" / identifier
+                retained = base / "f24-c-docker-transport-evidence" / identifier
                 for name, deployment in (("running", first), ("stopped", second)):
                     shutil.copytree(deployment.evidence, retained / name)
                 summary["retained_evidence"] = str(retained)
-                (base / "f24-b-docker-results.json").write_text(json.dumps(summary, indent=2))
+                (base / "f24-c-docker-transport-results.json").write_text(json.dumps(summary, indent=2))
             finally:
                 if child and child.poll() is None:
                     child.kill()

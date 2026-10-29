@@ -8,7 +8,7 @@ JVM_ROOT="$(cd "${HERE}/../.." && pwd)"
 TRINO_COMPOSE="${JVM_ROOT}/trino-ducklake/compose/docker-compose.yml"
 UP_ONLY="$1"
 deployment_state="$2"
-FE_CONTAINER=$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); assert p["lifecycle_complete"]; print(p["target"]["fe_container"])' "$deployment_state")
+FE_CONTAINER=$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); assert p["deployment_attested"] and p["loaded_provider_verified"]; print(p["new_process"]["id"])' "$deployment_state")
 fe_exec() { docker exec "$FE_CONTAINER" "$@"; }
 
 log() { printf '\033[1;36m[smoke]\033[0m %s\n' "$*"; }
@@ -23,57 +23,9 @@ psql_c() {
     docker exec trino-ducklake-postgres psql -X -v ON_ERROR_STOP=1 -U ducklake -d "$SMOKE_PG_DB" -tA -c "$1"
 }
 
-# FE has already crossed the confirmed stop/install/verify/fresh-start boundary.
-# Do not let BE bring-up recreate or restart it implicitly.
-log "Starting the selected BE (FE lifecycle complete; provider attestation remains F24-C)…"
-docker compose -f "${HERE}/docker-compose.yml" up -d --no-deps --no-build --pull never doris-be
-
-# 5. Wait for BE to register.
-log "Waiting for BE registration (SHOW BACKENDS → IsAlive)…"
-deadline=$((SECONDS + 180))
-while :; do
-    alive=$(fe_exec mysql -h127.0.0.1 -P9030 -uroot -N -e "SHOW BACKENDS" 2>/dev/null | awk -F'\t' '$10=="true"{n++} END{print n+0}')
-    if [[ "${alive:-0}" -ge 1 ]]; then
-        log "BE registered and alive."
-        break
-    fi
-    if (( SECONDS >= deadline )); then
-        log "BE failed to register — SHOW BACKENDS output:"
-        fe_exec mysql -h127.0.0.1 -P9030 -uroot -e "SHOW BACKENDS\G" 2>&1 || true
-        exit 1
-    fi
-    sleep 3
-done
-
-# 6. Wire-compat sanity gates.
-be_image="${DORIS_BE_IMAGE:-doris-be:ducklake-62e3d81a-api24-asan}"
-if [[ "$be_image" != "apache/doris:be-4.1.4" ]]; then
-    # A major-matched plugin does not establish FE/BE wire compatibility. In particular,
-    # #68785 renumbered master query options, so stale master images must fail before seeding.
-    live_versions() {
-        fe_exec mysql -h127.0.0.1 -P9030 -uroot -B -e "$1" |
-            awk -F'\t' 'NR==1 {for (i=1;i<=NF;i++) {if ($i=="Version") v=i; if ($i=="Alive") a=i}}
-                NR>1 && v && a && $a=="true" {print $v}' | sort -u
-    }
-    fe_version=$(live_versions "SHOW FRONTENDS")
-    be_version=$(live_versions "SHOW BACKENDS")
-    if [[ -z "$fe_version" || -z "$be_version" || "$fe_version" != "$be_version" ]]; then
-        log "FE/BE source mismatch: FE='$fe_version', BE='$be_version'; rebuild and deploy the pair together."
-        exit 1
-    fi
-    expected_source="${DORIS_EXPECTED_SOURCE:-62e3d81a42b}"
-    if [[ "$fe_version" != "doris-0.0.0-${expected_source}" ]]; then
-        log "Unexpected FE/BE source: '$fe_version'; expected exact pin '$expected_source'."
-        exit 1
-    fi
-    log "Matching FE/BE runtime: $fe_version"
-fi
-log "Sanity gates (SHOW BACKENDS / SHOW FRONTENDS / SELECT 1):"
-fe_exec mysql -h127.0.0.1 -P9030 -uroot -e "
-    SHOW BACKENDS\G
-    SHOW FRONTENDS\G
-    SELECT 1 AS wire_compat_ok;
-" 2>&1 | tail -40
+# F24-C's parent already gated exact installed files, the fresh FE process,
+# load-time provider inventory and intended runtime sources before invoking us.
+be_image=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime_images"]["be"]["reference"])' "$deployment_state")
 
 # 6b. FE/BE version-skew shim: the master FE
 # plans within-fragment local exchange on the FE (AddLocalExchange →
@@ -105,7 +57,7 @@ fi
 # cluster with no test data mutated. The FE is reachable on localhost:9030
 # (mysql protocol, user root, no password).
 if [[ "$UP_ONLY" -eq 1 ]]; then
-    log "--up-only: cluster is up and healthy; skipping the smoke driver (loaded-provider attestation remains F24-C)."
+    log "--up-only: deployment attested; skipping the smoke driver (F25 correctness remains separate)."
     log "  FE mysql endpoint: 127.0.0.1:9030 (root, no password)"
     log "  Tear down with: ./smoke.sh --down"
     exit 0
