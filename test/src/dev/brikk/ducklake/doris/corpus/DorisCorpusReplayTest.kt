@@ -147,28 +147,10 @@ internal class DorisCorpusReplayTest {
         assumeTrue(Files.isDirectory(corpusRoot), "corpus submodule not initialized at $corpusRoot")
         assumeTrue(feAlive(), "no live Doris FE at 127.0.0.1:9030 — run compose/smoke.sh --up-only")
         assumeTrue(pgAlive(), "substrate PostgreSQL not host-mapped at localhost:9432 — is the compose up?")
-        sweepLeftoverCorpusDatabases()
-    }
-
-    /** Best-effort cleanup of corpus_doris_* leftovers from prior aborted runs (PG bloat control). */
-    private fun sweepLeftoverCorpusDatabases() {
-        runCatching {
-            DriverManager.getConnection(
-                System.getProperty("doris.corpus.pg.host.url", "jdbc:postgresql://localhost:9432/ducklake"),
-                System.getProperty("doris.corpus.pg.user", "ducklake"),
-                System.getProperty("doris.corpus.pg.password", "ducklake"),
-            ).use { c ->
-                val names = mutableListOf<String>()
-                c.createStatement().use { st ->
-                    st.executeQuery("SELECT datname FROM pg_database WHERE datname LIKE 'corpus_doris_%'").use { rs ->
-                        while (rs.next()) names += rs.getString(1)
-                    }
-                }
-                for (db in names) {
-                    runCatching { c.createStatement().use { it.execute("DROP DATABASE IF EXISTS $db WITH (FORCE)") } }
-                }
-            }
-        }
+        // Names in pg_database are not proof of ownership: a matching database
+        // may belong to an active concurrent run. Only DorisReplayEngine.close()
+        // reclaims resources whose CREATE this engine actually acknowledged.
+        // Abandoned runs are retained for explicit operator inspection, not swept.
     }
 
     private fun feAlive(): Boolean =

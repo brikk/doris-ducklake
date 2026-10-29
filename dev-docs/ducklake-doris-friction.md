@@ -40,8 +40,10 @@ See the [release validation report](VALIDATION-catalog-0.11.0-2026-10-10.md).
 Also green on the current pin: reads, DDL (CREATE/DROP DB+TABLE, bucket-partition),
 INSERT/CTAS, reordered/partial-column writes and §13 GC (expire/cleanup/orphan).
 Corpus replay and zone-aware timestamp probes have historical validation, but
-were not rerun in this API-13 qualification. Full corpus replay remains deferred
-while F22's broad cleanup guard is open.
+were not rerun in this API-24 qualification. F22's automatic cross-run cleanup is
+removed by the [October 29 harness repair](VALIDATION-F22-CORPUS-OWNERSHIP-2026-10-29.md).
+Full corpus replay has not been rerun or automatically authorized; F24/F25 and
+candidate/producer acceptance remain separate.
 
 ---
 

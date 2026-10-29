@@ -5,6 +5,7 @@ import java.sql.DriverManager
 import java.sql.ResultSet
 import java.sql.SQLException
 import java.sql.Types
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 
 import dev.brikk.ducklake.corpus.OracleAttachment
@@ -59,9 +60,9 @@ internal class DorisReplayEngine(
      * never collide with this one — first full-corpus contact lost 112 files
      * to exactly that ("database corpus_doris_1 already exists").
      */
-    private val runId: String = java.lang.Long.toHexString(System.nanoTime())
+    private val runId: String = UUID.randomUUID().toString().replace("-", "")
     private val createdDatabases = mutableListOf<String>()
-    private val createdCatalogs = mutableListOf<String>()
+    private val createdCatalogs = linkedSetOf<String>()
 
     private val fe: Connection = DriverManager.getConnection(feJdbcUrl)
     private val pg: Connection = DriverManager.getConnection(pgHostUrl, pgUser, pgPassword)
@@ -76,7 +77,9 @@ internal class DorisReplayEngine(
      */
     val metadataRewriter: (String) -> String = { _ ->
         val db = "corpus_doris_${runId}_" + counter.incrementAndGet()
-        pg.createStatement().use { it.execute("CREATE DATABASE $db") }
+        // CREATE must succeed before this exact, internally generated name is
+        // owned. Never adopt/drop an existing database on a naming collision.
+        pg.createStatement().use { it.execute("CREATE DATABASE \"$db\"") }
         createdDatabases += db
         lastDatabase = db
         "postgres:dbname=$db $pgOracleHostPort user=$pgUser password=$pgPassword"
@@ -94,10 +97,15 @@ internal class DorisReplayEngine(
         }
         val catalog = "corpus_${runId}_" + counter.get()
         fe.createStatement().use { st ->
-            st.execute("DROP CATALOG IF EXISTS $catalog")
+            // DETACH/reattach can reconnect this engine to the same allocated
+            // database. Replace only a catalog whose prior CREATE we owned.
+            if (catalog in createdCatalogs) {
+                st.execute("DROP CATALOG IF EXISTS `$catalog`")
+                createdCatalogs.remove(catalog)
+            }
             st.execute(
                 """
-                CREATE CATALOG $catalog PROPERTIES (
+                CREATE CATALOG `$catalog` PROPERTIES (
                     'type' = 'ducklake',
                     'metadata.url' = 'jdbc:postgresql://$pgFeHostPort/$db',
                     'metadata.user' = '$pgUser',
@@ -112,6 +120,8 @@ internal class DorisReplayEngine(
                 """.trimIndent(),
             )
         }
+        // A failed CREATE (including an existing-name refusal) gives us no
+        // authority to drop that catalog, even though the name was generated here.
         createdCatalogs += catalog
         currentCatalog = catalog
         currentAlias = attachment.catalogAlias
@@ -227,7 +237,7 @@ internal class DorisReplayEngine(
 
     override fun close() {
         for (catalog in createdCatalogs) {
-            runCatching { fe.createStatement().use { it.execute("DROP CATALOG IF EXISTS $catalog") } }
+            runCatching { fe.createStatement().use { it.execute("DROP CATALOG IF EXISTS `$catalog`") } }
                 .onFailure { System.err.println("corpus cleanup: DROP CATALOG $catalog failed: ${it.message}") }
         }
         runCatching { fe.close() }
@@ -235,7 +245,7 @@ internal class DorisReplayEngine(
         // Failures are non-fatal (names are run-unique) but must be VISIBLE —
         // silent drop failures cost 112 files on first full-corpus contact.
         for (db in createdDatabases) {
-            runCatching { pg.createStatement().use { it.execute("DROP DATABASE IF EXISTS $db WITH (FORCE)") } }
+            runCatching { pg.createStatement().use { it.execute("DROP DATABASE IF EXISTS \"$db\" WITH (FORCE)") } }
                 .onFailure { System.err.println("corpus cleanup: DROP DATABASE $db failed: ${it.message}") }
         }
         runCatching { pg.close() }
