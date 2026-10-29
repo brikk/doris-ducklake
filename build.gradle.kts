@@ -1,6 +1,10 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.security.MessageDigest
 import java.util.zip.ZipFile
+import dev.brikk.buildlogic.GeneratePluginIdentity
+import dev.brikk.buildlogic.PluginArtifactManifest
+import dev.brikk.buildlogic.PluginIdentity
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
 
 plugins {
     id("buildlogic.kotlin.library")
@@ -327,9 +331,39 @@ tasks.register("qualificationDependencies") {
 // DuckLake retains INSERT-only writes and its existing type mappings; new opt-ins stay off.
 // Keep this equal to the pinned FE/SPI major. FE and BE must upgrade together: #68785/#68822
 // realigned Thrift field ids and are not compatible with an older master runtime pair.
+// One exclusion set for BOTH the payload identity and the ZIP: host-provided
+// SPI/Thrift/logging must not acquire a child-first duplicate across the ABI boundary.
+val hostJarPrefixes = listOf(
+    "fe-connector-api-", "fe-connector-spi-", "fe-extension-spi-", "fe-filesystem-api-", "fe-thrift-",
+    "libthrift-", "log4j-api-", "log4j-core-", "log4j-slf4j2-impl-", "log4j-1.2-api-", "slf4j-api-",
+)
+val packagedRuntimeJars = configurations.runtimeClasspath.get().filter { file ->
+    hostJarPrefixes.none { file.name.startsWith(it) }
+}
+val pluginIdentity by tasks.registering(GeneratePluginIdentity::class) {
+    group = "build"
+    description = "Fingerprints effective plugin payload/runtime bytes without Git/mtime or self-hash cycles."
+    dependsOn(tasks.classes)
+    apiVersion.set("24.0")
+    payloadRoots.from(sourceSets.main.get().output)
+    runtimeJars.from(packagedRuntimeJars)
+    compileSdkJars.from(configurations.compileClasspath.get().incoming.artifactView {
+        componentFilter { it is ModuleComponentIdentifier && it.group == "org.apache.doris" }
+    }.files)
+    identityFile.set(layout.buildDirectory.file("plugin-identity/payload.json"))
+}
+
 tasks.jar {
+    dependsOn(pluginIdentity)
+    inputs.file(pluginIdentity.flatMap { it.identityFile }).withPathSensitivity(PathSensitivity.NONE)
+    isPreserveFileTimestamps = false
+    isReproducibleFileOrder = true
     manifest {
         attributes("Doris-Connector-Plugin-Api-Version" to "24.0")
+    }
+    doFirst {
+        manifest.attributes("Implementation-Version" to
+            (PluginIdentity.readJson(pluginIdentity.get().identityFile.get().asFile)["build_id"] as String))
     }
 }
 
@@ -343,32 +377,32 @@ val pluginZip by tasks.registering(Zip::class) {
     dependsOn(tasks.jar)
     archiveBaseName.set("doris-ducklake")
     archiveClassifier.set("plugin")
+    isPreserveFileTimestamps = false
+    isReproducibleFileOrder = true
+    duplicatesStrategy = DuplicatesStrategy.FAIL
 
     from(tasks.jar) { into("lib") }
-    from(configurations.runtimeClasspath) {
+    from(packagedRuntimeJars) {
         into("lib")
-        exclude("fe-connector-api-*.jar")
-        exclude("fe-connector-spi-*.jar")
-        exclude("fe-extension-spi-*.jar")
-        exclude("fe-filesystem-api-*.jar")
-        exclude("fe-thrift-*.jar")
-        // Host thrift wins. We rely on the FE's fe-thrift (excluded above → parent/host-provided)
-        // for the generated TIceberg* types; its runtime uses the host's org.apache.thrift classes.
-        // If a future transitive dep pulled libthrift into our runtime it would bundle here and load
-        // child-first, giving our code a different org.apache.thrift.TBase than the host's fe-thrift
-        // classes use → LinkageError across the SPI boundary. libthrift isn't on our classpath today,
-        // so this is defensive (matches fe-connector-iceberg / fe-connector-hive plugin-zip.xml).
-        exclude("libthrift-*.jar")
-        exclude("log4j-api-*.jar")
-        exclude("log4j-core-*.jar")
-        exclude("log4j-slf4j2-impl-*.jar")
-        exclude("log4j-1.2-api-*.jar")
-        exclude("slf4j-api-*.jar")
     }
 }
 
-tasks.assemble {
+val pluginArtifactManifest by tasks.registering(PluginArtifactManifest::class) {
+    group = "verification"
+    description = "Checks packaged provider identity and records final ZIP/JAR/SDK hashes beside the ZIP."
     dependsOn(pluginZip)
+    identityFile.set(pluginIdentity.flatMap { it.identityFile })
+    providerJar.set(tasks.jar.flatMap { it.archiveFile })
+    pluginZip.set(tasks.named<Zip>("pluginZip").flatMap { it.archiveFile })
+    receiptFile.set(layout.buildDirectory.file("distributions/doris-ducklake-${project.version}-plugin.identity.json"))
+}
+
+tasks.assemble {
+    dependsOn(pluginArtifactManifest)
+}
+
+tasks.check {
+    dependsOn(pluginArtifactManifest, gradle.includedBuild("build-logic").task(":test"))
 }
 
 // ---- Corpus replay (dev-docs/DESIGN-corpus-replay-adapter.md) ----

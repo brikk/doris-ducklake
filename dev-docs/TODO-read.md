@@ -1,5 +1,15 @@
 # DuckLake-on-Doris — READ-path Working TODO
 
+**2026-10-29 harness work:** F22 removes the cross-run startup sweep and restricts
+cleanup to acknowledged per-engine resources; see
+[ownership repair/evidence](VALIDATION-F22-CORPUS-OWNERSHIP-2026-10-29.md).
+F24 has a pinned-source feasibility audit and a real
+[13-item implementation checklist](TODO-F24-PLUGIN-PROVENANCE.md); F24-A/B's seven
+artifact/target identity and serialized stopped-replacement items are implemented
+and verified. Loaded-provider attestation, the remaining loaded-state matrix and
+real Doris A/B acceptance remain open. F25 remains separate. No corpus campaign or feature enablement
+is authorized by these harness changes.
+
 **2026-10-24 R07: bounded experimental PostgreSQL/S3 file tier implemented;
 full rollout remains NO-GO.** See [current scope, SQL evidence and remaining
 engine/API gates](VALIDATION-R07-IMPLEMENTATION-2026-10-24.md). Inline transport,

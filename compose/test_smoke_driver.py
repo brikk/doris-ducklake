@@ -1,11 +1,12 @@
-"""F21 shell orchestration regressions, with no Docker or database access.
+"""F21/F24 shell orchestration regressions, with no Docker or database access.
 
-The Docker stand-in records argv and returns canned success/count responses. It
-does not execute container payloads or model SQL, storage, or engine semantics;
-assertions inspect the commands the real smoke.sh constructs.
+The Docker stand-in retains process/claim/volume state and executes the actual
+standard-library volume worker on isolated files. SQL remains canned, not Doris
+or classloader evidence. Loaded-provider state/gates are deferred to F24-C/D.
 """
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -15,7 +16,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
-import zipfile
+from plugin_test_fixture import compose_target, write_plugin
+import plugin_volume
+from plugin_deploy import OWNER
 
 
 TOKEN = "0123456789abcdef0123456789abcdef"
@@ -37,18 +40,186 @@ def fake_docker():
     with log.open("a") as stream:
         stream.write(json.dumps({
             "argv": argv, "duckdb_version": os.environ.get("DUCKDB_VERSION"),
+            "copied_sha256": hashlib.sha256(Path(argv[1]).read_bytes()).hexdigest()
+            if argv[0] == "cp" and ":" not in argv[1] else None,
         }) + "\n")
     scenario = os.environ["FAKE_SCENARIO"]
+    state_file = Path(os.environ["FAKE_STATE"]) / "state.json"
+    state = json.loads(state_file.read_text()) if state_file.exists() else {"containers": {}, "volume": False, "next": 0}
+    config = compose_target()
+    fe_name = "doris-custom-fe" if scenario == "custom_container" else "doris-ducklake-fe"
+    volume = config["volumes"]["fe-plugin-ducklake"]["name"]
+    volume_root = state_file.parent / "volume"
+    volume_root.mkdir(exist_ok=True)
+
+    def save():
+        state_file.write_text(json.dumps(state))
+
+    def instance(name):
+        return next(c for c in state["containers"].values() if name in {c["Id"], c["Name"].lstrip("/")})
+
+    def new_fe():
+        return {"Id": "fake-fe-id", "Name": "/" + fe_name, "Image": "fe-image-id",
+                "Config": {"Hostname": "doris-fe", "Labels": {"com.docker.compose.project": config["name"],
+                           "com.docker.compose.service": "doris-fe"}},
+                "State": {"Running": True, "StartedAt": "2026-10-29T12:00:00.000000000Z", "ExitCode": 0},
+                "Mounts": [{"Type": "volume", "Name": volume, "Destination": plugin_volume.__dict__.get(
+                    "PLUGIN_MOUNT", "/opt/apache-doris/fe/plugins/connector/ducklake"), "RW": True}]}
+
+    existing_scenarios = {"running_fe", "stopped_fe", "stop_failure", "stop_unconfirmed", "prepare_failure",
+                          "snapshot_failure", "install_failure", "hash_failure", "start_failure", "stale_started_at",
+                          "sql_timeout", "wrong_existing_image", "foreign_after_claim", "changed_old_volume",
+                          "cluster_id_changed", "claim_occupied"}
+    if not state_file.exists() and scenario in existing_scenarios:
+        fe = new_fe()
+        fe["State"]["StartedAt"] = "2026-10-28T12:00:00.000000000Z"
+        fe["State"]["Running"] = scenario != "stopped_fe"
+        if scenario == "wrong_existing_image":
+            fe["Image"] = "legacy-image-id"
+        state["containers"][fe["Id"]] = fe
+        state["volume"] = True
+        (volume_root / "lib").mkdir(exist_ok=True)
+        (volume_root / "lib/stale.jar").write_bytes(b"old-provider")
+        (volume_root / ".old-manifest").write_bytes(b"old-manifest")
+        save()
+
+    if argv[:2] == ["image", "inspect"]:
+        print(json.dumps([{"Id": "helper-image-id" if argv[2] == "python:3.12-slim" else "fe-image-id"}]))
+        return 0
 
     if argv[0] == "compose":
+        if "config" in argv:
+            if scenario == "mutate_selected_archive":
+                Path(os.environ["FAKE_PLUGIN_PATH"]).write_bytes(b"changed-after-freeze")
+            config = compose_target()
+            config["services"]["doris-fe"]["image"] = os.environ.get("DORIS_FE_IMAGE", config["services"]["doris-fe"]["image"])
+            if scenario == "custom_container":
+                config["services"]["doris-fe"]["container_name"] = "doris-custom-fe"
+            print(json.dumps(config))
+            return 0
         if "run" in argv and scenario == "bootstrap_failure":
             print("injected bootstrap failure", file=sys.stderr)
             return 1
+        if "up" in argv and argv[-1] == "doris-fe":
+            state["containers"]["fake-fe-id"] = new_fe()
+            save()
         return 0
-    if argv[0] in {"volume", "cp", "start", "rm"}:
+    if argv[:2] == ["container", "ls"]:
+        if scenario == "foreign_container":
+            print("foreign-fe")
+        elif any(a.startswith("volume=") for a in argv):
+            print("\n".join(c["Id"] for c in state["containers"].values()
+                            if any(m.get("Name") == volume for m in c["Mounts"])))
+        else:
+            print("\n".join(c["Id"] for c in state["containers"].values() if c["Name"] == "/" + fe_name))
+        return 0
+    if argv[:2] == ["container", "inspect"]:
+        if argv[2] == "foreign-fe":
+            print(json.dumps([{"Name": "/doris-ducklake-fe", "Config": {"Labels": {
+                "com.docker.compose.project": "another-project", "com.docker.compose.service": "doris-fe"}}, "Mounts": []}]))
+        else:
+            item = instance(argv[2])
+            if scenario == "foreign_after_claim" and item["Id"] == "fake-fe-id" and any(
+                    OWNER in c["Config"].get("Labels", {}) for c in state["containers"].values()):
+                item["Config"]["Labels"]["com.docker.compose.project"] = "racing-foreign-project"
+            print(json.dumps([item]))
+        return 0
+    if argv[:2] == ["volume", "ls"]:
+        print(volume if state["volume"] else "")
+        return 0
+    if argv[:2] == ["volume", "inspect"]:
+        print(json.dumps([{"Labels": {"com.docker.compose.project": config["name"],
+                                      "com.docker.compose.volume": "fe-plugin-ducklake"}}]))
+        return 0
+    if argv[:2] == ["volume", "create"]:
+        state["volume"] = True
+        save()
+        return 0
+    if argv[0] == "cp":
+        def mapped(path):
+            if ":" not in path:
+                return Path(path)
+            container, destination = path.split(":", 1)
+            return state_file.parent / instance(container)["Id"] / destination.lstrip("/")
+        source, destination = map(mapped, argv[1:3])
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
         return 0
     if argv[0] == "create":
-        print("fake-plugin-helper")
+        if "--name" in argv and (scenario == "claim_occupied" or any(
+                c["Name"] == "/" + option_values(argv, "--name")[0] for c in state["containers"].values())):
+            print("occupied deployment claim", file=sys.stderr)
+            return 1
+        state["next"] += 1
+        identifier = "fake-helper-" + str(state["next"])
+        labels = dict(v.split("=", 1) for v in option_values(argv, "--label"))
+        name = option_values(argv, "--name") or [identifier]
+        state["containers"][identifier] = {"Id": identifier, "Name": "/" + name[0], "Image": "helper-image-id",
+            "Config": {"Labels": labels}, "State": {"Running": False, "ExitCode": 0, "StartedAt": ""},
+            "Mounts": [{"Name": volume}] if "-v" in argv else [], "operation": argv[-1] if "-v" in argv else None}
+        save()
+        print(identifier)
+        return 0
+    if argv[0] == "start":
+        container = instance(argv[-1])
+        operation = container.get("operation")
+        if operation:
+            work = state_file.parent / container["Id"] / "work"
+            try:
+                if scenario == "snapshot_failure" and operation == "snapshot":
+                    raise OSError("injected backup failure")
+                if scenario == "install_failure" and operation == "install":
+                    (volume_root / "partial-write").write_bytes(b"uncertain")
+                    raise OSError("injected install failure")
+                if scenario == "changed_old_volume" and operation == "install":
+                    (volume_root / "lib/stale.jar").write_bytes(b"changed-after-snapshot")
+                if operation == "snapshot":
+                    plugin_volume.snapshot(volume_root, work)
+                elif operation == "install":
+                    plugin_volume.install(volume_root, work)
+                    if scenario == "hash_failure":
+                        (volume_root / "lib/extra.jar").write_bytes(b"unattested-extra")
+                else:
+                    artifact = json.loads((work / "plugin.identity.json").read_text())
+                    actual = plugin_volume.verify_installed(volume_root, artifact)
+                    plugin_volume.write_json(work / "verified.json", actual)
+            except Exception as error:
+                container["State"]["ExitCode"] = 1
+                print(str(error), file=sys.stderr)
+                save()
+                return 1
+        else:
+            if container["Id"] == "fake-fe-id" and scenario == "start_failure":
+                print("injected start failure", file=sys.stderr)
+                return 1
+            container["State"]["Running"] = True
+            if container["Id"] != "fake-fe-id" or scenario != "stale_started_at":
+                container["State"]["StartedAt"] = "2026-10-29T12:00:00.000000000Z"
+        save()
+        return 0
+    if argv[0] == "stop":
+        if argv[-1] == "fake-fe-id" and scenario == "stop_failure":
+            print("injected stop failure", file=sys.stderr)
+            return 1
+        if argv[-1] == "fake-fe-id" and scenario == "stop_unconfirmed":
+            return 0
+        instance(argv[-1])["State"]["Running"] = False
+        save()
+        return 0
+    if argv[0] == "rm":
+        del state["containers"][instance(argv[-1])["Id"]]
+        save()
+        return 0
+    if argv[0] == "exec" and argv[2:4] == ["python3", "/work/plugin_volume.py"]:
+        if scenario == "prepare_failure":
+            print("injected candidate preparation failure", file=sys.stderr)
+            return 1
+        work = state_file.parent / instance(argv[1])["Id"] / "work"
+        plugin_volume.prepare(work)
+        return 0
+    if argv[0] == "exec" and argv[2] == "cat":
+        restarted = instance(argv[1])["State"]["StartedAt"].startswith("2026-10-29")
+        print("clusterId=" + ("999" if scenario == "cluster_id_changed" and restarted else "123"))
         return 0
     if argv[:3] == ["exec", "trino-ducklake-postgres", "psql"]:
         sql = " ".join(option_values(argv, "-c")[0].split())
@@ -73,8 +244,10 @@ def fake_docker():
         else:
             print(1)
         return 0
-    if argv[:3] == ["exec", "doris-ducklake-fe", "mysql"]:
+    if argv[0] == "exec" and argv[1] in {fe_name, "fake-fe-id"} and argv[2] == "mysql":
         sql = " ".join(option_values(argv, "-e")[0].split())
+        if scenario == "sql_timeout" and sql == "SHOW FRONTENDS":
+            return 1
         if "-B" in argv and sql in {"SHOW FRONTENDS", "SHOW BACKENDS"}:
             print("Alive\tVersion")
             version = "doris-0.0.0-62e3d81a42b"
@@ -130,7 +303,7 @@ class SmokeDriverTests(unittest.TestCase):
         self.assertIn("image: ${DORIS_BE_IMAGE:-doris-be:ducklake-62e3d81a-api24-asan}", compose)
         volume = "doris-ducklake-api24-62e3d81a-fe-plugin-ducklake"
         self.assertIn(f"name: {volume}", compose)
-        self.assertIn(f"VOL_NAME={volume}", (SOURCE / "smoke.sh").read_text())
+        self.assertIn("plugin_preflight.py", (SOURCE / "smoke.sh").read_text())
         self.assertIn("name: doris-ducklake-api24-62e3d81a-fe-meta", compose)
         self.assertIn("name: doris-ducklake-api24-62e3d81a-be-storage", compose)
         self.assertNotIn("apache/doris:be-4.1.3", compose)
@@ -148,13 +321,13 @@ class SmokeDriverTests(unittest.TestCase):
         self.substrate.write_text("services: {}\n")
         (self.compose / "docker-compose.yml").write_text("services: {}\n")
         for name in ("smoke.sh", "fe.conf", "smoke_lake.py", "step7-delete.py",
-                     "step-default.py", "w2-insert.py"):
+                      "step-default.py", "w2-insert.py", "plugin_preflight.py", "plugin_deploy.py",
+                      "plugin_volume.py", "smoke_run.sh"):
             shutil.copyfile(SOURCE / name, self.compose / name)
         distributions = self.compose.parent / "build" / "distributions"
         distributions.mkdir(parents=True)
         self.plugin = distributions / "doris-ducklake-test-plugin.zip"
-        with zipfile.ZipFile(self.plugin, "w") as archive:
-            archive.writestr("plugin.properties", "name=ducklake\n")
+        self.artifact = write_plugin(self.plugin)
         self.bin = self.root / "bin"
         self.bin.mkdir()
         docker = self.bin / "docker"
@@ -168,8 +341,16 @@ class SmokeDriverTests(unittest.TestCase):
         sleep.chmod(0o755)
         self.log = self.root / "docker.jsonl"
 
-    def run_driver(self, *args, scenario="ok", token=TOKEN, be_image=None):
+    def run_driver(self, *args, scenario="ok", token=TOKEN, be_image=None, fe_image=None):
         self.log.write_text("")
+        fake_state = Path(tempfile.mkdtemp(prefix="fake-daemon-", dir=self.root))
+        self.fake_state = fake_state
+        if scenario in {"running_fe", "stopped_fe", "stop_failure", "stop_unconfirmed", "prepare_failure",
+                        "snapshot_failure", "install_failure", "hash_failure", "start_failure", "stale_started_at",
+                        "sql_timeout", "wrong_existing_image", "foreign_after_claim", "changed_old_volume",
+                        "cluster_id_changed", "claim_occupied"}:
+            (self.compose / ".fe.conf.runtime").write_bytes((self.compose / "fe.conf").read_bytes()
+                + b"\npriority_networks = 172.30.80.0/24\n")
         # Do not inherit BASH_ENV, exported functions, Docker settings, etc.
         env = {
             "PATH": str(self.bin) + os.pathsep + os.defpath,
@@ -178,6 +359,9 @@ class SmokeDriverTests(unittest.TestCase):
             "DORIS_CORPUS_DIR": str(self.root / "corpus"),
             "FAKE_DOCKER_LOG": str(self.log), "FAKE_SCENARIO": scenario,
             "FAKE_TOKEN": token,
+            "FAKE_PLUGIN_PATH": str(self.plugin),
+            "FAKE_STATE": str(fake_state),
+            "DORIS_FE_STARTUP_TIMEOUT": "1",
             # Inherited targets must not let a caller adopt the shared lake.
             "SMOKE_RUN_ID": "f" * 32, "SMOKE_PG_DB": "ducklake",
             "SMOKE_CATALOG": "dl", "SMOKE_PREFIX": "data/",
@@ -187,6 +371,8 @@ class SmokeDriverTests(unittest.TestCase):
         }
         if be_image is not None:
             env["DORIS_BE_IMAGE"] = be_image
+        if fe_image is not None:
+            env["DORIS_FE_IMAGE"] = fe_image
         result = subprocess.run(
             ["bash", str(self.compose / "smoke.sh"), "--no-build", *args],
             cwd=self.root, env=env, text=True, capture_output=True, timeout=30,
@@ -195,16 +381,17 @@ class SmokeDriverTests(unittest.TestCase):
         self.records = records
         self.calls = [record["argv"] for record in records]
         self.output = result.stdout + result.stderr
-        self.assertEqual(
-            (self.compose / ".fe.conf.runtime").read_bytes(),
-            (self.compose / "fe.conf").read_bytes()
-            + b"\npriority_networks = 172.30.80.0/24\n",
-        )
+        runtime = self.compose / ".fe.conf.runtime"
+        if runtime.exists():
+            self.assertEqual(runtime.read_bytes(), (self.compose / "fe.conf").read_bytes()
+                             + b"\npriority_networks = 172.30.80.0/24\n")
+        else:
+            self.assertFalse(any(argv[:2] == ["volume", "create"] or "up" in argv for argv in self.calls))
         return result
 
     def mysql_sql(self):
         return [option_values(argv, "-e")[0] for argv in self.calls
-                if argv[:3] == ["exec", "doris-ducklake-fe", "mysql"]]
+                if argv[0] == "exec" and len(argv) > 2 and argv[2] == "mysql"]
 
     def allocation_calls(self):
         stages = []
@@ -235,7 +422,10 @@ class SmokeDriverTests(unittest.TestCase):
         self.assertEqual(ups, [
             ["compose", "-f", str(self.substrate), "up", "-d", "--no-recreate",
              "--wait", "--wait-timeout", "120", "postgres", "minio"],
-            ["compose", "-f", str(self.compose / "docker-compose.yml"), "up", "-d"],
+            ["compose", "-f", str(self.compose / "docker-compose.yml"), "up", "-d", "--no-deps", "--no-build",
+             "--pull", "never", "doris-fe"],
+            ["compose", "-f", str(self.compose / "docker-compose.yml"), "up", "-d", "--no-deps", "--no-build",
+             "--pull", "never", "doris-be"],
         ])
 
     def test_full_run_owns_all_targets(self):
@@ -246,7 +436,13 @@ class SmokeDriverTests(unittest.TestCase):
                          ["uuid", "bucket", "prefix", "database", "bootstrap", "path"])
         stage_indexes = [self.calls.index(argv) for _, argv in stages]
         self.assertEqual(stage_indexes, sorted(stage_indexes))
-        self.assertIn(["cp", str(self.plugin), "fake-plugin-helper:/tmp/plugin.zip"], self.calls)
+        copied = [record for record in self.records if record["argv"][0] == "cp"
+                  and record["argv"][2].endswith(":/work/plugin.zip")]
+        self.assertEqual(len(copied), 3)
+        self.assertTrue(all(r["copied_sha256"] == self.artifact["plugin_zip_sha256"] for r in copied))
+        be_up = next(i for i, a in enumerate(self.calls) if a[0] == "compose" and "up" in a and a[-1] == "doris-be")
+        early_sql = [a for a in self.calls[:be_up] if a[0] == "exec" and len(a) > 2 and a[2] == "mysql"]
+        self.assertEqual([option_values(a, "-e")[0] for a in early_sql], ["SHOW FRONTENDS"])
 
         postgres = [argv for argv in self.calls
                     if argv[:3] == ["exec", "trino-ducklake-postgres", "psql"]]
@@ -275,7 +471,7 @@ class SmokeDriverTests(unittest.TestCase):
         ])
         self.assertEqual(self.records[stage_indexes[4]]["duckdb_version"], "1.5.6")
 
-        helpers = [argv for argv in self.calls if "python:3.12-slim" in argv]
+        helpers = [argv for argv in self.calls if argv[0] == "run" and "python:3.12-slim" in argv]
         helper_scripts = []
         verify_tables = []
         for argv in helpers:
@@ -352,8 +548,8 @@ class SmokeDriverTests(unittest.TestCase):
         self.assertEqual(len(procedures), 3)
         for sql, procedure in zip(procedures, ("expire_snapshots", "cleanup_old_files", "remove_orphan_files")):
             self.assertIn(f"ALTER TABLE {DATABASE}.tpch.orders EXECUTE {procedure}(", sql)
-        self.assertIn("minio/mc:latest", self.calls[-1])
-        self.assertIn(f"mc rm {MC_ROOT}_SUCCESS", self.calls[-1][-1])
+        last_mc = [argv for argv in self.calls if "minio/mc:latest" in argv][-1]
+        self.assertIn(f"mc rm {MC_ROOT}_SUCCESS", last_mc[-1])
 
     def test_wrong_delete_count_fails_the_smoke(self):
         self.assertNotEqual(self.run_driver(scenario="wrong_delete_count").returncode, 0)
@@ -384,6 +580,145 @@ class SmokeDriverTests(unittest.TestCase):
         self.assertTrue(any("enable_local_shuffle_planner = true" in sql for sql in self.mysql_sql()))
         self.assertFalse(any("enable_local_shuffle_planner = false" in sql for sql in self.mysql_sql()))
 
+    def test_preflight_only_reads_docker_and_does_not_stage_live_config_or_install(self):
+        self.assertEqual(self.run_driver("--preflight-only").returncode, 0, self.output)
+        result = json.loads(self.output)
+        self.assertEqual(result["artifact"]["build_id"], self.artifact["build_id"])
+        self.assertEqual(result["target"]["fe_container"], "doris-ducklake-fe")
+        self.assertFalse(Path(result["stage"]).exists())
+        self.assertFalse((self.compose / ".fe.conf.runtime").exists())
+        self.assertEqual(self.allocation_calls(), [])
+        self.assertTrue(all(argv[0] == "compose" and "config" in argv or argv[1] in {"ls", "inspect"}
+                            for argv in self.calls))
+
+    def test_help_lists_new_artifact_flags_without_docker_access(self):
+        self.assertEqual(self.run_driver("--help").returncode, 0, self.output)
+        self.assertIn("--preflight-only", self.output)
+        self.assertIn("--plugin-zip", self.output)
+        self.assertEqual(self.calls, [])
+
+    def test_malformed_selection_flags_fail_without_docker_access(self):
+        for args in (("--plugin-zip",), ("--down", "--preflight-only"),
+                     ("--down", "--plugin-zip", str(self.plugin))):
+            with self.subTest(args=args):
+                self.assertNotEqual(self.run_driver(*args).returncode, 0)
+                self.assertEqual(self.calls, [])
+
+    def test_missing_or_ambiguous_archive_fails_before_any_docker_command(self):
+        other = self.plugin.with_name("doris-ducklake-other-plugin.zip")
+        write_plugin(other)
+        self.assertNotEqual(self.run_driver("--up-only").returncode, 0)
+        self.assertIn("found 2", self.output)
+        self.assertEqual(self.calls, [])
+        self.plugin.unlink()
+        other.unlink()
+        self.assertNotEqual(self.run_driver("--up-only").returncode, 0)
+        self.assertIn("found 0", self.output)
+        self.assertEqual(self.calls, [])
+
+    def test_explicit_archive_path_with_spaces_wins_over_multiple_candidates(self):
+        other = self.plugin.with_name("doris-ducklake-other-plugin.zip")
+        write_plugin(other)
+        selected = self.root / "explicit artifacts" / "chosen-plugin.zip"
+        expected = write_plugin(selected, payload_value=b"chosen-build")
+        self.assertEqual(self.run_driver("--up-only", "--plugin-zip", str(selected)).returncode, 0, self.output)
+        copied = next(r for r in self.records if r["argv"][0] == "cp" and r["argv"][2].endswith(":/work/plugin.zip"))
+        self.assertEqual(copied["copied_sha256"], expected["plugin_zip_sha256"])
+
+    def test_missing_explicit_archive_or_receipt_and_corruption_fail_before_docker(self):
+        self.assertNotEqual(self.run_driver("--plugin-zip", str(self.root / "missing.zip")).returncode, 0)
+        self.assertEqual(self.calls, [])
+        self.plugin.with_suffix(".identity.json").unlink()
+        self.assertNotEqual(self.run_driver("--up-only").returncode, 0)
+        self.assertIn("receipt missing", self.output)
+        self.assertEqual(self.calls, [])
+        write_plugin(self.plugin)
+        self.plugin.write_bytes(self.plugin.read_bytes() + b"corrupt")
+        self.assertNotEqual(self.run_driver("--up-only").returncode, 0)
+        self.assertIn("ZIP checksum", self.output)
+        self.assertEqual(self.calls, [])
+
+    def test_foreign_fe_collision_fails_before_any_mutation(self):
+        self.assertNotEqual(self.run_driver("--up-only", scenario="foreign_container").returncode, 0)
+        self.assertIn("Foreign FE container", self.output)
+        self.assertEqual(self.allocation_calls(), [])
+        self.assert_no_catalog_mutation()
+        self.assertTrue(all(argv[0] == "compose" and "config" in argv or argv[1] in {"ls", "inspect"}
+                            for argv in self.calls))
+
+    def test_rendered_image_override_is_reported_without_deployment(self):
+        self.assertEqual(self.run_driver("--preflight-only", fe_image="example/fe:selected").returncode, 0, self.output)
+        self.assertEqual(json.loads(self.output)["target"]["fe_image"], "example/fe:selected")
+
+    def test_all_fe_commands_use_the_rendered_container(self):
+        self.assertEqual(self.run_driver(scenario="custom_container").returncode, 0, self.output)
+        self.assertTrue(self.mysql_sql())
+        self.assertTrue(all(argv[1] in {"doris-custom-fe", "fake-fe-id"} for argv in self.calls
+                            if argv[0] == "exec" and len(argv) > 2 and argv[2] == "mysql"))
+
+    def test_copy_uses_frozen_bytes_if_another_build_replaces_the_selected_path(self):
+        self.assertEqual(self.run_driver("--up-only", scenario="mutate_selected_archive").returncode, 0, self.output)
+        self.assertEqual(self.plugin.read_bytes(), b"changed-after-freeze")
+        copied = next(r for r in self.records if r["argv"][0] == "cp" and r["argv"][2].endswith(":/work/plugin.zip"))
+        self.assertEqual(copied["copied_sha256"], self.artifact["plugin_zip_sha256"])
+
+    def lifecycle(self):
+        paths = list((self.compose.parent / "build/smoke-deployments").glob("deploy-*/lifecycle.json"))
+        self.assertEqual(len(paths), 1)
+        return json.loads(paths[0].read_text()), paths[0].parent
+
+    def test_running_and_stopped_fe_cross_stopped_write_and_fresh_start_boundaries(self):
+        for scenario in ("running_fe", "stopped_fe"):
+            # Each subcase gets its own private checkout/evidence/daemon.
+            with self.subTest(scenario=scenario):
+                if scenario == "stopped_fe":
+                    self.setUp()
+                self.assertEqual(self.run_driver("--up-only", scenario=scenario).returncode, 0, self.output)
+                lifecycle, evidence = self.lifecycle()
+                events = [e["event"] for e in lifecycle["events"] if e["event"] not in {"worker-created", "worker-finished"}]
+                ordered = ["claim-acquired", "owned-target-revalidated", "candidate-prepared", "rollback-preserved",
+                           "fe-stopped", "install-started", "installed-files-verified", "fe-start-requested",
+                           "fresh-fe-sql-ready", "lifecycle-complete-not-provider-attested", "smoke-command-finished",
+                           "claim-released"]
+                self.assertEqual(events, ordered)
+                self.assertEqual(lifecycle["prior_process"]["id"], lifecycle["new_process"]["id"])
+                self.assertGreater(lifecycle["new_process"]["started_at"], lifecycle["prior_process"]["started_at"])
+                self.assertFalse(lifecycle["loaded_provider_verified"])
+                previous = json.loads((evidence / "previous.json").read_text())
+                self.assertEqual(set(previous["files"]), {"lib/stale.jar", ".old-manifest"})
+                stop = next(i for i, a in enumerate(self.calls) if a[0] == "stop" and a[-1] == "fake-fe-id")
+                writes = next(i for i, a in enumerate(self.calls) if a[:2] == ["volume", "create"])
+                self.assertLess(stop, writes)
+                self.assertEqual(self.allocation_calls(), [])
+
+    def test_pre_stop_failures_never_write_the_active_volume_or_stop_a_foreign_fe(self):
+        for scenario in ("claim_occupied", "wrong_existing_image", "prepare_failure", "snapshot_failure",
+                         "foreign_after_claim", "stop_failure", "stop_unconfirmed"):
+            with self.subTest(scenario=scenario):
+                self.setUp()
+                self.assertNotEqual(self.run_driver("--up-only", scenario=scenario).returncode, 0, self.output)
+                self.assertFalse(any(a[:2] == ["volume", "create"] for a in self.calls))
+                self.assertEqual(self.allocation_calls(), [])
+                self.assertEqual((self.fake_state / "volume/lib/stale.jar").read_bytes(), b"old-provider")
+                if scenario in {"claim_occupied", "wrong_existing_image", "prepare_failure", "snapshot_failure", "foreign_after_claim"}:
+                    self.assertFalse(any(a[0] == "stop" and a[-1] == "fake-fe-id" for a in self.calls))
+
+    def test_install_hash_start_freshness_and_readiness_failures_keep_fe_stopped_and_backup(self):
+        for scenario in ("install_failure", "hash_failure", "changed_old_volume", "start_failure", "stale_started_at",
+                         "sql_timeout", "cluster_id_changed"):
+            with self.subTest(scenario=scenario):
+                self.setUp()
+                self.assertNotEqual(self.run_driver("--up-only", scenario=scenario).returncode, 0, self.output)
+                self.assertEqual(self.allocation_calls(), [])
+                state = json.loads((self.fake_state / "state.json").read_text())
+                self.assertFalse(state["containers"]["fake-fe-id"]["State"]["Running"])
+                lifecycle, evidence = self.lifecycle()
+                self.assertFalse(lifecycle.get("lifecycle_complete", False))
+                self.assertTrue((evidence / "previous.tar").is_file())
+                self.assertTrue((evidence / "plugin.zip").is_file())
+                self.assertIn("failed-fe-kept-stopped", [e["event"] for e in lifecycle["events"]])
+                self.assertEqual(list(state["containers"]), ["fake-fe-id"])
+
     def test_stale_master_be_fails_before_lake_allocation(self):
         self.assertNotEqual(self.run_driver(scenario="stale_master_be").returncode, 0)
         self.assertIn("FE/BE source mismatch", self.output)
@@ -406,9 +741,10 @@ class SmokeDriverTests(unittest.TestCase):
 
     def test_down_only_stops_doris(self):
         self.assertEqual(self.run_driver("--down").returncode, 0, self.output)
-        self.assertEqual(self.calls, [
-            ["compose", "-f", str(self.compose / "docker-compose.yml"), "down", "-v"],
-        ])
+        self.assertEqual([a for a in self.calls if "down" in a], [
+            ["compose", "-f", str(self.compose / "docker-compose.yml"), "down", "-v"]])
+        self.assertEqual(self.allocation_calls(), [])
+        self.assertTrue(any(a[0] == "create" and "--name" in a for a in self.calls))
 
     def assert_rejected_at(self, scenario, stage, token=TOKEN):
         self.assertNotEqual(self.run_driver(scenario=scenario, token=token).returncode, 0, self.output)
@@ -418,7 +754,10 @@ class SmokeDriverTests(unittest.TestCase):
         # Every command after allocation starts must be a preflight command, and
         # the failed preflight must be the last Docker call (no best-effort reuse).
         start = self.calls.index(stages[0][1])
-        self.assertEqual(self.calls[start:], [argv for _, argv in stages])
+        last = self.calls.index(stages[-1][1])
+        self.assertEqual(self.calls[start:last + 1], [argv for _, argv in stages])
+        self.assertTrue(all(a[0] in {"stop", "rm"} or a[:2] == ["container", "inspect"]
+                            for a in self.calls[last + 1:]))
         self.assert_no_catalog_mutation()
 
     def test_duplicate_database_stops_before_bootstrap(self):

@@ -64,20 +64,105 @@ run's resources after inspection, never a prefix-wide database or warehouse swee
 
 This is accidental-target protection, not credential-level tenant isolation.
 The FE/BE containers and plugin volume are still shared development resources:
-do not run concurrent smoke/deployment operations against them. F24 (plugin
-reload/provenance) and F25 (nonfatal assertions) remain separate open items, so
+cooperating smoke/deployment/teardown operations now refuse overlapping claims;
+manual Docker operations must not race them. F24 (loaded-provider provenance)
+and F25 (nonfatal assertions) remain separate open items, so
 `Smoke complete` alone is not proof of end-to-end correctness.
+F24's current-runtime feasibility and ordered implementation sub-items are in
+[`TODO-F24-PLUGIN-PROVENANCE.md`](../dev-docs/TODO-F24-PLUGIN-PROVENANCE.md).
+The separate corpus F22 startup sweep is removed; aborted corpus databases are
+retained for explicit operator inspection, not automatically reclaimed by prefix.
+
+### Artifact/target preflight (F24-A)
+
+`./gradlew assemble` now creates a content-identified provider JAR and an adjacent
+`build/distributions/doris-ducklake-0.0.1-plugin.identity.json` containing final
+ZIP/JAR/file-set and compile-SDK hashes. API 24, the Java-17 floor and dependency
+pins are unchanged. Identity follows effective class/resource/dependency bytes,
+including dirty builds, not Git HEAD or the archive's mtime.
+
+```bash
+./gradlew assemble
+compose/smoke.sh --preflight-only
+compose/smoke.sh --preflight-only --plugin-zip '/path with spaces/chosen-plugin.zip'
+```
+
+Host Python **3.9+**, standard library only, is required for preflight. It reads
+rendered compose configuration and Docker ownership metadata but does not start,
+stop, install, seed or alter live config. Without `--plugin-zip` exactly one matching
+ZIP is required; an explicit ZIP implies no build and needs its adjacent identity
+JSON. The selected two-file input is frozen locally for the invocation and verified.
+Preflight-only removes those private copies on exit; deployment additionally
+retains its own recovery artifacts, as described below.
+
+Foreign/wrongly mounted containers or volumes are rejected, not silently migrated.
+In particular, a retained API-13 container using the old plugin mount cannot be
+adopted just because its container name matches. Image overrides are reported from
+the rendered configuration. Actual FE/volume names are resolved there, not guessed
+independently by the driver.
+
+**This is not loaded-provider attestation.** F24-B now supplies the cooperating
+claim and confirmed stop/install/start path; F24-C's SQL loaded-build gate is still
+open. Historical validation refers to its original artifact bytes, not a newly
+stamped bundle. See
+[F24-A implementation/evidence](../dev-docs/VALIDATION-F24-A-2026-10-29.md).
+
+### Serialized replacement and recovery (F24-B)
+
+The normal path now claims the actual Docker-daemon/plugin-volume target, verifies
+and stages the candidate, preserves the old complete plugin set, stops only the
+owned FE and confirms it stopped, installs/verifies the exact file set, then
+starts a fresh FE process with FE-local `SHOW FRONTENDS` readiness (without
+waiting for a missing BE). Existing FE container,
+metadata mounts and runtime config are retained; no metadata/storage/lake reset or
+BE restart is used to reload the provider. BE startup cannot implicitly recreate FE.
+The claim stays held through engine guards and the whole smoke invocation.
+
+Have **`python:3.12-slim` available locally** before deployment (explicitly pull it
+ahead of time if needed). Helpers resolve it once to a local image ID, use
+`--pull=never --network none`, and use only Python's standard library. There is no
+`apk`, pip, opportunistic download, or host bind-mounted candidate. ZIPs/scripts/
+backups stream through `docker cp`, preserving the remote Docker/Podman design.
+The selected Doris images must also be local. An existing FE with a different
+image or plugin mount is refused, not migrated. `DORIS_FE_STARTUP_TIMEOUT` defaults
+to 180 seconds and must be a positive integer.
+
+The printed `build/smoke-deployments/deploy-<UUID>/` directory retains candidate
+ZIP/identity JSON, verified `previous.tar`/`previous.json` and incremental
+`lifecycle.json`, plus completed prepare/install/verification reports. A deployment
+failure keeps FE stopped when installation/startup is uncertain. No automatic
+rollback or cleanup of those recovery artifacts occurs. These are lifecycle
+records, **not loaded-provider/F25 correctness receipts**.
+
+An occupied claim refuses even if its owner died. Do not steal it based on age.
+Inspect its exact ID/owner label and lifecycle evidence, establish that the client
+and any installer are no longer active, then perform deliberate recovery. If
+worker/FE stopping cannot be confirmed, the code deliberately retains the claim.
+Restore only a verified complete backup while holding the same claim and with FE
+confirmed stopped; a saved prior ZIP+identity receipt can use the normal path.
+Legacy tar-only restoration needs reviewed offline recovery, not a fabricated
+identity or `--down`. See [B evidence and recovery boundaries](../dev-docs/VALIDATION-F24-B-2026-10-29.md).
+
+`--down` remains an explicit destructive teardown, now serialized and ownership-
+checked too. It is not a plugin-replacement or claim-recovery command. The retained
+legacy-volume mismatch still refuses; this work does not delete or migrate it.
 
 Cluster-free isolation regressions (Python standard library only):
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s compose -p 'test_smoke_*.py'
-bash -n compose/smoke.sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s compose -p 'test_*.py'
+bash -n compose/smoke.sh compose/smoke_run.sh
 ```
 
 Run those from the repository root. The command-recording driver test uses a
 temporary fake Docker executable; it never contacts the Docker daemon. It checks
 all target routing and fail-closed allocation paths, not actual engine/GC behavior.
+The volume worker also runs against isolated local files. An opt-in real Docker
+test uses disposable UUID-owned resources and a **simulated**, not Doris, FE:
+
+```bash
+F24_DOCKER_TEST=1 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s compose -p 'test_plugin_deploy_docker.py'
+```
 
 ### Prereqs
 - The **FE image** `doris-fe:ducklake-62e3d81a-api24` must exist locally (see *Building the FE
