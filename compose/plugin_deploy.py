@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import subprocess
@@ -31,7 +32,9 @@ def docker(*args, timeout=240):
     result = subprocess.run(["docker", *map(str, args)], text=True, capture_output=True, timeout=timeout)
     if result.returncode:
         raise RuntimeError(f"docker {args[0]} failed: {result.stderr.strip()}")
-    return result.stdout.strip()
+    # mysql batch rows may end in legitimate empty columns. Preserve tabs and
+    # spaces; only remove transport line endings, never data-bearing whitespace.
+    return result.stdout.rstrip("\r\n")
 
 
 def inspect(container):
@@ -232,6 +235,29 @@ class Deployment:
                 stream.write((self.compose.parent / "fe.conf").read_bytes())
                 stream.write(b"\npriority_networks = 172.30.80.0/24\n")
         self.state["runtime_config_sha256"] = file_hash(runtime)
+        self._runtime_config_before_start = runtime.read_bytes()
+
+    def verify_runtime_config(self):
+        runtime = self.compose.parent / ".fe.conf.runtime"
+        observed = runtime.read_bytes()
+        digest = sha256(observed)
+        if digest == self.state["runtime_config_sha256"]:
+            return
+        # The pinned image's init_fe.sh appends this exact duplicate when it
+        # initializes empty metadata. Permit no other byte change, only once,
+        # and never on a previously started container's replacement/restart.
+        original = self._runtime_config_before_start
+        values = [value.strip() for value in re.findall(
+            rb"(?m)^[ \t]*priority_networks[ \t]*=[ \t]*([^\r\n#]+)$", original)]
+        first_boot = self.prior is None or self.prior["started_at"].startswith("0001-")
+        require(first_boot and not self.state.get("runtime_config_initialized") and original.endswith(b"\n") and
+                values and len(set(values)) == 1 and
+                observed == original + b"priority_networks = " + values[0] + b"\n",
+                "FE runtime configuration changed during restart")
+        before = self.state["runtime_config_sha256"]
+        self.state.update(runtime_config_initialized=True, runtime_config_sha256=digest)
+        self.event("first-boot-runtime-config-initialized", before_sha256=before, after_sha256=digest,
+                   allowed_change="one exact duplicate of the existing priority_networks value")
 
     def install(self):
         self.stop_fe()
@@ -275,8 +301,7 @@ class Deployment:
                     if self.state.get("prior_cluster_id") is not None:
                         require(self.metadata_cluster_id(instance["Id"]) == self.state["prior_cluster_id"],
                                 "FE persisted cluster ID changed across restart")
-                    require(file_hash(self.compose.parent / ".fe.conf.runtime") == self.state["runtime_config_sha256"],
-                            "FE runtime configuration changed during restart")
+                    self.verify_runtime_config()
                     self.state["new_process"] = process_record(instance)
                     self.ready = True
                     self.event("fresh-fe-sql-ready")

@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-**F24-A/B/C implemented and verified (F24-01–10). F24-D/E remain open.**
+**F24 complete — 13/13 implemented and verified, including real loaded A/B acceptance (2026-10-30).**
 Audited 2026-10-29 against connector `9b44463` and pristine Doris
 `62e3d81a42b2b74ee2a5a577969df62edee06b78` (connector API 24 / JNI 6).
 F22 is handled separately. F25's SQL/result assertions are not silently included here.
@@ -33,6 +33,14 @@ allocation and `--up-only` success. All 78 Python tests pass, including controll
 loaded-state failures. The real read-only inventory attempt is blocked by the
 retained BE's unavailability; no successful real loaded-B claim is made. D/E's
 remaining matrix and real Doris A/B acceptance are not closed by these mock results.
+
+[F24-D/E closeout](VALIDATION-F24-DE-2026-10-30.md) adds overlapping full-driver
+and full/headless failure coverage (96 passing Python tests) and actual isolated
+Doris SQL observations of loaded A then B after stopped replacement. Cluster/catalog
+identity, exact reads, runtime pins and BE process survive; an injected stale
+observation refuses before allocation. All disposable resources are cleaned and
+retained stacks/default artifact remain unchanged. This closes F24's stated
+provenance/replacement scope, not F25, F23 exposure or broader R07/production work.
 
 ## Exact audit
 
@@ -114,7 +122,7 @@ inputs, keep the identity out of its own inputs, and separately record the final
 JAR/ZIP hashes. This is accidental-staleness protection, not signed supply-chain
 authentication or a guarantee against arbitrary non-cooperating filesystem writes.
 
-## Implementation TODO — 10/13 complete
+## Implementation TODO — 13/13 complete
 
 Implement in order; each item has an observable exit criterion. No item below is
 completed merely because it is feasible or because the earlier manual re-vendor
@@ -213,7 +221,7 @@ sub-item/acceptance checklist; the Project Todos are the coarse backlog groups.
     whether SQL result checks are complete. Do not publish a passing receipt on error.
   - Retain old/new receipts and artifacts without silently relabelling old live evidence.
 
-- [ ] **F24-11 — Add stateful command-orchestration regressions.**
+- [x] **F24-11 — Add stateful command-orchestration regressions.**
   - Extend `compose/test_smoke_driver.py` to retain running/loaded state and injected
     failures, not always return the desired plugin version.
   - Assert lock → stopped FE → volume writes → verified install → fresh start →
@@ -222,7 +230,7 @@ sub-item/acceptance checklist; the Project Todos are the coarse backlog groups.
   - Preserve current 19 routing/guard tests. Canned Docker responses remain orchestration
     evidence only, never a live provider/classloader proof.
 
-- [ ] **F24-12 — Run one bounded real two-build acceptance on owned infrastructure.**
+- [x] **F24-12 — Run one bounded real two-build acceptance on owned infrastructure.**
   - Prepare distinguishable provider bundles A and B with the same API/release
     version; verify that the new path loads B and records B, not merely its disk files.
   - Retain metadata through replacement/restart, run `--up-only` and a bounded exact
@@ -231,7 +239,7 @@ sub-item/acceptance checklist; the Project Todos are the coarse backlog groups.
     volumes/network. Do not touch Duckbridge or the historical R07 stack.
   - Record exact A/B/runtime hashes and results; do not launch full corpus replay.
 
-- [ ] **F24-13 — Close out docs and compatibility boundaries.**
+- [x] **F24-13 — Close out docs and compatibility boundaries.**
   - Update smoke usage, override/lock/rollback instructions, the F24 review entry
     and evidence links. Remove obsolete claims that a mounted-volume update plus
     `up -d` proves a plugin reload.

@@ -1,0 +1,1 @@
+F24-E resource-only acceptance build B. Not a production artifact promotion.

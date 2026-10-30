@@ -65,8 +65,8 @@ run's resources after inspection, never a prefix-wide database or warehouse swee
 This is accidental-target protection, not credential-level tenant isolation.
 The FE/BE containers and plugin volume are still shared development resources:
 cooperating smoke/deployment/teardown operations now refuse overlapping claims;
-manual Docker operations must not race them. F24 (loaded-provider provenance)
-and F25 (nonfatal assertions) remain separate open items, so
+manual Docker operations must not race them. F24's provenance scope is verified;
+F25's nonfatal assertions remain open, so
 `Smoke complete` alone is not proof of end-to-end correctness.
 F24's current-runtime feasibility and ordered implementation sub-items are in
 [`TODO-F24-PLUGIN-PROVENANCE.md`](../dev-docs/TODO-F24-PLUGIN-PROVENANCE.md).
@@ -101,10 +101,10 @@ adopted just because its container name matches. Image overrides are reported fr
 the rendered configuration. Actual FE/volume names are resolved there, not guessed
 independently by the driver.
 
-F24-C now adds the load-time SQL provider gate to the cooperating claim and
+F24-C adds the load-time SQL provider gate to the cooperating claim and
 confirmed stop/install/start path. Historical validation still refers to its
-original artifact bytes, not a newly stamped bundle. Real Doris A/B acceptance
-remains separate. See
+original artifact bytes, not a newly stamped bundle. F24-D/E now pass stateful
+failure/concurrency coverage and bounded real Doris A/B acceptance. See
 [F24-A implementation/evidence](../dev-docs/VALIDATION-F24-A-2026-10-29.md).
 
 ### Serialized replacement and recovery (F24-B)
@@ -117,6 +117,11 @@ waiting for a missing BE). Existing FE container,
 metadata mounts and runtime config are retained; no metadata/storage/lake reset or
 BE restart is used to reload the provider. BE startup cannot implicitly recreate FE.
 The claim stays held through engine guards and the whole smoke invocation.
+
+On a first/never-started container only, the pinned image may append one exact
+duplicate of the already staged `priority_networks` value. That initialization is
+recorded with before/after hashes; the initialized bytes are then frozen. Any
+other config edit, repeat append or change on a previously started container fails.
 
 Have **`python:3.12-slim` available locally** before deployment (explicitly pull it
 ahead of time if needed). Helpers resolve it once to a local image ID, use
@@ -171,10 +176,12 @@ matching owners and a successful run result; pending or historical observations
 are not successful runs. All records explicitly leave F25 correctness unclaimed,
 even when the current smoke command exits zero. Old run evidence is retained.
 
-The retained BE was not started for this implementation: a read-only live inventory
-attempt was blocked by its unavailability. Positive C tests use controlled mocks,
-not a real Doris classloader. Full loaded-state matrix and real loaded A/B acceptance
-remain F24-D/E. See [C evidence and limits](../dev-docs/VALIDATION-F24-C-2026-10-29.md).
+The earlier C-only read-only check was blocked by the retained BE's unavailability.
+That stack remains untouched. Subsequent **F24-E** acceptance on new owned
+infrastructure observes real loaded A and B, preserves cluster/catalog identity
+and exact reads, and rejects an injected stale response before allocation. See
+[C history](../dev-docs/VALIDATION-F24-C-2026-10-29.md) and
+[D/E closeout evidence](../dev-docs/VALIDATION-F24-DE-2026-10-30.md).
 
 Cluster-free isolation regressions (Python standard library only):
 
@@ -192,6 +199,55 @@ test uses disposable UUID-owned resources and a **simulated**, not Doris, FE:
 ```bash
 F24_DOCKER_TEST=1 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s compose -p 'test_plugin_deploy_docker.py'
 ```
+
+### Opt-in real A/B acceptance (F24-E)
+
+This is separate from the simulated Docker test. It requires the exact local
+qualified Linux/amd64 FE/full ASAN BE images, Python helper, PostgreSQL and MinIO
+images, and the released **DuckDB 1.5.6** CLI. No image pulls/rebuilds, catalog
+upgrades or capability opt-outs are introduced by the fixture.
+
+From the repository root, build the ordinary A and an isolated resource-only B:
+
+```bash
+./gradlew assemble verifyJava17Runtime
+F24_ACCEPTANCE_PROJECT_ROOT="$PWD" \
+F24_ACCEPTANCE_BUILD_DIR="$PWD/build/f24-acceptance-B" \
+  ./gradlew -I compose/acceptance-build-B.init.gradle assemble verifyJava17Runtime
+python3 compose/plugin_acceptance.py \
+  --bundle-a build/distributions/doris-ducklake-0.0.1-plugin.zip \
+  --bundle-b build/f24-acceptance-B/distributions/doris-ducklake-0.0.1-plugin.zip \
+  --duckdb /absolute/path/to/duckdb-1.5.6
+```
+
+The init script permits only a private subdirectory of `build/`, never the default
+output. B changes only an acceptance resource/manifest identity, not existing
+provider classes, SDK, API, release or bundled dependency bytes. It is not promoted
+over the normal artifact.
+
+The runner checks all new UUID-owned names absent, creates its own isolated
+FE/BE/PostgreSQL/MinIO/volumes/networks and copies the unmodified public driver into
+a private sibling-layout sandbox. It runs real `--up-only` A/B, three-row exact
+reads against one native-file DuckLake catalog, verified rollback backup and
+metadata/container preservation. A full-run negative phase verifies the actual
+SQL row is B before injecting only an older A version into that response; it must
+fail before any allocation attempt. It never swaps JARs under a running classloader.
+
+Private `/tmp/opencode/f24-e-*/` evidence retains inputs, copied code, all receipts,
+raw inventory at injection, source/image identities and exact read results. Only
+its acknowledged disposable Docker resources are removed after evidence capture;
+an uncertain claim instead leaves resources for deliberate recovery. Retained
+default/qualification/R07/DuckBridge stacks are not deployment targets.
+
+Rollback of a normal owned target uses a previously retained **verified ZIP plus
+adjacent identity JSON**, after checking that target with `--preflight-only`, then
+the same normal `--plugin-zip ... --up-only` stopped-install path. Select the
+correct compose directory first: choosing an artifact does not choose/migrate a
+target. No age-based claim stealing, metadata reset or automatic legacy tar-only
+restoration is provided. The default legacy-volume refusal remains intentional.
+
+F24's provenance/replacement scope is complete; **F25's general correctness
+assertions, production/performance and broader R07 qualification remain separate**.
 
 ### Prereqs
 - The **FE image** `doris-fe:ducklake-62e3d81a-api24` must exist locally (see *Building the FE

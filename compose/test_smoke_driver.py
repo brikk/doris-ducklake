@@ -7,14 +7,17 @@ or classloader evidence. Loaded state is snapshotted separately from installed b
 
 import json
 import hashlib
+import fcntl
 import os
 from pathlib import Path
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import zipfile
 from plugin_test_fixture import compose_target, write_plugin
@@ -30,6 +33,11 @@ PREFIX = f"doris-smoke/{TOKEN}/"
 DATA_PATH = f"s3://ducklake/{PREFIX}"
 MC_ROOT = f"m/ducklake/{PREFIX}"
 SOURCE = Path(__file__).resolve().parent
+EXISTING_FE_SCENARIOS = {
+    "running_fe", "stopped_fe", "stop_failure", "stop_unconfirmed", "prepare_failure", "snapshot_failure",
+    "install_failure", "worker_exit_status", "hash_failure", "start_failure", "stale_started_at", "sql_timeout",
+    "wrong_existing_image", "foreign_after_claim", "changed_old_volume", "cluster_id_changed", "claim_occupied",
+}
 
 
 def option_values(argv, flag):
@@ -37,8 +45,18 @@ def option_values(argv, flag):
 
 
 def fake_docker():
+    # Serialize only the stand-in's state transactions, not the production
+    # deployment lock. Two real driver processes share this simulated daemon.
+    with (Path(os.environ["FAKE_STATE"]) / "daemon.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return fake_docker_command(lock)
+
+
+def fake_docker_command(lock):
     argv = sys.argv[2:]
     log = Path(os.environ["FAKE_DOCKER_LOG"])
+    state_file = Path(os.environ["FAKE_STATE"]) / "state.json"
+    state = json.loads(state_file.read_text()) if state_file.exists() else {"containers": {}, "volume": False, "next": 0}
     previous = [json.loads(line)["argv"] for line in log.read_text().splitlines()]
     with log.open("a") as stream:
         stream.write(json.dumps({
@@ -47,10 +65,12 @@ def fake_docker():
             if argv[0] == "cp" and ":" not in argv[1] else None,
             "attested_before_command": bool(list(Path(os.environ["FAKE_PLUGIN_PATH"]).parents[1].glob(
                 "smoke-deployments/deploy-*/deployment-attested.json"))),
+            "invocation": os.environ.get("FAKE_INVOCATION", "single"),
+            "fe_running": state["containers"].get("fake-fe-id", {}).get("State", {}).get("Running", False),
+            "loaded_version": state.get("loaded_version"),
+            "worker_operation": state["containers"].get(argv[-1], {}).get("operation") if argv[0] == "start" else None,
         }) + "\n")
     scenario = os.environ["FAKE_SCENARIO"]
-    state_file = Path(os.environ["FAKE_STATE"]) / "state.json"
-    state = json.loads(state_file.read_text()) if state_file.exists() else {"containers": {}, "volume": False, "next": 0}
     config = compose_target()
     fe_name = "doris-custom-fe" if scenario == "custom_container" else "doris-ducklake-fe"
     volume = config["volumes"]["fe-plugin-ducklake"]["name"]
@@ -59,6 +79,22 @@ def fake_docker():
 
     def save():
         state_file.write_text(json.dumps(state))
+
+    def pause(phase):
+        if os.environ.get("FAKE_PAUSE_PHASE") != phase:
+            return
+        marker = Path(os.environ["FAKE_PAUSED"])
+        marker.write_text(phase)
+        # Do not block the simulated daemon while this client's request waits.
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        try:
+            deadline = time.monotonic() + 45
+            while not Path(os.environ["FAKE_RELEASE"]).exists():
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("overlap test barrier timed out")
+                time.sleep(0.01)
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_EX)
 
     def instance(name):
         return next(c for c in state["containers"].values() if name in {c["Id"], c["Name"].lstrip("/")})
@@ -80,11 +116,7 @@ def fake_docker():
         if scenario == "stale_provider":
             state["loaded_version"] = os.environ["FAKE_OLD_LOADED_ID"]
 
-    existing_scenarios = {"running_fe", "stopped_fe", "stop_failure", "stop_unconfirmed", "prepare_failure",
-                          "snapshot_failure", "install_failure", "hash_failure", "start_failure", "stale_started_at",
-                          "sql_timeout", "wrong_existing_image", "foreign_after_claim", "changed_old_volume",
-                          "cluster_id_changed", "claim_occupied"}
-    if not state_file.exists() and scenario in existing_scenarios:
+    if not state_file.exists() and scenario in EXISTING_FE_SCENARIOS:
         fe = new_fe()
         fe["State"]["StartedAt"] = "2026-10-28T12:00:00.000000000Z"
         fe["State"]["Running"] = scenario != "stopped_fe"
@@ -201,6 +233,11 @@ def fake_docker():
                 if scenario == "install_failure" and operation == "install":
                     (volume_root / "partial-write").write_bytes(b"uncertain")
                     raise OSError("injected install failure")
+                if scenario == "worker_exit_status" and operation == "install":
+                    (volume_root / "partial-write").write_bytes(b"worker-failed-with-successful-cli")
+                    container["State"]["ExitCode"] = 19
+                    save()
+                    return 0  # Docker client success is not worker success.
                 if scenario == "changed_old_volume" and operation == "install":
                     (volume_root / "lib/stale.jar").write_bytes(b"changed-after-snapshot")
                 if operation == "snapshot":
@@ -256,6 +293,7 @@ def fake_docker():
     if argv[:3] == ["exec", "trino-ducklake-postgres", "psql"]:
         sql = " ".join(option_values(argv, "-c")[0].split())
         if "gen_random_uuid()" in sql:
+            pause("uuid")
             print(os.environ["FAKE_TOKEN"])
         elif sql.startswith("CREATE DATABASE"):
             if scenario == "duplicate_database":
@@ -281,6 +319,7 @@ def fake_docker():
         if scenario == "sql_timeout" and sql == "SHOW FRONTENDS":
             return 1
         if "information_schema.extensions" in sql:
+            pause("inventory")
             if not state["containers"].get("fake-be-id", {}).get("State", {}).get("Running", False):
                 print("No backend available as scan node", file=sys.stderr)
                 return 1
@@ -293,10 +332,15 @@ def fake_docker():
             if scenario == "null_provider":
                 version = "NULL"
             row = ["ducklake", "FILESYSTEM" if scenario == "wrong_provider_type" else "CONNECTOR", version,
-                   "BUILTIN" if scenario == "builtin_provider" else "EXTERNAL"]
+                   "BUILTIN" if scenario == "builtin_provider" else "UNKNOWN" if scenario == "unknown_provider_source" else "EXTERNAL"]
+            if scenario == "malformed_provider":
+                print("ducklake\tCONNECTOR\ttruncated")
+                return 0
             print("\t".join(row))
             if scenario == "duplicate_provider":
                 print("\t".join(row))
+            if scenario == "conflicting_provider":
+                print("\t".join(["ducklake", "CONNECTOR", "doris-ducklake-v1-" + "f" * 64, "EXTERNAL"]))
             if scenario == "process_changed_after_inventory":
                 state["containers"]["fake-fe-id"]["State"]["StartedAt"] = "2026-10-29T13:00:00.000000000Z"
                 save()
@@ -402,14 +446,8 @@ class SmokeDriverTests(unittest.TestCase):
         sleep.chmod(0o755)
         self.log = self.root / "docker.jsonl"
 
-    def run_driver(self, *args, scenario="ok", token=TOKEN, be_image=None, fe_image=None):
-        self.log.write_text("")
-        fake_state = Path(tempfile.mkdtemp(prefix="fake-daemon-", dir=self.root))
-        self.fake_state = fake_state
-        if scenario in {"running_fe", "stopped_fe", "stop_failure", "stop_unconfirmed", "prepare_failure",
-                        "snapshot_failure", "install_failure", "hash_failure", "start_failure", "stale_started_at",
-                        "sql_timeout", "wrong_existing_image", "foreign_after_claim", "changed_old_volume",
-                        "cluster_id_changed", "claim_occupied"}:
+    def driver_environment(self, fake_state, scenario="ok", token=TOKEN, be_image=None, fe_image=None):
+        if scenario in EXISTING_FE_SCENARIOS:
             (self.compose / ".fe.conf.runtime").write_bytes((self.compose / "fe.conf").read_bytes()
                 + b"\npriority_networks = 172.30.80.0/24\n")
         # Do not inherit BASH_ENV, exported functions, Docker settings, etc.
@@ -435,6 +473,13 @@ class SmokeDriverTests(unittest.TestCase):
             env["DORIS_BE_IMAGE"] = be_image
         if fe_image is not None:
             env["DORIS_FE_IMAGE"] = fe_image
+        return env
+
+    def run_driver(self, *args, scenario="ok", token=TOKEN, be_image=None, fe_image=None):
+        self.log.write_text("")
+        fake_state = Path(tempfile.mkdtemp(prefix="fake-daemon-", dir=self.root))
+        self.fake_state = fake_state
+        env = self.driver_environment(fake_state, scenario, token, be_image, fe_image)
         result = subprocess.run(
             ["bash", str(self.compose / "smoke.sh"), "--no-build", *args],
             cwd=self.root, env=env, text=True, capture_output=True, timeout=30,
@@ -736,6 +781,128 @@ class SmokeDriverTests(unittest.TestCase):
         paths = list((self.compose.parent / "build/smoke-deployments").glob("deploy-*/lifecycle.json"))
         self.assertEqual(len(paths), 1)
         return json.loads(paths[0].read_text()), paths[0].parent
+
+    def assert_stopped_write_order(self):
+        writes = [r for r in self.records if r["argv"][:2] == ["volume", "create"] or r["worker_operation"] == "install"]
+        self.assertTrue(writes)
+        self.assertTrue(all(not r["fe_running"] for r in writes))
+        claim = next(i for i, r in enumerate(self.records) if r["argv"][0] == "create" and "--name" in r["argv"])
+        self.assertLess(claim, min(self.records.index(r) for r in writes))
+
+    def overlapping_invocations(self, phase):
+        shared = Path(tempfile.mkdtemp(prefix="overlap-daemon-", dir=self.root))
+        self.log.write_text("")
+        paused, release = self.root / "paused", self.root / "release"
+        candidate_b = self.root / "candidate-b.zip"
+        b = write_plugin(candidate_b, payload_value=b"second-client-different-build")
+        self.assertNotEqual(b["build_id"], self.artifact["build_id"])
+        first_env = self.driver_environment(shared)
+        first_env.update(FAKE_INVOCATION="first", FAKE_PAUSE_PHASE=phase,
+                         FAKE_PAUSED=str(paused), FAKE_RELEASE=str(release))
+        second_env = self.driver_environment(shared)
+        second_env["FAKE_INVOCATION"] = "second"
+        children = []
+        try:
+            first = subprocess.Popen(["bash", str(self.compose / "smoke.sh"), "--plugin-zip", str(self.plugin)],
+                                     cwd=self.root, env=first_env, text=True, stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE, start_new_session=True)
+            children.append(first)
+            deadline = time.monotonic() + 45
+            while not paused.exists():
+                if first.poll() is not None:
+                    self.fail("First invocation exited before overlap barrier: " + str(first.communicate()))
+                self.assertLess(time.monotonic(), deadline, "First invocation never reached overlap barrier")
+                time.sleep(0.01)
+            self.assertEqual(paused.read_text(), phase)
+            before = json.loads((shared / "state.json").read_text())
+            second = subprocess.Popen(["bash", str(self.compose / "smoke.sh"), "--plugin-zip", str(candidate_b)],
+                                      cwd=self.root, env=second_env, text=True, stdout=subprocess.PIPE,
+                                      stderr=subprocess.PIPE, start_new_session=True)
+            children.append(second)
+            second_out, second_err = second.communicate(timeout=35)
+            self.assertNotEqual(second.returncode, 0, second_out + second_err)
+            self.assertIn("claim occupied", second_err)
+            after = json.loads((shared / "state.json").read_text())
+            self.assertEqual(before, after, "Rival mutated the claimed daemon state")
+            self.assertEqual(after["loaded_version"], self.artifact["build_id"])
+            self.assertEqual({k: v["sha256"] for k, v in plugin_volume.inventory(shared / "volume")["files"].items()},
+                             self.artifact["files"])
+            release.touch()
+            first_out, first_err = first.communicate(timeout=45)
+            self.assertEqual(first.returncode, 0, first_out + first_err)
+            records = [json.loads(line) for line in self.log.read_text().splitlines()]
+            rival = [r["argv"] for r in records if r["invocation"] == "second"]
+            self.assertFalse(any(a[0] in {"stop", "start", "cp", "rm", "exec", "run"} or
+                                 a[:2] == ["volume", "create"] or "up" in a for a in rival))
+            self.records = [r for r in records if r["invocation"] == "first"]
+            self.calls = [r["argv"] for r in self.records]
+            self.assert_stopped_write_order()
+            inventory = next(i for i, a in enumerate(self.calls) if a[0] == "exec" and "information_schema.extensions" in a[-1])
+            uuid = next(i for i, a in enumerate(self.calls) if a[0] == "exec" and "gen_random_uuid()" in a[-1])
+            final_verify = max(i for i, r in enumerate(self.records) if r["worker_operation"] == "verify")
+            self.assertLess(inventory, final_verify)
+            self.assertLess(final_verify, uuid)
+            self.assertTrue(self.records[uuid]["attested_before_command"])
+            results = [json.loads(p.read_text()) for p in
+                       (self.compose.parent / "build/smoke-deployments").glob("deploy-*/run-result.json")]
+            self.assertEqual(sorted(r["run_success"] for r in results), [False, True])
+            self.assertEqual(len({r["owner"] for r in results}), 2)
+            final = json.loads((shared / "state.json").read_text())
+            self.assertTrue(final["containers"]["fake-fe-id"]["State"]["Running"])
+            self.assertFalse(any(OWNER in c["Config"].get("Labels", {}) for c in final["containers"].values()))
+        finally:
+            release.touch(exist_ok=True)
+            for child in children:
+                if child.poll() is None:
+                    os.killpg(child.pid, signal.SIGTERM)
+                    try:
+                        child.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(child.pid, signal.SIGKILL)
+                        child.wait()
+                if child.stdout:
+                    child.stdout.close()
+                if child.stderr:
+                    child.stderr.close()
+
+    def test_overlapping_full_invocations_refuse_rival_during_attestation(self):
+        self.overlapping_invocations("inventory")
+
+    def test_overlapping_full_invocations_hold_claim_through_smoke(self):
+        self.overlapping_invocations("uuid")
+
+    def test_pre_stop_failure_matrix_blocks_full_and_headless_allocation(self):
+        for mode in ((), ("--up-only",)):
+            for scenario in ("prepare_failure", "snapshot_failure", "stop_failure", "stop_unconfirmed"):
+                with self.subTest(mode=mode, scenario=scenario):
+                    self.setUp()
+                    self.assert_attestation_refused(mode, scenario)
+                    self.assertFalse(any(a[:2] == ["volume", "create"] for a in self.calls))
+                    self.assertEqual((self.fake_state / "volume/lib/stale.jar").read_bytes(), b"old-provider")
+
+    def test_install_start_failure_matrix_blocks_full_and_headless_allocation(self):
+        for mode in ((), ("--up-only",)):
+            for scenario in ("install_failure", "worker_exit_status", "hash_failure", "start_failure", "stale_started_at"):
+                with self.subTest(mode=mode, scenario=scenario):
+                    self.setUp()
+                    self.assert_attestation_refused(mode, scenario)
+                    self.assert_stopped_write_order()
+                    state = json.loads((self.fake_state / "state.json").read_text())
+                    self.assertFalse(state["containers"]["fake-fe-id"]["State"]["Running"])
+
+    def test_raw_conflicting_and_unknown_inventory_blocks_both_modes(self):
+        for mode in ((), ("--up-only",)):
+            for scenario in ("malformed_provider", "conflicting_provider", "unknown_provider_source"):
+                with self.subTest(mode=mode, scenario=scenario):
+                    self.setUp()
+                    self.assert_attestation_refused(mode, scenario)
+
+    def test_runtime_failure_matrix_blocks_full_and_headless_allocation(self):
+        for mode in ((), ("--up-only",)):
+            for scenario in ("stale_master_be", "stale_matched_pair", "be_registration_timeout", "runtime_select_failure"):
+                with self.subTest(mode=mode, scenario=scenario):
+                    self.setUp()
+                    self.assert_attestation_refused(mode, scenario)
 
     def test_attestation_receipt_precedes_allocation_and_is_not_a_correctness_claim(self):
         for mode in ((), ("--up-only",)):

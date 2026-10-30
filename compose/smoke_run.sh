@@ -58,7 +58,7 @@ fi
 # (mysql protocol, user root, no password).
 if [[ "$UP_ONLY" -eq 1 ]]; then
     log "--up-only: deployment attested; skipping the smoke driver (F25 correctness remains separate)."
-    log "  FE mysql endpoint: 127.0.0.1:9030 (root, no password)"
+    log "  FE container: $FE_CONTAINER (SQL port 9030 inside the container; see compose for host mappings)"
     log "  Tear down with: ./smoke.sh --down"
     exit 0
 fi

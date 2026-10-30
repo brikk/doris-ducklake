@@ -1,5 +1,7 @@
 import hashlib
+import io
 import json
+from contextlib import redirect_stderr
 from pathlib import Path
 import tempfile
 import unittest
@@ -85,6 +87,20 @@ class PluginArtifactTests(unittest.TestCase):
         self.assertEqual(preflight.select_zip(self.root, self.archive), self.archive.resolve())
         with self.assertRaises(FileNotFoundError):
             preflight.select_zip(self.root, self.root / "absent.zip")
+
+    def test_unreadable_copy_fails_before_docker_and_removes_only_private_staging(self):
+        write_plugin(self.archive)
+        original = self.archive.read_bytes()
+        stage = self.root / "frozen"
+        args = ["plugin_preflight.py", "--distributions", str(self.root), "--plugin-zip", str(self.archive),
+                "--compose-file", str(self.root / "compose.yml"), "--staging-root", str(stage)]
+        with patch("sys.argv", args), patch.object(preflight.shutil, "copyfile", side_effect=PermissionError("unreadable input")), \
+                patch.object(preflight, "docker_output") as docker, redirect_stderr(io.StringIO()) as stderr:
+            self.assertEqual(preflight.main(), 1)
+        docker.assert_not_called()
+        self.assertIn("unreadable input", stderr.getvalue())
+        self.assertEqual(list(stage.iterdir()), [])
+        self.assertEqual(self.archive.read_bytes(), original)
 
 
 class PluginTargetTests(unittest.TestCase):

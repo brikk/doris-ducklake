@@ -3,17 +3,25 @@
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 from plugin_attest import INVENTORY_SQL, alive_versions, inventory_rows, validate_inventory
-from plugin_deploy import Deployment
+from plugin_deploy import Deployment, docker
 
 
 BUILD = "doris-ducklake-v1-" + "a" * 64
 
 
 class InventoryTests(unittest.TestCase):
+    def test_docker_transport_preserves_empty_trailing_mysql_columns(self):
+        result = SimpleNamespace(returncode=0, stdout="Alive\tVersion\tComment\ntrue\tpinned\t\n", stderr="")
+        with patch("plugin_deploy.subprocess.run", return_value=result):
+            output = docker("exec", "owned-fe", "mysql")
+        self.assertTrue(output.endswith("\t"))
+        self.assertEqual(alive_versions(output), ["pinned"])
+
     def test_actual_column_contract_accepts_exact_external_connector(self):
         rows = inventory_rows(f"ducklake\tCONNECTOR\t{BUILD}\tEXTERNAL\n")
         validate_inventory(rows, BUILD)

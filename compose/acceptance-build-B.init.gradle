@@ -1,0 +1,21 @@
+// Explicit, test-only resource variant. Never changes the default build output
+// or dependencies. See compose/README.md's F24 real acceptance instructions.
+def rootPath = System.getenv('F24_ACCEPTANCE_PROJECT_ROOT')
+def outputPath = System.getenv('F24_ACCEPTANCE_BUILD_DIR')
+assert rootPath && outputPath : 'Set F24_ACCEPTANCE_PROJECT_ROOT and F24_ACCEPTANCE_BUILD_DIR'
+def acceptanceRoot = new File(rootPath).canonicalFile
+def acceptanceOutput = new File(outputPath).canonicalFile
+def defaultOutput = new File(acceptanceRoot, 'build').canonicalFile
+assert acceptanceOutput.toPath().startsWith(defaultOutput.toPath()) && acceptanceOutput != defaultOutput :
+    'Acceptance output must be a private subdirectory of build/, never the default build directory'
+def resources = new File(acceptanceRoot, 'compose/acceptance-resource')
+assert resources.isDirectory() : 'Acceptance resource fixture is missing'
+
+gradle.beforeProject { project ->
+    if (project.projectDir.canonicalFile == acceptanceRoot) {
+        project.layout.buildDirectory.set(acceptanceOutput)
+        project.plugins.withId('java') {
+            project.sourceSets.main.resources.srcDir(resources)
+        }
+    }
+}

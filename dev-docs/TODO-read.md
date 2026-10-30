@@ -4,11 +4,11 @@
 cleanup to acknowledged per-engine resources; see
 [ownership repair/evidence](VALIDATION-F22-CORPUS-OWNERSHIP-2026-10-29.md).
 F24 has a pinned-source feasibility audit and a real
-[13-item implementation checklist](TODO-F24-PLUGIN-PROVENANCE.md); F24-A/B/C's ten
-artifact/target identity, stopped replacement and loaded-provider gate/receipt items
-are implemented and verified. The remaining full loaded-state matrix and real Doris
-A/B acceptance stay open; C's positive scenarios use mocks, not a successful real
-loaded-B observation. F25 remains separate. No corpus campaign or feature enablement
+[13-item implementation checklist](TODO-F24-PLUGIN-PROVENANCE.md) is now **13/13
+complete**, including D's 96-test stateful matrix and E's real isolated loaded
+A/B acceptance with preserved metadata/exact reads and injected stale refusal.
+See [October 30 closeout](VALIDATION-F24-DE-2026-10-30.md). F25, F23 exposure and
+broader R07/production work remain separate. No corpus campaign or feature enablement
 is authorized by these harness changes.
 
 **2026-10-24 R07: bounded experimental PostgreSQL/S3 file tier implemented;

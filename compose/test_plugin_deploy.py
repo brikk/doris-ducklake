@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from plugin_deploy import Deployment, OWNER, claim_name, process_record
+from plugin_preflight import file_hash
 
 
 class ClaimDaemon:
@@ -132,6 +133,50 @@ class DeploymentOwnershipTests(unittest.TestCase):
         self.assertEqual(process_record(instance), original)
         instance["Mounts"][0]["Name"] = "wrong-volume"
         self.assertNotEqual(process_record(instance), original)
+
+
+class RuntimeConfigInitializationTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="runtime-config-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.runtime = self.root / ".fe.conf.runtime"
+        self.original = b"heap = fixed\npriority_networks = 198.18.16.0/24\n"
+        self.runtime.write_bytes(self.original)
+        self.deployment = Deployment(self.root / "compose.yml", {"target": {}}, self.root / "evidence")
+        self.deployment.stage_config()
+
+    def test_exact_same_value_first_boot_append_is_recorded_and_then_frozen(self):
+        self.runtime.write_bytes(self.original + b"priority_networks = 198.18.16.0/24\n")
+        self.deployment.verify_runtime_config()
+        self.assertEqual(self.deployment.state["runtime_config_sha256"], file_hash(self.runtime))
+        self.assertTrue(self.deployment.state["runtime_config_initialized"])
+        self.assertEqual(self.deployment.state["events"][-1]["event"], "first-boot-runtime-config-initialized")
+        self.deployment.verify_runtime_config()  # Stable bytes are idempotent.
+        self.runtime.write_bytes(self.runtime.read_bytes() + b"priority_networks = 198.18.16.0/24\n")
+        with self.assertRaisesRegex(ValueError, "configuration changed"):
+            self.deployment.verify_runtime_config()
+
+    def test_previously_started_container_cannot_change_even_the_same_network_line(self):
+        self.deployment.prior = {"started_at": "2026-10-29T12:00:00Z"}
+        self.runtime.write_bytes(self.original + b"priority_networks = 198.18.16.0/24\n")
+        with self.assertRaisesRegex(ValueError, "configuration changed"):
+            self.deployment.verify_runtime_config()
+
+    def test_created_but_never_started_container_has_the_same_first_boot_rule(self):
+        self.deployment.prior = {"started_at": "0001-01-01T00:00:00Z"}
+        self.runtime.write_bytes(self.original + b"priority_networks = 198.18.16.0/24\n")
+        self.deployment.verify_runtime_config()
+        self.assertTrue(self.deployment.state["runtime_config_initialized"])
+
+    def test_first_boot_cannot_change_network_or_any_other_config_bytes(self):
+        for content in (self.original + b"priority_networks = 198.18.17.0/24\n",
+                        self.original.replace(b"heap = fixed", b"heap = different"),
+                        self.original + b"new_setting = enabled\n"):
+            with self.subTest(content=content):
+                self.runtime.write_bytes(content)
+                with self.assertRaisesRegex(ValueError, "configuration changed"):
+                    self.deployment.verify_runtime_config()
 
 
 if __name__ == "__main__":
