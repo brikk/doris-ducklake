@@ -38,6 +38,7 @@ EXISTING_FE_SCENARIOS = {
     "running_fe", "stopped_fe", "stop_failure", "stop_unconfirmed", "prepare_failure", "snapshot_failure",
     "install_failure", "worker_exit_status", "hash_failure", "start_failure", "stale_started_at", "sql_timeout",
     "wrong_existing_image", "foreign_after_claim", "changed_old_volume", "cluster_id_changed", "claim_occupied",
+    "public_fe", "stopped_public_fe", "public_after_claim",
 }
 
 
@@ -108,6 +109,8 @@ def fake_docker_command(lock):
         return {"Id": "fake-fe-id", "Name": "/" + fe_name, "Image": "fe-image-id",
                 "Config": {"Hostname": "doris-fe", "Labels": {"com.docker.compose.project": config["name"],
                            "com.docker.compose.service": "doris-fe"}},
+                "HostConfig": {"NetworkMode": "owned-default", "PublishAllPorts": False, "PortBindings": {}},
+                "NetworkSettings": {"Ports": {}},
                 "State": {"Running": True, "StartedAt": "2026-10-29T12:00:00.000000000Z", "ExitCode": 0},
                 "Mounts": [{"Type": "volume", "Name": volume, "Destination": plugin_volume.__dict__.get(
                     "PLUGIN_MOUNT", "/opt/apache-doris/fe/plugins/connector/ducklake"), "RW": True}]}
@@ -124,7 +127,9 @@ def fake_docker_command(lock):
     if not state_file.exists() and scenario in EXISTING_FE_SCENARIOS:
         fe = new_fe()
         fe["State"]["StartedAt"] = "2026-10-28T12:00:00.000000000Z"
-        fe["State"]["Running"] = scenario != "stopped_fe"
+        fe["State"]["Running"] = scenario not in {"stopped_fe", "stopped_public_fe"}
+        if scenario in {"public_fe", "stopped_public_fe"}:
+            fe["HostConfig"]["PortBindings"] = {"9030/tcp": [{"HostIp": "0.0.0.0", "HostPort": "9030"}]}
         if scenario == "wrong_existing_image":
             fe["Image"] = "legacy-image-id"
         state["containers"][fe["Id"]] = fe
@@ -162,6 +167,8 @@ def fake_docker_command(lock):
             config["services"]["doris-be"]["image"] = os.environ.get("DORIS_BE_IMAGE", config["services"]["doris-be"]["image"])
             if scenario == "custom_container":
                 config["services"]["doris-fe"]["container_name"] = "doris-custom-fe"
+            if scenario == "public_compose":
+                config["services"]["doris-fe"]["ports"] = [{"target": 9030, "published": "9030", "host_ip": "0.0.0.0"}]
             print(json.dumps(config))
             return 0
         if "run" in argv and scenario == "bootstrap_failure":
@@ -181,6 +188,8 @@ def fake_docker_command(lock):
         if "up" in argv and argv[-1] == "doris-be":
             state["containers"]["fake-be-id"] = {"Id": "fake-be-id", "Name": "/doris-ducklake-be", "Image": "be-image-id",
                 "Config": {"Labels": {"com.docker.compose.project": config["name"], "com.docker.compose.service": "doris-be"}},
+                "HostConfig": {"NetworkMode": "owned-default", "PublishAllPorts": False, "PortBindings": {}},
+                "NetworkSettings": {"Ports": {}},
                 "State": {"Running": True, "StartedAt": "2026-10-29T12:00:00.000000000Z"}, "Mounts": []}
             save()
         return 0
@@ -204,6 +213,9 @@ def fake_docker_command(lock):
             if scenario == "foreign_after_claim" and item["Id"] == "fake-fe-id" and any(
                     OWNER in c["Config"].get("Labels", {}) for c in state["containers"].values()):
                 item["Config"]["Labels"]["com.docker.compose.project"] = "racing-foreign-project"
+            if scenario == "public_after_claim" and item["Id"] == "fake-fe-id" and any(
+                    OWNER in c["Config"].get("Labels", {}) for c in state["containers"].values()):
+                item["NetworkSettings"]["Ports"] = {"9030/tcp": [{"HostIp": "0.0.0.0", "HostPort": "9030"}]}
             print(json.dumps([item]))
         return 0
     if argv[:2] == ["volume", "ls"]:
@@ -948,7 +960,12 @@ class SmokeDriverTests(unittest.TestCase):
         self.assertNotEqual(b["build_id"], self.artifact["build_id"])
         first_env = self.driver_environment(shared)
         first_env.update(FAKE_INVOCATION="first", FAKE_PAUSE_PHASE=phase,
-                         FAKE_PAUSED=str(paused), FAKE_RELEASE=str(release))
+                         FAKE_PAUSED=str(paused), FAKE_RELEASE=str(release),
+                         # Inventory is deliberately blocked until a second
+                         # process finishes read-only preflight/claim refusal.
+                         # Its coordination budget cannot be the one-second
+                         # failure-fixture timeout used by driver_environment.
+                         DORIS_FE_STARTUP_TIMEOUT="30")
         second_env = self.driver_environment(shared)
         second_env["FAKE_INVOCATION"] = "second"
         children = []
@@ -1118,14 +1135,30 @@ class SmokeDriverTests(unittest.TestCase):
                 self.assertIn("Loaded DuckLake build identity", self.output)
 
     def test_changed_process_disk_runtime_or_foreign_backend_fails_before_allocation(self):
-        for scenario in ("process_changed_after_inventory", "disk_changed_after_inventory", "foreign_be",
+        for scenario in ("process_changed_after_inventory", "disk_changed_after_inventory",
                          "be_registration_timeout", "bad_source_headers", "runtime_select_failure"):
             with self.subTest(scenario=scenario):
                 self.setUp()
                 self.assert_attestation_refused(("--up-only",), scenario)
-                if scenario == "foreign_be":
-                    self.assertFalse(any(a[0] == "stop" and a[-1] == "fake-be-id" for a in self.calls))
-                    self.assertFalse(any(a[0] == "compose" and "up" in a and a[-1] == "doris-be" for a in self.calls))
+
+    def test_unsafe_network_or_foreign_backend_refuses_before_install_start_or_allocation(self):
+        for mode in ((), ("--up-only",), ("--preflight-only",)):
+            for scenario in ("public_compose", "public_fe", "stopped_public_fe", "foreign_be"):
+                with self.subTest(mode=mode, scenario=scenario):
+                    self.setUp()
+                    self.assertNotEqual(self.run_driver(*mode, scenario=scenario).returncode, 0, self.output)
+                    self.assertEqual(self.allocation_calls(), [])
+                    self.assertTrue(all(a[0] == "compose" and "config" in a or a[:2] in (
+                        ["container", "ls"], ["container", "inspect"], ["volume", "ls"], ["volume", "inspect"])
+                        for a in self.calls), self.calls)
+                    self.assertFalse(list((self.compose.parent / "build/smoke-deployments").glob("deploy-*")))
+
+    def test_unsafe_binding_after_claim_is_revalidated_without_touching_the_fe(self):
+        self.assert_attestation_refused(("--up-only",), "public_after_claim")
+        self.assertIn("F23", self.output)
+        self.assertFalse(any(a[0] == "stop" and a[-1] == "fake-fe-id" or
+                             a[:2] == ["volume", "create"] or a[0] == "compose" and "up" in a for a in self.calls))
+        self.assertEqual((self.fake_state / "volume/lib/stale.jar").read_bytes(), b"old-provider")
 
     def test_stock_be_experiment_still_requires_provider_and_exact_fe_source(self):
         self.assertEqual(self.run_driver("--up-only", be_image="apache/doris:be-4.1.4").returncode, 0, self.output)

@@ -174,8 +174,61 @@ def docker_json(*args):
     return json.loads(docker_output(*args))
 
 
+def development_binding(service, target, protocol, host, published):
+    """F23: no public passwordless endpoint or published internal service."""
+    require(service == "doris-fe" and str(target) in {"8030", "9030"} and protocol == "tcp" and
+            host in {"127.0.0.1", "::1"} and re.fullmatch(r"[0-9]+", str(published)) and
+            1 <= int(published) <= 65535,
+            f"Unsafe {service} port publication; only explicit loopback HTTP/MySQL ports are allowed (F23)")
+
+
+def development_network_mode(mode):
+    require(mode is None or isinstance(mode, str) and mode != "host" and
+            not mode.startswith(("container:", "service:")),
+            "Unsafe development network mode; host/shared-container networking is not allowed (F23)")
+
+
+def development_compose_network(config):
+    for name in ("doris-fe", "doris-be"):
+        if name not in config["services"]:
+            continue
+        service = config["services"][name]
+        development_network_mode(service.get("network_mode"))
+        for network in service.get("networks") or []:
+            definition = config.get("networks", {}).get(network, {})
+            require(definition.get("driver") != "host" and definition.get("name") != "host",
+                    "Unsafe development host network (F23)")
+        for port in service.get("ports") or []:
+            require(isinstance(port, dict), "Expected normalized compose port mapping (F23)")
+            development_binding(name, port.get("target"), port.get("protocol", "tcp"),
+                                port.get("host_ip"), port.get("published"))
+
+
+def development_container_network(instance, service):
+    # Inspect both immutable requested bindings and effective runtime bindings:
+    # docker start does not apply a changed Compose ports stanza. Missing
+    # inspection metadata cannot certify a legacy container as contained.
+    host = instance.get("HostConfig")
+    network = instance.get("NetworkSettings")
+    require(isinstance(host, dict) and isinstance(network, dict) and isinstance(host.get("NetworkMode"), str) and
+            host.get("PublishAllPorts") is False and "PortBindings" in host and "Ports" in network,
+            "Missing network inspection or automatic port publication; explicit migration required (F23)")
+    development_network_mode(host["NetworkMode"])
+    for ports in (host["PortBindings"], network["Ports"]):
+        require(ports is None or isinstance(ports, dict), "Malformed inspected port bindings (F23)")
+        for target, bindings in (ports or {}).items():
+            if bindings is None:  # EXPOSE alone is not a published host port.
+                continue
+            require(isinstance(bindings, list), "Malformed inspected port bindings (F23)")
+            number, _, protocol = target.partition("/")
+            for binding in bindings:
+                require(isinstance(binding, dict), "Malformed inspected port binding (F23)")
+                development_binding(service, number, protocol, binding.get("HostIp"), binding.get("HostPort"))
+
+
 def target_from_compose(compose_path):
     config = docker_json("compose", "-f", str(compose_path), "config", "--format", "json")
+    development_compose_network(config)
     project = config["name"]
     service = config["services"]["doris-fe"]
     container = service.get("container_name")
@@ -198,7 +251,22 @@ def target_from_compose(compose_path):
         found = [m for m in instance.get("Mounts", []) if m.get("Destination") == PLUGIN_MOUNT]
         require(len(found) == 1 and found[0].get("Type") == "volume" and found[0].get("Name") == volume,
                 "Existing FE uses a different plugin volume")
+        development_container_network(instance, "doris-fe")
         mounted = True
+    be = config["services"].get("doris-be")
+    if be is not None:
+        name = be.get("container_name")
+        require(isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name),
+                "Expected an explicit BE container name")
+        be_ids = docker_output("container", "ls", "--all", "--filter", f"name=^/{name}$", "--format", "{{.ID}}").splitlines()
+        require(len(be_ids) <= 1, "Ambiguous BE container")
+        if be_ids:
+            instance = docker_json("container", "inspect", be_ids[0])[0]
+            labels = instance["Config"].get("Labels") or {}
+            require(instance["Name"].removeprefix("/") == name and
+                    labels.get("com.docker.compose.project") == project and
+                    labels.get("com.docker.compose.service") == "doris-be", "Foreign BE container ownership")
+            development_container_network(instance, "doris-be")
     volumes = docker_output("volume", "ls", "--filter", f"name=^{volume}$", "--format", "{{.Name}}").splitlines()
     require(all(name == volume for name in volumes), "Ambiguous plugin volume lookup")
     require(not mounted or volumes, "Existing FE plugin volume was not found")

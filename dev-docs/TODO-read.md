@@ -10,8 +10,13 @@ A/B acceptance with preserved metadata/exact reads and injected stale refusal.
 See [October 30 closeout](VALIDATION-F24-DE-2026-10-30.md). F25's supported-scope
 correctness gate is also implemented/live-verified: 28 mandatory real checks,
 same-count corruption refusal and 117 passing Python tests; see
-[F25 evidence](VALIDATION-F25-2026-10-30.md). F23 exposure and
-broader R07/production work remain separate. No corpus campaign or feature enablement
+[F25 evidence](VALIDATION-F25-2026-10-30.md). F23's default loopback policy and
+legacy-binding refusal are implemented with isolated real FE/BE/SSH acceptance;
+130/130 frozen-source tests pass, no skips. **The retained API-24 FE was subsequently
+stopped on explicit user authorization**, preserving everything else. Its old
+wildcard mappings remain configured; safe recreation/resumption needs a separate
+decision. See [F23 evidence](VALIDATION-F23-2026-10-31.md).
+Broader R07/production work remains separate. No corpus campaign or feature enablement
 is authorized by these harness changes.
 
 **2026-10-24 R07: bounded experimental PostgreSQL/S3 file tier implemented;

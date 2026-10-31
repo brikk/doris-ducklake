@@ -105,7 +105,7 @@ class PluginArtifactTests(unittest.TestCase):
 
 class PluginTargetTests(unittest.TestCase):
     def target(self, config=None, container_labels=None, volume_labels=None, mounted_volume=None, consumers=None,
-               existing=True, volume=True):
+               existing=True, volume=True, host_config=None, network_settings=None):
         config = config or compose_target()
         volume_name = config["volumes"]["fe-plugin-ducklake"]["name"]
         labels = {"com.docker.compose.project": config["name"], "com.docker.compose.service": "doris-fe"}
@@ -122,11 +122,16 @@ class PluginTargetTests(unittest.TestCase):
             if args[:2] == ("container", "ls"):
                 if any(a.startswith("volume=") for a in args):
                     return "\n".join(consumers if consumers is not None else (["owned-fe"] if existing else []))
+                if any("doris-ducklake-be" in a for a in args):
+                    return ""
                 return "owned-fe" if existing else ""
             if args[:2] == ("container", "inspect"):
                 return json.dumps([{"Name": "/" + config["services"]["doris-fe"]["container_name"],
                                     "Config": {"Labels": labels}, "Mounts": [{"Type": "volume",
-                                    "Name": mounted_volume or volume_name, "Destination": preflight.PLUGIN_MOUNT}]}])
+                                    "Name": mounted_volume or volume_name, "Destination": preflight.PLUGIN_MOUNT}],
+                                    "HostConfig": host_config if host_config is not None else {
+                                        "NetworkMode": "owned-default", "PublishAllPorts": False, "PortBindings": {}},
+                                    "NetworkSettings": network_settings if network_settings is not None else {"Ports": {}}}])
             if args[:2] == ("volume", "ls"):
                 return volume_name if volume else ""
             if args[:2] == ("volume", "inspect"):
@@ -168,6 +173,65 @@ class PluginTargetTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unproven"):
             self.target(existing=False, volume_labels={})
         self.assertTrue(self.target(volume_labels={})["fe_present"])
+
+    def test_public_or_internal_compose_ports_are_refused_before_container_lookup(self):
+        for port in (
+            {"target": 9030, "published": "9030"},
+            {"target": 9030, "published": "9030", "host_ip": "0.0.0.0"},
+            {"target": 8030, "published": "8030", "host_ip": "::"},
+            {"target": 8030, "published": "8030", "host_ip": "192.0.2.1"},
+            {"target": 9020, "published": "9020", "host_ip": "127.0.0.1"},
+            {"target": 9010, "published": "9010", "host_ip": "127.0.0.1"},
+            {"target": 9030, "published": "0", "host_ip": "127.0.0.1"},
+            {"target": 9030, "published": "9030", "host_ip": "127.0.0.1", "protocol": "udp"},
+        ):
+            config = compose_target()
+            config["services"]["doris-fe"]["ports"] = [port]
+            with self.subTest(port=port), self.assertRaisesRegex(ValueError, "F23"):
+                self.target(config, existing=False, volume=False)
+
+    def test_old_public_container_is_refused_even_with_safe_compose(self):
+        for host in ("", "0.0.0.0", "::", "192.0.2.1"):
+            requested = {"9030/tcp": [{"HostIp": host, "HostPort": "9030"}]}
+            with self.subTest(host=host), self.assertRaisesRegex(ValueError, "F23"):
+                self.target(host_config={"NetworkMode": "owned-default", "PublishAllPorts": False, "PortBindings": requested})
+
+    def test_effective_bindings_are_checked_independently_of_requested_bindings(self):
+        public = {"9030/tcp": [{"HostIp": "0.0.0.0", "HostPort": "9030"}]}
+        with self.assertRaisesRegex(ValueError, "F23"):
+            self.target(network_settings={"Ports": public})
+
+    def test_no_publication_and_explicit_ipv4_ipv6_loopback_are_allowed(self):
+        for host in ("127.0.0.1", "::1"):
+            config = compose_target()
+            config["services"]["doris-fe"]["ports"] = [
+                {"target": 9030, "published": "19030", "host_ip": host, "protocol": "tcp"}]
+            bindings = {"9030/tcp": [{"HostIp": host, "HostPort": "19030"}], "9010/tcp": None}
+            result = self.target(config, host_config={"NetworkMode": "owned-default", "PublishAllPorts": False,
+                                                     "PortBindings": bindings}, network_settings={"Ports": bindings})
+            self.assertTrue(result["fe_present"])
+
+    def test_host_or_shared_namespace_and_publish_all_are_not_a_bypass(self):
+        for mode in ("host", "container:other", "service:doris-be"):
+            config = compose_target()
+            config["services"]["doris-fe"]["network_mode"] = mode
+            with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, "F23"):
+                self.target(config, existing=False, volume=False)
+            with self.subTest(inspected=mode), self.assertRaisesRegex(ValueError, "F23"):
+                self.target(host_config={"NetworkMode": mode, "PublishAllPorts": False, "PortBindings": {}})
+        with self.assertRaisesRegex(ValueError, "F23"):
+            self.target(host_config={"NetworkMode": "owned-default", "PublishAllPorts": True, "PortBindings": {}})
+
+    def test_missing_inspection_metadata_fails_closed(self):
+        for values in ({"host_config": {}}, {"network_settings": {}}):
+            with self.subTest(values=values), self.assertRaisesRegex(ValueError, "F23"):
+                self.target(**values)
+
+    def test_backend_ports_cannot_publish_internal_services(self):
+        config = compose_target()
+        config["services"]["doris-be"]["ports"] = [{"target": 8040, "published": "8040", "host_ip": "127.0.0.1"}]
+        with self.assertRaisesRegex(ValueError, "F23"):
+            self.target(config, existing=False, volume=False)
 
 
 if __name__ == "__main__":

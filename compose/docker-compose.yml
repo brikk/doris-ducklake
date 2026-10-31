@@ -18,10 +18,11 @@ services:
       FE_SERVERS: fe1:172.30.80.10:9010
       FE_ID: "1"
     ports:
-      - "8030:8030"   # FE HTTP
-      - "9030:9030"   # FE MySQL
-      - "9020:9020"   # FE RPC
-      - "9010:9010"   # FE edit log
+      # Passwordless development administration is local to the daemon host.
+      # Remote clients use authenticated SSH forwarding; see README (F23).
+      - "127.0.0.1:8030:8030"   # FE HTTP
+      - "127.0.0.1:9030:9030"   # FE MySQL
+      # RPC/edit-log stay on the container networks, never host-published.
     volumes:
       # fe.conf with the heap dropped to 2g — the upstream default (8g) doesn't
       # fit on a typical Docker Desktop memory ceiling. Doris's start_fe.sh

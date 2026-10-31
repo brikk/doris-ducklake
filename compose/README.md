@@ -30,6 +30,70 @@ cd compose                    # from this repository's root
 
 One-time `~20 min` cluster build (FE image, image pulls); `~2–3 min` per re-run.
 
+### Local administration and remote access (F23)
+
+The development FE still uses passwordless `root` for container-local automation.
+It is **not a public database service**: HTTP `8030` and MySQL `9030` publish only
+on `127.0.0.1` of the **Docker/Podman daemon host**, not necessarily the machine
+running the client. FE RPC `9020`/edit-log `9010` and all BE ports stay unpublished;
+FE/BE communication uses the existing container networks unchanged.
+
+Remote access is an explicit **authenticated SSH tunnel**, not a wildcard bind or
+an environment switch that exposes passwordless SQL. On your workstation:
+
+```bash
+ssh -N -T -o ExitOnForwardFailure=yes \
+  -L 127.0.0.1:18030:127.0.0.1:8030 \
+  -L 127.0.0.1:19030:127.0.0.1:9030 user@daemon-host
+# In another terminal (while the authenticated SSH connection stays open):
+mysql --protocol=TCP -h127.0.0.1 -P19030 -uroot
+# Browser: http://127.0.0.1:18030
+```
+
+Use an SSH account authorized for **development administration**, with host-key
+verification and your normal key authentication. This tunnel gives local root-level
+SQL access; it is not per-user Doris authorization. Do not use `ssh -g`, a wildcard
+local forward, or unauthenticated public TCP proxies. Direct remote SQL/HTTP is not
+a supported option in this harness: it needs a separately reviewed Doris account,
+TLS, authorization and ingress policy, including changes to internal automation.
+
+Preflight checks both rendered port policy and actual requested/effective FE/BE
+bindings, even for stopped containers, and rechecks them during deployment.
+Public/unspecified binds, published internal ports, host/shared-container network
+mode, publish-all and missing inspection metadata refuse before installation.
+This matters because `docker start` **does not update old port bindings**. An old
+public container is refused, never silently recreated, stopped or migrated. It
+may remain publicly bound until its owner explicitly contains/migrates it; changing
+this file alone does not secure it. Do not use `down -v` as a migration shortcut.
+
+Loopback binding is containment, **not tenant isolation**. Trusted host accounts,
+Docker administrators, and peers with access to the FE's container networks can
+still administer it. Direct routing/firewall policy, SSH server hardening and
+sibling PostgreSQL/MinIO exposure are outside this change. Use Docker Engine
+**28+** (the live test uses 29.6.0); older Docker releases have a documented
+[same-L2 loopback-publication caveat](https://docs.docker.com/engine/network/port-publishing/).
+Podman's effective bindings are checked too, but this task does not certify every
+Podman/rootless/remote-daemon network implementation.
+
+Opt-in acceptance uses the existing F24 private sandbox, deploys real pinned A
+in `--up-only` mode, checks host-loopback HTTP/MySQL and BE registration, probes
+non-loopback host ports from a separate bridge client, then tests a disposable
+key-only SSH server (unapproved key refused, approved HTTP/SQL forwards work):
+
+```bash
+python3 compose/network_acceptance.py \
+  --bundle-a build/distributions/doris-ducklake-0.0.1-plugin.zip \
+  --bundle-b build/f24-e-reproduced-B/distributions/doris-ducklake-0.0.1-plugin.zip \
+  --duckdb /absolute/path/to/duckdb-1.5.6
+```
+
+Run this from the repository root; prepare resource-only B using F24's recipe
+below. The shared fixture validates B/producer inputs, but F23 deploys only A and
+does not seed a lake or claim fresh F25 correctness. Requires local Docker and
+`ssh`, `sshd`, `ssh-keygen`; no host SSH/account/firewall configuration is modified.
+Only acknowledged UUID-owned infrastructure is removed; disposable SSH private
+keys are deleted. See [F23 evidence/limits](../dev-docs/VALIDATION-F23-2026-10-31.md).
+
 ### Smoke isolation (F21)
 
 The driver reuses only the sibling Trino stack's PostgreSQL/MinIO services. It
