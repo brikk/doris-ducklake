@@ -16,9 +16,9 @@ import org.apache.doris.connector.spi.DorisConnectorException
  * reported as a per-object failure rather than throwing, so one stray path can't abort a cleanup.
  * HDFS/Azure warehouses would need their own [WarehouseBlobStore] impls (future work).
  *
- * **Not headlessly unit-tested** (needs a live MinIO); the S3-URI parsing is a pure function tested
- * directly, and the delete flow is covered by the compose smoke. The procedure orchestration that
- * drives this is headless-tested via a fake [WarehouseBlobStore].
+ * Real list/delete and released-catalog ownership are tested together against disposable MinIO;
+ * pure selection/parser tests also cover raw key identity. The pinned SDK rewrites repeated slash
+ * and dot-segment object paths, so such deletions fail closed rather than target another key.
  */
 internal class S3WarehouseBlobStore(private val client: MinioClient) : WarehouseBlobStore {
 
@@ -29,6 +29,9 @@ internal class S3WarehouseBlobStore(private val client: MinioClient) : Warehouse
         for (uri in uris) {
             try {
                 val (bucket, key) = parseS3Uri(uri)
+                require(!key.contains("//") && key.split('/').none { it == "." || it == ".." }) {
+                    "S3 client cannot delete this key without rewriting its path; refusing"
+                }
                 client.removeObject(RemoveObjectArgs.builder().bucket(bucket).`object`(key).build())
                 deleted.add(uri)
             } catch (e: IllegalArgumentException) {
@@ -102,17 +105,32 @@ internal class S3WarehouseBlobStore(private val client: MinioClient) : Warehouse
                 ?: throw DorisConnectorException("cleanup_old_files needs '$key' set on the catalog")
 
         /**
-         * Split an absolute `s3://bucket/key...` URI into `(bucket, key)`. Accepts `s3`/`s3a`/`s3n`
-         * schemes. Throws [IllegalArgumentException] for a non-S3 scheme, a missing bucket, or an
-         * empty key — caller turns that into a per-object failure.
-         */
-        /**
-         * Normalize a directory URI to end with exactly one `/`, so the S3 prefix has directory
+         * Append a missing `/`, so the S3 prefix has directory
          * semantics: listing under `s3://b/data/t/` must NOT also match a sibling `s3://b/data/t2/…`.
-         * A missing trailing slash is the classic orphan-detection foot-gun (sibling-prefix bleed).
+         * Existing slashes belong to the raw object key and must not be collapsed.
          */
-        internal fun dirUri(uri: String): String = uri.trimEnd('/') + "/"
+        internal fun dirUri(uri: String): String = if (uri.endsWith('/')) uri else "$uri/"
 
+        /**
+         * Comparison identity for this store's accepted S3 aliases. Change ONLY the scheme:
+         * bucket/key case, percent sequences, Unicode, spaces, `+`, repeated slashes and dot
+         * segments are literal object identity, not filesystem/URL normalization instructions.
+         * Non-S3 paths remain opaque. Listing/deletion keep their original URI spelling.
+         */
+        internal fun objectIdentity(uri: String): String {
+            val separator = uri.indexOf("://")
+            return if (separator > 0 && uri.substring(0, separator).lowercase() in S3_SCHEMES) {
+                "s3" + uri.substring(separator)
+            } else {
+                uri
+            }
+        }
+
+        /**
+         * Split an absolute `s3://bucket/key...` URI into `(bucket, key)`. Accepts `s3`/`s3a`/`s3n`
+         * schemes without decoding or rewriting the key. Invalid/unsupported URIs throw
+         * [IllegalArgumentException]; deletion reports those as per-object failures.
+         */
         internal fun parseS3Uri(uri: String): Pair<String, String> {
             val schemeSep = uri.indexOf("://")
             require(schemeSep > 0) { "not an absolute URI: $uri" }

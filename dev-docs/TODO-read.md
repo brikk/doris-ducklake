@@ -19,6 +19,14 @@ decision. See [F23 evidence](VALIDATION-F23-2026-10-31.md).
 Broader R07/production work remains separate. No corpus campaign or feature enablement
 is authorized by these harness changes.
 
+**2026-10-31 F01:** orphan cleanup now compares accepted S3 scheme aliases without
+changing raw bucket/key identity. Mixed owning paths, dropped-table and scheduled
+references are storage-integration verified in Java25/17; keys the pinned SDK
+would rewrite fail deletion explicitly. Full suites pass 265/234 with the same
+one existing skip each. No runtime/catalog repin, retained deployment or default
+distribution promotion; F02 authorization and broader concurrency remain separate.
+See [F01 evidence and limits](VALIDATION-F01-2026-10-31.md).
+
 **2026-10-24 R07: bounded experimental PostgreSQL/S3 file tier implemented;
 full rollout remains NO-GO.** See [current scope, SQL evidence and remaining
 engine/API gates](VALIDATION-R07-IMPLEMENTATION-2026-10-24.md). Inline transport,

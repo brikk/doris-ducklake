@@ -41,18 +41,19 @@ internal object OrphanFiles {
 
     /**
      * The subset of [listed] safe to delete as orphaned, given the catalog's [knownPaths] (absolute
-     * URIs, in the SAME form the listing produces) and the age [cutoff]. Comparison against the known
-     * set is by exact URI identity plus a directory-prefix guard, so both sides MUST be normalized
-     * identically by the caller (same scheme, bucket, no trailing-slash drift) — a mismatch would
-     * misclassify a live file as an orphan.
+     * URIs) and the age [cutoff]. Compare accepted S3 aliases by one scheme-independent identity
+     * on BOTH sides, retaining exact bucket/key bytes and a directory-boundary guard. Never apply
+     * URL decoding or filesystem normalization. Return the original listed URI for deletion.
      */
     fun find(listed: List<BlobEntry>, knownPaths: Set<String>, cutoff: Instant): List<String> {
-        val knownDirPrefixes = knownPaths.map { "$it/" }
+        val knownIdentities = knownPaths.mapTo(HashSet(), S3WarehouseBlobStore::objectIdentity)
+        val knownDirPrefixes = knownIdentities.map(S3WarehouseBlobStore::dirUri)
         return listed
             .filter { entry ->
+                val identity = S3WarehouseBlobStore.objectIdentity(entry.uri)
                 isDucklakeManagedResidue(entry.uri) &&
-                    entry.uri !in knownPaths &&
-                    knownDirPrefixes.none { prefix -> entry.uri.startsWith(prefix) } &&
+                    identity !in knownIdentities &&
+                    knownDirPrefixes.none { prefix -> identity.startsWith(prefix) } &&
                     entry.lastModified.isBefore(cutoff)
             }
             .map { it.uri }

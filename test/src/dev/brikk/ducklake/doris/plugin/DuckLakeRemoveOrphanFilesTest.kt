@@ -89,6 +89,48 @@ internal class DuckLakeRemoveOrphanFilesTest {
         assertThat(OrphanFiles.find(listed, known, now)).containsExactly("s3://b/t/ducklake-stray.parquet")
     }
 
+    @Test
+    fun acceptedS3AliasesProtectTheSameReferencedObject() {
+        val live = "b/t/ducklake-live.parquet"
+        for (scheme in listOf("s3", "s3a", "s3n", "S3A", "S3N")) {
+            assertThat(OrphanFiles.find(listOf(BlobEntry("s3://$live", old)), setOf("$scheme://$live"), now))
+                .describedAs("known $scheme reference versus production s3 listing").isEmpty()
+            assertThat(OrphanFiles.find(listOf(BlobEntry("$scheme://$live", old)), setOf("s3://$live"), now))
+                .describedAs("listed $scheme reference uses the same comparison identity").isEmpty()
+        }
+    }
+
+    @Test
+    fun directoryAliasesPreserveTrailingSlashesAndRespectDirectoryBoundaries() {
+        val listed = listOf(
+            BlobEntry("s3://b/t/dataset/ducklake-part.parquet", old),
+            BlobEntry("s3://b/t/dataset2/ducklake-orphan.parquet", old),
+            BlobEntry("s3://b/t/repeated///ducklake-part.parquet", old),
+            BlobEntry("s3://b/t/repeated/ducklake-orphan.parquet", old),
+        )
+        val known = setOf("s3a://b/t/dataset/", "s3n://b/t/repeated///")
+        assertThat(OrphanFiles.find(listed, known, now)).containsExactly(
+            "s3://b/t/dataset2/ducklake-orphan.parquet", "s3://b/t/repeated/ducklake-orphan.parquet",
+        )
+    }
+
+    @Test
+    fun aliasComparisonDoesNotDecodeOrNormalizeObjectKeys() {
+        val distinctKeys = listOf(
+            "t/a%2Fb/ducklake-key.parquet", "t/a%2fb/ducklake-key.parquet", "t/a/b/ducklake-key.parquet",
+            "t/ducklake-a+b.parquet", "t/ducklake-a b.parquet", "t/ducklake-a%20b.parquet",
+            "t//ducklake-case.parquet", "t/ducklake-case.parquet", "t/ducklake-CASE.parquet",
+            "t/./ducklake-dot.parquet", "t/ducklake-dot.parquet", "t/x/../ducklake-dot.parquet",
+            "t/ducklake-é.parquet", "t/ducklake-e\u0301.parquet", "t/ducklake-?#.parquet",
+        )
+        for (key in distinctKeys) {
+            val listed = distinctKeys.map { BlobEntry("s3://b/$it", old) }
+            assertThat(OrphanFiles.find(listed, setOf("s3n://b/$key"), now))
+                .describedAs("only the exact raw key is protected: %s", key)
+                .containsExactlyElementsOf(listed.filter { it.uri != "s3://b/$key" }.map { it.uri })
+        }
+    }
+
     // ---- orchestration: scope tiers from the named table's viewpoint ----
 
     @Test
@@ -178,6 +220,40 @@ internal class DuckLakeRemoveOrphanFilesTest {
     }
 
     @Test
+    fun mixedOwnerPathsAndAllScopesUseAuthoritativeAliasRoot() {
+        val extra = listOf(
+            DucklakeTableFilePathRef(98L, "s3n://dl/data/sales/", false, 99L, "orders", true, "ducklake-dropped.parquet", true),
+            DucklakeTableFilePathRef(10L, "sales", true, 20L, "orders", true, "s3n://dl/data/sales/orders/ducklake-absolute.db", false),
+            DucklakeTableFilePathRef(10L, "sales", true, 20L, "s3a://dl/data/sales/orders", false, "ducklake-directory/", true),
+        )
+        val scheduled = listOf(
+            DucklakeFilePathRef("sales/orders/ducklake-relative-scheduled.puffin", true),
+            DucklakeFilePathRef("s3n://dl/data/sales/orders/ducklake-absolute-scheduled.parquet", false),
+        )
+        val live = listOf(
+            "ducklake-live.parquet", "ducklake-dropped.parquet", "ducklake-absolute.db",
+            "ducklake-directory/ducklake-member.parquet", "ducklake-relative-scheduled.puffin", "ducklake-absolute-scheduled.parquet",
+        ).map { BlobEntry("s3://dl/data/sales/orders/$it", old) }
+        val orphan = "s3://dl/data/sales/orders/ducklake-orphan.parquet"
+        for (scheme in listOf("s3", "s3a", "s3n")) {
+            for (scope in listOf("table", "schema", "catalog")) {
+                for (dryRun in listOf(false, true)) {
+                    val cat = catalog(extra, scheduled, "$scheme://dl/data")
+                    val store = FakeBlobStore(live + BlobEntry(orphan, old) + BlobEntry("s3://dl/data/sales/orders/data.parquet", old))
+                    val procedure = DuckLakeProcedureOps(cat, mapOf("storage.warehouse" to "s3://wrong-bucket/wrong-root")) { store }
+                    val result = procedure.execute(
+                        null, handle("sales", "orders"), "remove_orphan_files",
+                        mapOf("scope" to scope, "dry_run" to dryRun.toString()), null, emptyList(),
+                    )
+                    assertThat(result.rows.single()).containsExactly(dryRun.toString(), "7d", "1", "0")
+                    assertThat(store.deleteRequested).containsExactlyElementsOf(if (dryRun) emptyList() else listOf(orphan))
+                    assertThat(store.listedPrefixes.single()).startsWith("$scheme://dl/data")
+                }
+            }
+        }
+    }
+
+    @Test
     fun databaseIsAnAliasForSchemaScope() {
         val cat = catalog()
         val store = FakeBlobStore(listing = emptyList())
@@ -226,10 +302,10 @@ internal class DuckLakeRemoveOrphanFilesTest {
     // ---- S3 dir-prefix normalization (foot-gun guard) ----
 
     @Test
-    fun dirUriEndsWithExactlyOneSlash() {
+    fun dirUriAddsADirectoryBoundaryWithoutChangingTheRawKey() {
         assertThat(S3WarehouseBlobStore.dirUri("s3://b/data/t")).isEqualTo("s3://b/data/t/")
         assertThat(S3WarehouseBlobStore.dirUri("s3://b/data/t/")).isEqualTo("s3://b/data/t/")
-        assertThat(S3WarehouseBlobStore.dirUri("s3://b/data/t///")).isEqualTo("s3://b/data/t/")
+        assertThat(S3WarehouseBlobStore.dirUri("s3://b/data/t///")).isEqualTo("s3://b/data/t///")
     }
 
     // ---- fixtures ----
@@ -244,6 +320,7 @@ internal class DuckLakeRemoveOrphanFilesTest {
     private fun catalog(
         extraTableRefs: List<DucklakeTableFilePathRef> = emptyList(),
         scheduledRefs: List<DucklakeFilePathRef> = emptyList(),
+        dataPath: String = "s3://dl/data",
     ) = FakeCatalog(
         schemas = mapOf(
             "sales" to sch(10L, "sales"),
@@ -260,6 +337,7 @@ internal class DuckLakeRemoveOrphanFilesTest {
         ),
         extraTableRefs = extraTableRefs,
         scheduledRefs = scheduledRefs,
+        dataPath = dataPath,
     )
 
     private fun sch(id: Long, name: String) = DucklakeSchema(id, UUID.randomUUID(), 1L, null, name, name, pathIsRelative = true)
@@ -275,7 +353,10 @@ internal class DuckLakeRemoveOrphanFilesTest {
         override fun list(prefixUri: String): List<BlobEntry> {
             listedPrefixes.add(prefixUri)
             // Return only entries under this prefix (dir-safe), mimicking a real listing.
-            val dir = prefixUri.trimEnd('/') + "/"
+            // Production parses aliases but always renders listed objects as s3://.
+            // Do not call the selection's comparison helper here: that would hide F01.
+            val (bucket, key) = S3WarehouseBlobStore.parseS3Uri(prefixUri)
+            val dir = "s3://$bucket/" + if (key.endsWith('/')) key else "$key/"
             return listing.filter { it.uri.startsWith(dir) }
         }
     }
@@ -286,9 +367,10 @@ internal class DuckLakeRemoveOrphanFilesTest {
         private val refsByTableId: Map<Long, List<DucklakeFilePathRef>> = emptyMap(),
         private val extraTableRefs: List<DucklakeTableFilePathRef> = emptyList(),
         private val scheduledRefs: List<DucklakeFilePathRef> = emptyList(),
+        private val dataPath: String = "s3://dl/data",
     ) : DucklakeCatalog by throwingDelegate() {
 
-        override fun getDataPath(): String = "s3://dl/data"
+        override fun getDataPath(): String = dataPath
         override fun getSchema(schemaName: String, snapshotId: Long): DucklakeSchema? = schemas[schemaName]
         override fun getTable(schemaName: String, tableName: String, snapshotId: Long): DucklakeTable? =
             tablesBySchemaId[schemas[schemaName]?.schemaId]?.firstOrNull { it.tableName == tableName }
@@ -297,16 +379,16 @@ internal class DuckLakeRemoveOrphanFilesTest {
         override fun listReferencedFilePaths(tableId: Long): List<DucklakeFilePathRef> = refsByTableId[tableId].orEmpty()
         override fun listAllReferencedFiles(): DucklakeReferencedFiles {
             val tableRefs = tablesBySchemaId.flatMap { (schemaId, tables) ->
-                val schemaPath = schemas.values.first { it.schemaId == schemaId }.path
+                val schema = schemas.values.first { it.schemaId == schemaId }
                 tables.flatMap { table ->
                     refsByTableId[table.tableId].orEmpty().map { ref ->
                         DucklakeTableFilePathRef(
                             schemaId,
-                            schemaPath,
-                            true,
+                            schema.path,
+                            schema.pathIsRelative,
                             table.tableId,
                             table.path,
-                            true,
+                            table.pathIsRelative,
                             ref.path,
                             ref.pathIsRelative,
                         )
