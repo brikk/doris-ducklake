@@ -31,7 +31,8 @@ IMAGE_PINS = {
     BE: "sha256:ccca761cae5bc1e6122b4449c21d01117d74a095ce203cf9f4d27094ede8a2de",
 }
 SCRIPTS = ("smoke.sh", "smoke_run.sh", "plugin_deploy.py", "plugin_attest.py", "plugin_preflight.py",
-           "plugin_volume.py", "fe.conf", "smoke_lake.py", "step7-delete.py", "step-default.py", "w2-insert.py")
+           "plugin_volume.py", "fe.conf", "smoke_lake.py", "step7-delete.py", "step-default.py", "w2-insert.py",
+           "smoke_checks.py", "smoke_targets.py", "smoke_rows.py")
 
 
 def write_json(path, value):

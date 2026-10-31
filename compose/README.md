@@ -65,9 +65,9 @@ run's resources after inspection, never a prefix-wide database or warehouse swee
 This is accidental-target protection, not credential-level tenant isolation.
 The FE/BE containers and plugin volume are still shared development resources:
 cooperating smoke/deployment/teardown operations now refuse overlapping claims;
-manual Docker operations must not race them. F24's provenance scope is verified;
-F25's nonfatal assertions remain open, so
-`Smoke complete` alone is not proof of end-to-end correctness.
+manual Docker operations must not race them. F24's provenance scope is verified.
+F25 now requires the full supported-scope assertion proof described below; a
+deployment-only run or old unqualified `Smoke complete` log is not that proof.
 F24's current-runtime feasibility and ordered implementation sub-items are in
 [`TODO-F24-PLUGIN-PROVENANCE.md`](../dev-docs/TODO-F24-PLUGIN-PROVENANCE.md).
 The separate corpus F22 startup sweep is removed; aborted corpus databases are
@@ -173,8 +173,9 @@ compatibility experiment and cannot skip FE/provider provenance.
 cleanup. A failed later smoke/cleanup retires the observation to
 `deployment-attested-before-error.json`, never a current passing receipt. Require
 matching owners and a successful run result; pending or historical observations
-are not successful runs. All records explicitly leave F25 correctness unclaimed,
-even when the current smoke command exits zero. Old run evidence is retained.
+are not successful runs. The earlier deployment observation leaves correctness
+unclaimed; F25's separate full-run proof is required before command completion
+can become a supported-scope correctness pass. Old run evidence is retained.
 
 The earlier C-only read-only check was blocked by the retained BE's unavailability.
 That stack remains untouched. Subsequent **F24-E** acceptance on new owned
@@ -246,8 +247,55 @@ correct compose directory first: choosing an artifact does not choose/migrate a
 target. No age-based claim stealing, metadata reset or automatic legacy tar-only
 restoration is provided. The default legacy-volume refusal remains intentional.
 
-F24's provenance/replacement scope is complete; **F25's general correctness
-assertions, production/performance and broader R07 qualification remain separate**.
+F24's provenance/replacement scope is complete. Production/performance, F23
+exposure and broader R07 qualification remain separate from this acceptance.
+
+### Required smoke correctness (F25)
+
+Full mode now resolves the selected substrate's owned PostgreSQL/MinIO containers,
+common network and image identities rather than guessing global names. Secrets
+reach helpers through their environment and are absent from correctness/deployment
+JSON. Fresh database/prefix ownership and loaded-provider gates remain mandatory.
+
+`smoke-assertions.json` records every required typed assertion. No soft `CHECK`,
+generic historical `KNOWN-BLOCKED`, automatic write fallback or unconditional
+LIVE-GREEN summary counts as success. Current-pin expected failures are empty;
+any future reviewed entry must match exact runtime/case/observation and is still
+non-green. The coverage is the existing supported API-24 INT32/STRING workload,
+not unsafe narrow-int writes or arbitrary engine features.
+
+Checks include exact pinned TPC-H counts/reference rows and filtered results,
+nullable counts/rows, real position-delete rows, DDL metadata/order/schema, exact
+native+Doris write/CTAS/default tuples, bucket arity/values/pruning and metadata/
+storage maintenance effects. GC reads actual referenced fields in both engines;
+metadata-only COUNT cannot conceal lost files. Object absence must be a structured
+missing-key result, or the pinned code-free missing-object shape confirmed by a
+successful empty exact-path listing, never an auth/network error. Failure stops follow-on work and
+retains the run-owned fixtures for inspection.
+
+Only complete required policy produces `smoke-correctness.json`. The supervisor
+independently validates owner/build/run/runtime/target, required cases, predicates,
+policy/ledger hashes and stable FE/BE processes. Only after cleanup/finalization
+does `run-result.json` say `smoke_correctness_passed=true` and print final success.
+A zero child exit with missing/incomplete checks fails. `--up-only` never claims
+correctness. Later errors retire any current observation to before-error history.
+
+The opt-in full S3 acceptance reuses the private F24 sandbox and exact default
+classes (resource-only B), copies the sibling TPC-H generator without editing it,
+then tests both a real complete run and one same-count corrupted tuple response:
+
+```bash
+python3 compose/smoke_acceptance.py \
+  --bundle-a build/distributions/doris-ducklake-0.0.1-plugin.zip \
+  --bundle-b build/f24-acceptance-B/distributions/doris-ducklake-0.0.1-plugin.zip \
+  --duckdb /absolute/path/to/duckdb-1.5.6
+```
+
+Prepare B with the recipe above. The local `minio/mc:latest` helper is also
+required; actual helper image IDs are resolved and passed immutably. All test
+containers, databases, prefixes and networks belong to the new fixture, not a
+retained stack. See [F25 verification and limits](../dev-docs/VALIDATION-F25-2026-10-30.md)
+for the actual outcome; no pending or failed live run is relabelled as green.
 
 ### Prereqs
 - The **FE image** `doris-fe:ducklake-62e3d81a-api24` must exist locally (see *Building the FE

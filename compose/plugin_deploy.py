@@ -21,6 +21,8 @@ import uuid
 from plugin_preflight import docker_json, file_hash, require, sha256, target_from_compose, verify_bundle
 from plugin_volume import snapshot, verify_backup
 from plugin_attest import ProviderAttestation
+from smoke_checks import verify_completed
+from smoke_targets import resolve_substrate
 
 
 OWNER = "dev.brikk.ducklake.deployment.owner"
@@ -60,7 +62,9 @@ def process_record(instance):
 
 
 class Deployment:
-    def __init__(self, compose, preflight, evidence_root, startup_timeout=180):
+    def __init__(self, compose, preflight, evidence_root, startup_timeout=180, mode="attested-only"):
+        require(mode in {"attested-only", "up-only", "full"}, "Invalid deployment/smoke mode")
+        self.mode = mode
         self.compose = Path(compose).resolve()
         self.preflight = preflight
         self.target = preflight["target"]
@@ -73,7 +77,7 @@ class Deployment:
         self.evidence = Path(evidence_root).resolve() / ("deploy-" + self.token)
         self.evidence.mkdir(parents=True, mode=0o700)
         self.state = {"schema": "doris-plugin-deployment-lifecycle-v1", "owner": self.token,
-                      "target": self.target, "loaded_provider_verified": False, "events": []}
+                       "target": self.target, "mode": mode, "loaded_provider_verified": False, "events": []}
         self.prior = None
 
     def event(self, name, **values):
@@ -358,20 +362,29 @@ class Deployment:
 
     def run(self, command=()):
         try:
+            require(self.mode != "full" or command, "Full smoke needs a continuation")
             self._run(command)
             require(self.state.get("deployment_attested"), "Deployment attestation was not completed")
+            if self.mode == "full":
+                require(self.state.get("smoke_correctness_passed"), "Full smoke correctness proof was not completed")
+                verify_completed(self.evidence / "lifecycle.json")
             self.write_record("run-result.json", {"schema": "doris-plugin-run-result-v1", "owner": self.token,
-                              "status": "command-completed" if command else "attested-only", "run_success": True,
-                              "deployment_attested": True, "smoke_correctness_passed": False, "f25_complete": False,
+                              "status": "smoke-correctness-passed" if self.state.get("smoke_correctness_passed") else "command-completed" if command else "attested-only",
+                              "mode": self.mode, "run_success": True, "deployment_attested": True,
+                              "smoke_correctness_passed": bool(self.state.get("smoke_correctness_passed")),
+                              "f25_complete": bool(self.state.get("smoke_correctness_passed")),
                               "finished_at": self.timestamp()})
+            if self.state.get("smoke_correctness_passed"):
+                print(f"[smoke] Smoke complete: {self.state['smoke_checks_passed']} required correctness checks passed ({self.state['qualification']}).", flush=True)
         except BaseException as error:
             # Retain the successful observation as history, but never leave a
             # current passing receipt behind after a failed overall invocation.
-            receipt = self.evidence / "deployment-attested.json"
-            if receipt.exists():
-                receipt.rename(self.evidence / "deployment-attested-before-error.json")
+            for name in ("deployment-attested", "smoke-correctness"):
+                receipt = self.evidence / (name + ".json")
+                if receipt.exists():
+                    receipt.rename(self.evidence / (name + "-before-error.json"))
             self.write_record("run-result.json", {"schema": "doris-plugin-run-result-v1", "owner": self.token,
-                              "status": "failed", "run_success": False,
+                              "status": "failed", "mode": self.mode, "run_success": False,
                               "deployment_attested": bool(self.state.get("deployment_attested")),
                               "smoke_correctness_passed": False, "f25_complete": False,
                               "error": str(error), "finished_at": self.timestamp()})
@@ -389,7 +402,8 @@ class Deployment:
                 self.state["prior_process"] = self.prior
                 source = Path(__file__).resolve().parent
                 self.state["tooling_sha256"] = {name: file_hash(source / name) for name in
-                    ("plugin_deploy.py", "plugin_attest.py", "plugin_volume.py", "plugin_preflight.py", "smoke.sh", "smoke_run.sh")}
+                    ("plugin_deploy.py", "plugin_attest.py", "plugin_volume.py", "plugin_preflight.py", "smoke.sh", "smoke_run.sh",
+                     "smoke_checks.py", "smoke_targets.py", "smoke_rows.py", "smoke_lake.py", "w2-insert.py", "step7-delete.py", "step-default.py")}
                 runtime = self.compose.parent / ".fe.conf.runtime"
                 require(not runtime.exists() or runtime.is_file(), "Runtime config is not a regular file")
                 require(self.prior is None or runtime.is_file(), "Existing FE runtime configuration is missing")
@@ -403,8 +417,14 @@ class Deployment:
                 self.backup()
                 if command:
                     substrate = self.compose.parent.parent.parent / "trino-ducklake/compose/docker-compose.yml"
+                    if self.mode == "full":
+                        routing_before, _ = resolve_substrate(self, substrate, docker, inspect)
                     docker("compose", "-f", substrate, "up", "-d", "--no-recreate", "--wait", "--wait-timeout", "120",
                            "postgres", "minio")
+                    if self.mode == "full":
+                        routing, self._smoke_environment = resolve_substrate(self, substrate, docker, inspect, running=True)
+                        require(routing == routing_before, "Substrate routing changed during startup")
+                        self.state["smoke_target"] = routing
                     Path(os.environ.get("DORIS_CORPUS_DIR", "/tmp/ducklake-corpus")).mkdir(parents=True, exist_ok=True)
                 self.install()
                 self.start()
@@ -412,7 +432,10 @@ class Deployment:
                 self.event("lifecycle-complete-not-provider-attested")
                 ProviderAttestation(self, docker, inspect).run()
                 if command:
-                    child = subprocess.Popen([*command, str(self.evidence / "lifecycle.json")], start_new_session=True)
+                    environment = dict(os.environ)
+                    if self.mode == "full":
+                        environment.update(self._smoke_environment)
+                    child = subprocess.Popen([*command, str(self.evidence / "lifecycle.json")], env=environment, start_new_session=True)
                     try:
                         status = child.wait()
                     except BaseException:
@@ -427,6 +450,16 @@ class Deployment:
                             child.wait()
                         raise
                     require(status == 0, f"Smoke command failed (exit {status})")
+                    if self.mode == "full":
+                        proof = verify_completed(self.evidence / "lifecycle.json")
+                        self.confirm_process()
+                        be = inspect(self.state["runtime_images"]["be"]["container_id"])
+                        require(be["State"]["Running"] and be["Image"] == self.state["runtime_images"]["be"]["id"] and
+                                be["State"]["StartedAt"] == self.state["runtime_images"]["be"]["started_at"],
+                                "BE process changed during correctness checks")
+                        self.state.update(smoke_correctness_passed=True, smoke_checks_passed=proof["checks_passed"],
+                                          smoke_run_id=proof["run_id"])
+                        self.event("smoke-correctness-verified", checks=proof["checks_passed"], run_id=proof["run_id"])
                     self.event("smoke-command-finished")
             except BaseException as error:
                 try:
@@ -463,6 +496,7 @@ def main():
     parser.add_argument("--evidence-root", required=True, type=Path)
     parser.add_argument("--startup-timeout", type=int, default=180)
     parser.add_argument("--down", action="store_true")
+    parser.add_argument("--mode", choices=["attested-only", "up-only", "full"], default="attested-only")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     signal.signal(signal.SIGTERM, interrupted)
@@ -471,7 +505,7 @@ def main():
         require(args.startup_timeout > 0, "Startup timeout must be positive")
         preflight = {"target": target_from_compose(args.compose_file)} if args.down else json.load(sys.stdin)
         command = args.command[1:] if args.command[:1] == ["--"] else args.command
-        deployment = Deployment(args.compose_file, preflight, args.evidence_root, args.startup_timeout)
+        deployment = Deployment(args.compose_file, preflight, args.evidence_root, args.startup_timeout, args.mode)
         if args.down:
             deployment.teardown()
         else:

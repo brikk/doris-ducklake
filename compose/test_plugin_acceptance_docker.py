@@ -85,6 +85,19 @@ class AcceptanceDockerGuardTests(unittest.TestCase):
         self.assertEqual(code, 98)
         self.assertEqual(stdout, "")
 
+    def test_full_smoke_schedule_fixture_is_limited_to_the_exact_owned_database_prefix(self):
+        self.spec["allow_owned_lake"] = True
+        token = "a" * 32
+        sql = f"INSERT INTO ducklake_files_scheduled_for_deletion (data_file_id,path,path_is_relative,schedule_start) VALUES (900001,'s3://ducklake/doris-smoke/{token}/ducklake-smoke-cleanup.parquet',false,now()-interval '1 hour');"
+        args = ["exec", "owned-pg", "psql", "-d", "doris_smoke_" + token, "-c", sql]
+        self.assertEqual(self.invoke(args)[0], 0)
+        bad = list(args)
+        bad[4] = "ducklake"
+        self.assertEqual(self.invoke(bad)[0], 97)
+        bad = list(args)
+        bad[-1] = sql.replace("doris-smoke/" + token, "data/shared")
+        self.assertEqual(self.invoke(bad)[0], 97)
+
 
 if __name__ == "__main__":
     unittest.main()

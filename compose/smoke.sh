@@ -32,6 +32,7 @@ if [[ -z "${DORIS_BE_PLATFORM:-}" && "$(uname -m)" == "x86_64" ]]; then
 fi
 deploy_args=(--compose-file "$HERE/docker-compose.yml" --evidence-root "$ROOT/build/smoke-deployments"
     --startup-timeout "${DORIS_FE_STARTUP_TIMEOUT:-180}")
+if [[ $UP_ONLY -eq 1 ]]; then deploy_args+=(--mode up-only); else deploy_args+=(--mode full); fi
 if [[ $DOWN -eq 1 ]]; then
     exec python3 "$HERE/plugin_deploy.py" "${deploy_args[@]}" --down
 fi

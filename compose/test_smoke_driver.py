@@ -20,11 +20,12 @@ import tempfile
 import time
 import unittest
 import zipfile
-from plugin_test_fixture import compose_target, write_plugin
+from plugin_test_fixture import compose_target, substrate_target, write_plugin
 import plugin_volume
 from plugin_deploy import OWNER
 from plugin_preflight import manifest_sections, MANIFEST, SERVICE
 from plugin_attest import INVENTORY_SQL
+from smoke_rows import FIXTURES, validate_rows
 
 
 TOKEN = "0123456789abcdef0123456789abcdef"
@@ -72,6 +73,10 @@ def fake_docker_command(lock):
         }) + "\n")
     scenario = os.environ["FAKE_SCENARIO"]
     config = compose_target()
+    substrate = substrate_target(scenario == "custom_substrate")
+    if scenario == "custom_substrate":
+        config["networks"]["shared"]["name"] = "owned-network"
+    pg_name = substrate["services"]["postgres"]["container_name"]
     fe_name = "doris-custom-fe" if scenario == "custom_container" else "doris-ducklake-fe"
     volume = config["volumes"]["fe-plugin-ducklake"]["name"]
     volume_root = state_file.parent / "volume"
@@ -136,15 +141,23 @@ def fake_docker_command(lock):
 
     if argv[:2] == ["image", "inspect"]:
         image = "helper-image-id" if argv[2] == "python:3.12-slim" else (
-            "be-image-id" if "doris-be" in argv[2] or "doris:be-" in argv[2] else "fe-image-id")
+            "be-image-id" if "doris-be" in argv[2] or "doris:be-" in argv[2] else
+            "postgres-image-id" if argv[2].startswith("postgres:") else
+            "mc-image-id" if argv[2].startswith("minio/mc:") else
+            "minio-image-id" if argv[2].startswith("minio/minio:") else "fe-image-id")
         print(json.dumps([{"Id": image}]))
         return 0
 
     if argv[0] == "compose":
         if "config" in argv:
+            if "trino-ducklake" in option_values(argv, "-f")[0]:
+                print(json.dumps(substrate))
+                return 0
             if scenario == "mutate_selected_archive":
                 Path(os.environ["FAKE_PLUGIN_PATH"]).write_bytes(b"changed-after-freeze")
             config = compose_target()
+            if scenario == "custom_substrate":
+                config["networks"]["shared"]["name"] = "owned-network"
             config["services"]["doris-fe"]["image"] = os.environ.get("DORIS_FE_IMAGE", config["services"]["doris-fe"]["image"])
             config["services"]["doris-be"]["image"] = os.environ.get("DORIS_BE_IMAGE", config["services"]["doris-be"]["image"])
             if scenario == "custom_container":
@@ -154,6 +167,13 @@ def fake_docker_command(lock):
         if "run" in argv and scenario == "bootstrap_failure":
             print("injected bootstrap failure", file=sys.stderr)
             return 1
+        if "up" in argv and argv[-2:] == ["postgres", "minio"]:
+            for service in ("postgres", "minio"):
+                identifier = "fake-" + service + "-id"
+                state["containers"][identifier] = {"Id": identifier, "Name": "/" + substrate["services"][service]["container_name"],
+                    "Image": service + "-image-id", "Config": {"Labels": {"com.docker.compose.project": substrate["name"],
+                    "com.docker.compose.service": service}}, "State": {"Running": True, "StartedAt": "2026-10-29T12:00:00Z"}, "Mounts": []}
+            save()
         if "up" in argv and argv[-1] == "doris-fe":
             state["containers"]["fake-fe-id"] = new_fe()
             snapshot_loaded_provider()
@@ -290,7 +310,7 @@ def fake_docker_command(lock):
         restarted = instance(argv[1])["State"]["StartedAt"].startswith("2026-10-29")
         print("clusterId=" + ("999" if scenario == "cluster_id_changed" and restarted else "123"))
         return 0
-    if argv[:3] == ["exec", "trino-ducklake-postgres", "psql"]:
+    if argv[:3] == ["exec", pg_name, "psql"]:
         sql = " ".join(option_values(argv, "-c")[0].split())
         if "gen_random_uuid()" in sql:
             pause("uuid")
@@ -302,20 +322,38 @@ def fake_docker_command(lock):
         elif "key = 'data_path'" in sql:
             print("s3://ducklake/data/" if scenario == "wrong_path" else DATA_PATH)
         elif "COUNT(*) FROM ducklake_snapshot" in sql:
-            print(1 if argv in previous else 3)
+            print(3 if scenario == "wrong_expiry" else 1 if argv in previous else 3)
         elif "COUNT(*) FROM ducklake_schema" in sql:
-            print(0 if argv in previous else 1)
+            print(1 if state.get("ddl_schema") or scenario == "wrong_ddl_drop" else 0)
         elif "COUNT(*) FROM ducklake_files_scheduled_for_deletion" in sql:
-            print(0)
+            print(1 if scenario == "cleanup_schedule_left" else 0)
         elif "SELECT pc.transform" in sql:
             print("bucket(4)")
+        elif "json_agg(c.column_name ORDER BY c.column_order)" in sql:
+            print('["name","id"]' if scenario == "wrong_ddl_columns" else '["id","name"]')
+        elif "json_agg(lower(replace(pc.transform" in sql:
+            print('["bucket(8)"]' if scenario == "wrong_bucket_arity" else '["bucket(4)"]')
         elif "SELECT pv.partition_value" in sql:
-            print("1\n2\n3")
+            print("0\n1\n2" if scenario == "wrong_bucket_values" else "1\n2\n3")
+        elif "COUNT(*) FROM ducklake_data_file" in sql:
+            print(0 if scenario == "missing_write_file" else 1)
         else:
             print(1)
         return 0
     if argv[0] == "exec" and argv[1] in {fe_name, "fake-fe-id"} and argv[2] == "mysql":
         sql = " ".join(option_values(argv, "-e")[0].split())
+        if scenario == "ddl_create_failure" and "CREATE TABLE" in sql and ".ddl_smoke.doris_ddl " in sql:
+            print("injected DDL CREATE failure", file=sys.stderr)
+            return 1
+        if "CREATE DATABASE " in sql and ".ddl_smoke" in sql:
+            state["ddl_schema"] = True
+            save()
+        if "DROP DATABASE " in sql and ".ddl_smoke" in sql:
+            state["ddl_schema"] = False
+            save()
+        if "INSERT INTO " in sql and ".ddl_smoke.doris_ddl " in sql:
+            state["ddl_inserted"] = True
+            save()
         if scenario == "sql_timeout" and sql == "SHOW FRONTENDS":
             return 1
         if "information_schema.extensions" in sql:
@@ -364,14 +402,41 @@ def fake_docker_command(lock):
         elif sql == "SHOW BACKENDS":
             print("\t".join(["0"] * 9 + ["true"]))
         elif " EXECUTE " in sql:
-            print("ok\t0\t2\t0" if "expire_snapshots(" in sql else "ok\t0\t1\t0")
+            if scenario == "bad_procedure_row":
+                print("ok\t0\t1\t0")
+            elif "expire_snapshots(" in sql:
+                print("false\tcatalog-wide (ignores the named table)\t2\t0\t1,2")
+            else:
+                print("false\t1s\t1\t1" if scenario == "cleanup_failed_file" else "false\t1s\t1\t0")
         elif "EXPLAIN" in sql:
-            print("orders scan")
+            print("0:VFILE_SCAN_NODE table=orders PREDICATES: o_orderkey < 100")
+        elif "JSON_ARRAY" in sql:
+            if ".tpch.orders" in sql:
+                rows = [[i, "O"] for i in range(1, 6)]
+            elif ".tpch.step7_orders" in sql:
+                rows = [[i, "O"] for i in range(8, 101)]
+            elif ".count_col_check" in sql:
+                rows = FIXTURES["nullable"]
+            elif ".default_probe" in sql:
+                rows = [[1, 0], *FIXTURES["defaults"][1:]] if scenario == "wrong_default_count" else FIXTURES["defaults"]
+            elif ".ddl_smoke.doris_ddl" in sql:
+                rows = FIXTURES["two"] if state.get("ddl_inserted") else []
+            else:
+                rows = FIXTURES["three"]
+            if scenario == "wrong_doris_tuple" and ".tpch.doris_w " in sql:
+                rows = [[1, "alice"], [2, "CORRUPTED"], [3, "charlie"]]
+            if scenario == "wrong_ctas_tuple" and ".tpch.doris_ctas" in sql:
+                rows = [[1, "alice"], [2, "bob"], [3, "WRONG"]]
+            if scenario == "gc_lost_referenced_rows" and ".tpch.doris_w " in sql and any(
+                    a[0] == "exec" and "remove_orphan_files(" in a[-1] for a in previous):
+                rows = []
+            for row in rows:
+                print(json.dumps(row))
         elif "SELECT b FROM" in sql and ".default_probe" in sql:
             print(99)
         elif "SELECT COUNT(" in sql:
             if ".count_col_check" in sql:
-                print(2 if "COUNT(v)" in sql else 4)
+                print(4 if scenario == "wrong_nullable_count" else 2 if "COUNT(v)" in sql else 4)
             elif ".step7_orders" in sql:
                 print(100 if scenario == "wrong_delete_count" else 93)
             elif ".default_probe" in sql:
@@ -379,13 +444,28 @@ def fake_docker_command(lock):
             elif ".doris_ddl" in sql:
                 print(2)
             elif "WHERE name='alice'" in sql:
-                print(1)
+                print(2 if scenario == "wrong_bucket_pruning" else 1)
+            elif ".tpch.orders" in sql:
+                print(0 if scenario == "wrong_tpch_counts" else 15000)
+            elif ".tpch.lineitem" in sql:
+                print(0 if scenario == "wrong_tpch_counts" else 60175)
             else:
                 print(3)
         return 0
-    if argv[0] == "run" and "python:3.12-slim" in argv:
+    if argv[0] == "run" and ("python:3.12-slim" in argv or "helper-image-id" in argv):
+        values = dict(v.split("=", 1) for v in option_values(argv, "-e"))
+        script = next(Path(v.split(":", 1)[0]).name for v in option_values(argv, "-v") if v.endswith(":/script.py:ro"))
+        if script == "w2-insert.py" and values.get("TABLE") == "doris_w" and scenario == "wrong_native_tuple":
+            print("Native typed rows differ from expected fixture", file=sys.stderr)
+            return 1
+        if script == "smoke_rows.py":
+            query = values["ORACLE_QUERY"]
+            rows = {"tpch_sample": [[i, "O"] for i in range(1, 6)], "delete_rows": [[i, "O"] for i in range(8, 101)],
+                    "filter_rows": [[i, "O"] for i in range(1, 6)],
+                    "nullable_rows": FIXTURES["nullable"], "defaults": FIXTURES["defaults"]}[query]
+            print(json.dumps({"query": query, "duckdb_version": "1.5.6", "rows": rows}))
         return 0
-    if argv[0] == "run" and "minio/mc:latest" in argv:
+    if argv[0] == "run" and ("minio/mc:latest" in argv or "mc-image-id" in argv):
         command = argv[-1]
         if "mc ls " in command:
             if scenario == "prefix_error":
@@ -394,7 +474,16 @@ def fake_docker_command(lock):
             if scenario == "occupied_prefix":
                 print("existing.parquet")
         elif "mc stat " in command:
-            print("gone" if "ducklake-smoke-" in command else "present")
+            gone = "ducklake-smoke-" in command or any(a[0] == "run" and "mc rm --force" in a[-1] for a in previous)
+            if scenario == "object_auth_failure":
+                print(json.dumps({"status": "error", "error": {"Code": "AccessDenied"}}))
+                return 1
+            if scenario == "cleanup_blob_present" and "cleanup.parquet" in command:
+                gone = False
+            if scenario == "orphan_deleted_foreign" and "data.parquet" in command:
+                gone = True
+            print(json.dumps({"status": "error", "error": {"Code": "NoSuchKey"}}) if gone else json.dumps({"status": "success"}))
+            return 1 if gone else 0
         return 0
     print(f"Unhandled fake Docker command: {argv!r}", file=sys.stderr)
     return 99
@@ -427,7 +516,7 @@ class SmokeDriverTests(unittest.TestCase):
         (self.compose / "docker-compose.yml").write_text("services: {}\n")
         for name in ("smoke.sh", "fe.conf", "smoke_lake.py", "step7-delete.py",
                       "step-default.py", "w2-insert.py", "plugin_preflight.py", "plugin_deploy.py",
-                       "plugin_volume.py", "plugin_attest.py", "smoke_run.sh"):
+                        "plugin_volume.py", "plugin_attest.py", "smoke_run.sh", "smoke_checks.py", "smoke_targets.py", "smoke_rows.py"):
             shutil.copyfile(SOURCE / name, self.compose / name)
         distributions = self.compose.parent / "build" / "distributions"
         distributions.mkdir(parents=True)
@@ -503,7 +592,7 @@ class SmokeDriverTests(unittest.TestCase):
     def allocation_calls(self):
         stages = []
         for argv in self.calls:
-            if argv[:3] == ["exec", "trino-ducklake-postgres", "psql"]:
+            if argv[0] == "exec" and len(argv) > 2 and argv[2] == "psql":
                 sql = option_values(argv, "-c")[0]
                 if "gen_random_uuid()" in sql:
                     stages.append(("uuid", argv))
@@ -513,10 +602,10 @@ class SmokeDriverTests(unittest.TestCase):
                     stages.append(("path", argv))
             elif argv[0] == "compose" and "run" in argv:
                 stages.append(("bootstrap", argv))
-            elif argv[0] == "run" and "minio/mc:latest" in argv:
+            elif argv[0] == "run" and ("minio/mc:latest" in argv or "mc-image-id" in argv):
                 if "mc mb " in argv[-1]:
                     stages.append(("bucket", argv))
-                elif "mc ls " in argv[-1]:
+                elif "mc ls " in argv[-1] and "mc ls --json " not in argv[-1]:
                     stages.append(("prefix", argv))
         return stages
 
@@ -582,7 +671,7 @@ class SmokeDriverTests(unittest.TestCase):
         ])
         self.assertEqual(self.records[stage_indexes[4]]["duckdb_version"], "1.5.6")
 
-        helpers = [argv for argv in self.calls if argv[0] == "run" and "python:3.12-slim" in argv]
+        helpers = [argv for argv in self.calls if argv[0] == "run" and ("python:3.12-slim" in argv or "helper-image-id" in argv)]
         helper_scripts = []
         verify_tables = []
         for argv in helpers:
@@ -609,10 +698,10 @@ class SmokeDriverTests(unittest.TestCase):
                 verify_tables.append((env["SCHEMA"], env["TABLE"]))
             elif script.name == "step7-delete.py":
                 self.assertEqual(env["DELETE_COUNT"], "7")
-        self.assertCountEqual(helper_scripts, ["step7-delete.py", "step-default.py"] + ["w2-insert.py"] * 5)
+        self.assertCountEqual(helper_scripts, ["step7-delete.py", "step-default.py"] + ["w2-insert.py"] * 6 + ["smoke_rows.py"] * 5)
         self.assertCountEqual(verify_tables, [
             ("ddl_smoke", "doris_ddl"), ("ddl_smoke", "doris_ddl"),
-            ("tpch", "doris_w"), ("tpch", "doris_wb"), ("tpch", "doris_ctas"),
+            ("tpch", "doris_w"), ("tpch", "doris_wb"), ("tpch", "doris_ctas"), ("tpch", "doris_w"),
         ])
 
         sql_calls = self.mysql_sql()
@@ -638,7 +727,7 @@ class SmokeDriverTests(unittest.TestCase):
             if argv[:3] == ["exec", "fake-fe-id", "mysql"]:
                 self.assertIn(DATABASE, option_values(argv, "-e")[0])
 
-        mc_commands = [argv[-1] for argv in self.calls if "minio/mc:latest" in argv]
+        mc_commands = [argv[-1] for argv in self.calls if argv[0] == "run" and ("minio/mc:latest" in argv or "mc-image-id" in argv)]
         object_paths = []
         for command in mc_commands:
             for path in re.findall(r"m/[^\s'\";]+", command):
@@ -659,8 +748,9 @@ class SmokeDriverTests(unittest.TestCase):
         self.assertEqual(len(procedures), 3)
         for sql, procedure in zip(procedures, ("expire_snapshots", "cleanup_old_files", "remove_orphan_files")):
             self.assertIn(f"ALTER TABLE {DATABASE}.tpch.orders EXECUTE {procedure}(", sql)
-        last_mc = [argv for argv in self.calls if "minio/mc:latest" in argv][-1]
-        self.assertIn(f"mc rm {MC_ROOT}_SUCCESS", last_mc[-1])
+        cleanup = [a for a in self.calls if a[0] == "run" and "mc rm --force" in a[-1]]
+        self.assertEqual(len(cleanup), 1)
+        self.assertIn(f"{MC_ROOT}_SUCCESS", cleanup[0][-1])
 
     def test_wrong_delete_count_fails_the_smoke(self):
         self.assertNotEqual(self.run_driver(scenario="wrong_delete_count").returncode, 0)
@@ -672,9 +762,69 @@ class SmokeDriverTests(unittest.TestCase):
 
     def test_wrong_default_count_fails_and_retains_the_fixture(self):
         self.assertNotEqual(self.run_driver(scenario="wrong_default_count").returncode, 0)
-        self.assertIn("DEFAULT-BACKFILL FAIL", self.output)
+        self.assertIn("Smoke defaults failed", self.output)
         self.assertNotIn("Smoke complete", self.output)
         self.assertFalse(any("DROP TABLE IF EXISTS tpch.default_probe" in sql for sql in self.mysql_sql()))
+
+    def test_soft_read_checks_cannot_reach_a_successful_full_run(self):
+        for scenario in ("wrong_tpch_counts", "wrong_nullable_count"):
+            with self.subTest(scenario=scenario):
+                self.setUp()
+                self.assertNotEqual(self.run_driver(scenario=scenario).returncode, 0, self.output)
+                self.assertNotIn("Smoke complete.", self.output)
+
+    def assert_correctness_failure(self, scenario):
+        self.assertNotEqual(self.run_driver(scenario=scenario).returncode, 0, self.output)
+        self.assertNotIn("Smoke complete:", self.output)
+        state, directory = self.lifecycle()
+        result = json.loads((directory / "run-result.json").read_text())
+        self.assertFalse(result["run_success"])
+        self.assertFalse(result["smoke_correctness_passed"])
+        self.assertFalse((directory / "smoke-correctness.json").exists())
+        self.assertFalse((directory / "deployment-attested.json").exists())
+        ledger = json.loads((directory / "smoke-assertions.json").read_text())
+        self.assertEqual(ledger["status"], "failed")
+        return ledger
+
+    def test_ddl_failures_do_not_emit_unconditional_live_green_summary(self):
+        for scenario in ("ddl_create_failure", "wrong_ddl_columns", "wrong_ddl_drop"):
+            with self.subTest(scenario=scenario):
+                self.setUp()
+                self.assert_correctness_failure(scenario)
+                self.assertNotIn("W1 DDL: required", self.output)
+
+    def test_same_count_doris_native_and_ctas_wrong_tuples_fail(self):
+        for scenario in ("wrong_doris_tuple", "wrong_native_tuple", "wrong_ctas_tuple", "missing_write_file"):
+            with self.subTest(scenario=scenario):
+                self.setUp()
+                self.assert_correctness_failure(scenario)
+
+    def test_bucket_arity_values_and_pruning_are_required(self):
+        for scenario in ("wrong_bucket_arity", "wrong_bucket_values", "wrong_bucket_pruning"):
+            with self.subTest(scenario=scenario):
+                self.setUp()
+                self.assert_correctness_failure(scenario)
+
+    def test_gc_metadata_and_storage_failures_are_fatal_not_checks(self):
+        for scenario in ("wrong_expiry", "bad_procedure_row", "cleanup_failed_file", "cleanup_schedule_left",
+                         "cleanup_blob_present", "orphan_deleted_foreign", "object_auth_failure"):
+            with self.subTest(scenario=scenario):
+                self.setUp()
+                self.assert_correctness_failure(scenario)
+
+    def test_gc_forces_referenced_field_reads_even_when_metadata_count_still_says_three(self):
+        ledger = self.assert_correctness_failure("gc_lost_referenced_rows")
+        self.assertTrue(any(row["case"] == "gc_referenced" and row["outcome"] == "failed" for row in ledger["checks"]))
+
+    def test_configured_private_substrate_is_used_without_inherited_target_overrides(self):
+        self.assertEqual(self.run_driver(scenario="custom_substrate").returncode, 0, self.output)
+        state, folder = self.lifecycle()
+        self.assertEqual(state["smoke_target"]["postgres"], "owned-pg")
+        self.assertEqual(state["smoke_target"]["minio"], "owned-minio")
+        self.assertTrue(all(a[1] == "owned-pg" for a in self.calls if a[0] == "exec" and len(a) > 2 and a[2] == "psql"))
+        proof = (folder / "smoke-correctness.json").read_text()
+        self.assertNotIn("fixture-pg-secret", proof)
+        self.assertNotIn("fixture-s3-secret", proof)
 
     def test_up_only_does_not_seed_or_mutate_catalogs(self):
         self.assertEqual(self.run_driver("--up-only").returncode, 0, self.output)
@@ -925,7 +1075,7 @@ class SmokeDriverTests(unittest.TestCase):
                 self.assertIsNone(receipt["run_success"])
                 result = json.loads((evidence / "run-result.json").read_text())
                 self.assertTrue(result["run_success"])
-                self.assertFalse(result["smoke_correctness_passed"])
+                self.assertEqual(result["smoke_correctness_passed"], not bool(mode))
                 for _, argv in self.allocation_calls():
                     record = self.records[self.calls.index(argv)]
                     self.assertTrue(record["attested_before_command"])
@@ -1041,7 +1191,7 @@ class SmokeDriverTests(unittest.TestCase):
                 self.assertTrue((evidence / "previous.tar").is_file())
                 self.assertTrue((evidence / "plugin.zip").is_file())
                 self.assertIn("failed-fe-kept-stopped", [e["event"] for e in lifecycle["events"]])
-                self.assertEqual(list(state["containers"]), ["fake-fe-id"])
+                self.assertEqual(set(state["containers"]), {"fake-fe-id", "fake-postgres-id", "fake-minio-id"})
 
     def test_stale_master_be_fails_before_lake_allocation(self):
         self.assertNotEqual(self.run_driver(scenario="stale_master_be").returncode, 0)

@@ -7,7 +7,10 @@ F24 has a pinned-source feasibility audit and a real
 [13-item implementation checklist](TODO-F24-PLUGIN-PROVENANCE.md) is now **13/13
 complete**, including D's 96-test stateful matrix and E's real isolated loaded
 A/B acceptance with preserved metadata/exact reads and injected stale refusal.
-See [October 30 closeout](VALIDATION-F24-DE-2026-10-30.md). F25, F23 exposure and
+See [October 30 closeout](VALIDATION-F24-DE-2026-10-30.md). F25's supported-scope
+correctness gate is also implemented/live-verified: 28 mandatory real checks,
+same-count corruption refusal and 117 passing Python tests; see
+[F25 evidence](VALIDATION-F25-2026-10-30.md). F23 exposure and
 broader R07/production work remain separate. No corpus campaign or feature enablement
 is authorized by these harness changes.
 

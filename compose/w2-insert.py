@@ -6,9 +6,8 @@ Two modes (MODE env var):
             expression (e.g. `bucket(4, name)`). NOTE: as of W1b(b) the smoke stands its
             INSERT targets up via Doris `CREATE TABLE` (the live DDL route); this mode is
             kept only as a fallback for when the live DDL route is unavailable.
-  verify  → print the rows DuckDB+DuckLake sees in `<SCHEMA>.<TABLE>`. This is the
-            cross-engine read-back: if Doris wrote DuckLake-compatible Parquet
-            (field_id == column_id, right footer), DuckDB sees the same rows.
+  verify  → assert exact typed rows AND INTEGER/VARCHAR schema. An explicit
+             EXPECTED_FIXTURE (empty, two, three) is required; printing is not proof.
 
 Env vars: SCHEMA (default tpch), TABLE (default doris_w), PARTITION_BY (default none);
 connection details as in step7-delete.py.
@@ -18,7 +17,8 @@ import os
 
 import duckdb
 
-from smoke_lake import require_smoke_lake
+from smoke_lake import require_smoke_lake, connect_smoke, identifier
+from smoke_rows import FIXTURES, validate_rows, validate_write_schema
 
 
 def main() -> None:
@@ -28,48 +28,32 @@ def main() -> None:
     table = os.environ.get("TABLE", "doris_w")
     partition_by = os.environ.get("PARTITION_BY", "").strip()
 
-    con = duckdb.connect()
-    con.execute("INSTALL ducklake")
-    con.execute("LOAD ducklake")
-    con.execute("INSTALL httpfs")
-    con.execute("LOAD httpfs")
-
-    con.execute(
-        f"""
-        CREATE SECRET lake_s3 (
-            TYPE S3,
-            KEY_ID    '{os.environ["S3_KEY_ID"]}',
-            SECRET    '{os.environ["S3_SECRET"]}',
-            ENDPOINT  '{os.environ["S3_ENDPOINT"]}',
-            URL_STYLE 'path',
-            USE_SSL   false
-        )
-        """
-    )
-
-    attach_uri = (
-        f"ducklake:postgres:dbname={os.environ['PG_DB']} host={os.environ['PG_HOST']} "
-        f"user={os.environ['PG_USER']} password={os.environ['PG_PASSWORD']}"
-    )
-    con.execute(f"ATTACH '{attach_uri}' AS lake (DATA_PATH '{os.environ['DATA_PATH']}')")
-
-    if mode == "create":
-        con.execute(f"DROP TABLE IF EXISTS lake.{schema}.{table}")
-        con.execute(f"CREATE TABLE lake.{schema}.{table} (id INTEGER, name VARCHAR)")
-        msg = f"created empty lake.{schema}.{table} (id INTEGER, name VARCHAR)"
-        if partition_by:
-            # SET PARTITIONED BY on the empty table so Doris's subsequent INSERT writes
-            # partitioned files (the bootstrap uses the same pattern for by_name_bucket).
-            con.execute(f"ALTER TABLE lake.{schema}.{table} SET PARTITIONED BY ({partition_by})")
-            msg += f" PARTITIONED BY ({partition_by})"
-        print(msg, flush=True)
-    else:
-        rows = con.execute(
-            f"SELECT id, name FROM lake.{schema}.{table} ORDER BY id"
-        ).fetchall()
-        print(f"DuckDB+DuckLake sees {len(rows)} rows in lake.{schema}.{table}: {rows}", flush=True)
-
-    con.execute("DETACH lake")
+    fixture = os.environ.get("EXPECTED_FIXTURE")
+    if mode not in {"create", "verify"} or (schema, table) not in {
+        ("ddl_smoke", "doris_ddl"), ("tpch", "doris_w"), ("tpch", "doris_wb"), ("tpch", "doris_ctas")
+    }:
+        raise ValueError("Unknown write-helper mode/relation")
+    if mode == "verify" and fixture not in {"empty", "two", "three"}:
+        raise ValueError("Write verification needs an explicit EXPECTED_FIXTURE")
+    if partition_by not in {"", "bucket(4, name)"}:
+        raise ValueError("Unsupported write-helper partition fixture")
+    relation = "lake." + identifier(schema) + "." + identifier(table)
+    con = connect_smoke(duckdb)
+    try:
+        if mode == "create":
+            con.execute(f"DROP TABLE IF EXISTS {relation}")
+            con.execute(f"CREATE TABLE {relation} (id INTEGER, name VARCHAR)")
+            if partition_by:
+                con.execute(f"ALTER TABLE {relation} SET PARTITIONED BY ({partition_by})")
+            print(f"Created explicit fixture {schema}.{table}; no correctness pass claimed", flush=True)
+        else:
+            cursor = con.execute(f"SELECT id, name FROM {relation} ORDER BY id")
+            rows = cursor.fetchall()
+            validate_write_schema(cursor.description)
+            validate_rows(rows, FIXTURES[fixture])
+            print(f"Native exact typed rows PASS: {schema}.{table}, fixture={fixture}, rows={rows}", flush=True)
+    finally:
+        con.close()
 
 
 if __name__ == "__main__":

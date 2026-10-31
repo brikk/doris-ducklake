@@ -71,6 +71,15 @@ class ReceiptBoundaryTests(unittest.TestCase):
             self.deployment.run()
         self.assertFalse(self.result()["run_success"])
 
+    def test_zero_exit_without_required_full_correctness_proof_is_not_success(self):
+        self.deployment.mode = "full"
+        self.deployment.state["mode"] = "full"
+        with patch.object(self.deployment, "_run", side_effect=lambda _: self.deployment.state.update(deployment_attested=True)):
+            with self.assertRaisesRegex(ValueError, "correctness proof"):
+                self.deployment.run(["zero-exit-with-no-checks"])
+        self.assertFalse(self.result()["run_success"])
+        self.assertFalse(self.result()["smoke_correctness_passed"])
+
     def test_success_is_command_completion_not_f25_correctness(self):
         with patch.object(self.deployment, "_run", side_effect=lambda _: self.deployment.state.update(deployment_attested=True)):
             self.deployment.run(["a-command"])

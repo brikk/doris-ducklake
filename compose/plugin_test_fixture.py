@@ -45,6 +45,17 @@ def compose_target():
     return {"name": "doris-ducklake-dev", "services": {"doris-fe": {
         "container_name": "doris-ducklake-fe", "image": "doris-fe:ducklake-62e3d81a-api24",
         "volumes": [{"type": "volume", "source": "fe-plugin-ducklake",
-                     "target": "/opt/apache-doris/fe/plugins/connector/ducklake"}]},
-        "doris-be": {"container_name": "doris-ducklake-be", "image": "doris-be:ducklake-62e3d81a-api24-asan"}},
+                     "target": "/opt/apache-doris/fe/plugins/connector/ducklake"}], "networks": {"shared": {}}},
+        "doris-be": {"container_name": "doris-ducklake-be", "image": "doris-be:ducklake-62e3d81a-api24-asan", "networks": {"shared": {}}}},
+        "networks": {"shared": {"name": "trino-ducklake-dev_default", "external": True}},
         "volumes": {"fe-plugin-ducklake": {"name": "doris-ducklake-api24-62e3d81a-fe-plugin-ducklake"}}}
+
+
+def substrate_target(custom=False):
+    return {"name": "owned-substrate" if custom else "trino-ducklake-dev", "services": {
+        "postgres": {"container_name": "owned-pg" if custom else "trino-ducklake-postgres", "image": "postgres:18-alpine",
+                     "environment": {"POSTGRES_USER": "ducklake", "POSTGRES_PASSWORD": "fixture-pg-secret" if custom else "ducklake"}},
+        "minio": {"container_name": "owned-minio" if custom else "trino-ducklake-minio", "image": "minio/minio:fixture",
+                  "environment": {"MINIO_ROOT_USER": "fixture-key" if custom else "minioadmin",
+                                  "MINIO_ROOT_PASSWORD": "fixture-s3-secret" if custom else "minioadmin"}}},
+        "networks": {"default": {"name": "owned-network" if custom else "trino-ducklake-dev_default"}}}

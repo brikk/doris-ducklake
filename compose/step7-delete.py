@@ -17,48 +17,22 @@ import os
 
 import duckdb
 
-from smoke_lake import require_smoke_lake
+from smoke_lake import require_smoke_lake, connect_smoke
 
 
 def main() -> None:
     require_smoke_lake()
-    pg_db = os.environ["PG_DB"]
-    pg_host = os.environ["PG_HOST"]
-    pg_user = os.environ["PG_USER"]
-    pg_password = os.environ["PG_PASSWORD"]
-    s3_endpoint = os.environ["S3_ENDPOINT"]
-    s3_key_id = os.environ["S3_KEY_ID"]
-    s3_secret = os.environ["S3_SECRET"]
-    data_path = os.environ["DATA_PATH"]
     delete_count = int(os.environ["DELETE_COUNT"])
+    if not 0 < delete_count < 100:
+        raise ValueError("DELETE_COUNT must leave a nonempty 100-row fixture")
+    con = connect_smoke(duckdb)
+    try:
+        seed_step7(con, delete_count)
+    finally:
+        con.close()
 
-    con = duckdb.connect()
-    con.execute("INSTALL ducklake")
-    con.execute("LOAD ducklake")
-    con.execute("INSTALL httpfs")
-    con.execute("LOAD httpfs")
 
-    # Parameter binding doesn't work for CREATE SECRET; the substrate's
-    # init_ducklake.py uses ?-bind but only for the secret values. For the
-    # smoke we can just inline — the values come from controlled env vars.
-    con.execute(
-        f"""
-        CREATE SECRET lake_s3 (
-            TYPE S3,
-            KEY_ID    '{s3_key_id}',
-            SECRET    '{s3_secret}',
-            ENDPOINT  '{s3_endpoint}',
-            URL_STYLE 'path',
-            USE_SSL   false
-        )
-        """
-    )
-
-    attach_uri = (
-        f"ducklake:postgres:dbname={pg_db} host={pg_host} "
-        f"user={pg_user} password={pg_password}"
-    )
-    con.execute(f"ATTACH '{attach_uri}' AS lake (DATA_PATH '{data_path}')")
+def seed_step7(con, delete_count):
 
     # DuckLake defaults DATA_INLINING_ROW_LIMIT high enough that small
     # DELETEs land in ducklake_inlined_delete_<table_id> rows in the
@@ -82,6 +56,8 @@ def main() -> None:
     before = con.execute(
         "SELECT COUNT(*) FROM lake.tpch.step7_orders"
     ).fetchone()[0]
+    if type(before) is not int or before != 100:
+        raise ValueError("Native delete fixture did not start with 100 rows")
     print(f"DuckDB sees {before} rows in lake.tpch.step7_orders before DELETE",
           flush=True)
 
@@ -98,14 +74,13 @@ def main() -> None:
     after = con.execute(
         "SELECT COUNT(*) FROM lake.tpch.step7_orders"
     ).fetchone()[0]
+    if type(after) is not int or after != 100 - delete_count:
+        raise ValueError("Native delete fixture returned the wrong remaining count")
     print(
         f"DuckDB sees {after} rows in lake.tpch.step7_orders after DELETE "
         f"(deleted {before - after}, expected {delete_count})",
         flush=True,
     )
-
-    con.execute("DETACH lake")
-
 
 if __name__ == "__main__":
     main()

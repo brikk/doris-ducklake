@@ -18,44 +18,20 @@ import os
 
 import duckdb
 
-from smoke_lake import require_smoke_lake
+from smoke_lake import require_smoke_lake, connect_smoke
+from smoke_rows import FIXTURES, validate_rows
 
 
 def main() -> None:
     require_smoke_lake()
-    pg_db = os.environ["PG_DB"]
-    pg_host = os.environ["PG_HOST"]
-    pg_user = os.environ["PG_USER"]
-    pg_password = os.environ["PG_PASSWORD"]
-    s3_endpoint = os.environ["S3_ENDPOINT"]
-    s3_key_id = os.environ["S3_KEY_ID"]
-    s3_secret = os.environ["S3_SECRET"]
-    data_path = os.environ["DATA_PATH"]
+    con = connect_smoke(duckdb)
+    try:
+        seed_defaults(con)
+    finally:
+        con.close()
 
-    con = duckdb.connect()
-    con.execute("INSTALL ducklake")
-    con.execute("LOAD ducklake")
-    con.execute("INSTALL httpfs")
-    con.execute("LOAD httpfs")
 
-    con.execute(
-        f"""
-        CREATE SECRET lake_s3 (
-            TYPE S3,
-            KEY_ID    '{s3_key_id}',
-            SECRET    '{s3_secret}',
-            ENDPOINT  '{s3_endpoint}',
-            URL_STYLE 'path',
-            USE_SSL   false
-        )
-        """
-    )
-
-    attach_uri = (
-        f"ducklake:postgres:dbname={pg_db} host={pg_host} "
-        f"user={pg_user} password={pg_password}"
-    )
-    con.execute(f"ATTACH '{attach_uri}' AS lake (DATA_PATH '{data_path}')")
+def seed_defaults(con):
 
     # Force the pre-ADD rows into a real Parquet data file (not inlined) so the
     # backfill-from-missing-column path is what the Doris read exercises.
@@ -74,9 +50,8 @@ def main() -> None:
     rows = con.execute(
         "SELECT a, b FROM lake.tpch.default_probe ORDER BY a"
     ).fetchall()
+    validate_rows(rows, FIXTURES["defaults"])
     print(f"DuckDB readback of tpch.default_probe: {rows}", flush=True)
-
-    con.execute("DETACH lake")
 
 
 if __name__ == "__main__":
