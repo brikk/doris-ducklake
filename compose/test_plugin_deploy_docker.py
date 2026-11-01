@@ -41,7 +41,7 @@ class DockerDeploymentTests(unittest.TestCase):
             deployment.event("lifecycle-only-test-not-provider-attested")
 
     def test_transport_restart_backup_claim_collision_and_interrupted_owner(self):
-        base = Path("/tmp/opencode")
+        base = Path(os.environ.get("F24_DOCKER_TEST_ROOT", "/tmp/opencode"))
         with tempfile.TemporaryDirectory(prefix="f24-c-transport-", dir=base) as temporary:
             root = Path(temporary)
             identifier = "f24-c-transport-" + uuid.uuid4().hex[:16]

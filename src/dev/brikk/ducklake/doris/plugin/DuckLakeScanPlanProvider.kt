@@ -873,7 +873,7 @@ internal class DuckLakeScanPlanProvider(
         // the requested column handles + the active files' name maps; decoded
         // back onto the params in populateScanLevelParams. See
         // DuckLakeSchemaDictionary.
-        schemaDictionaryProp(columns, mappingIds, hivePartitionColumnIds)
+        schemaDictionaryProp(dlHandle, columns, mappingIds, hivePartitionColumnIds)
             ?.let { out[PROP_SCHEMA_DICTIONARY] = it }
 
         // Path partition keys: declare the hive-layout partition columns at the
@@ -911,6 +911,7 @@ internal class DuckLakeScanPlanProvider(
      * missing field id data file" on the partition slot.
      */
     private fun schemaDictionaryProp(
+        handle: DuckLakeTableHandle,
         columns: List<ConnectorColumnHandle>,
         mappingIds: Set<Long>,
         hivePartitionColumnIds: Set<Long>,
@@ -921,7 +922,7 @@ internal class DuckLakeScanPlanProvider(
         }
         val bodyColumns = dlColumns.filter { it.columnId !in hivePartitionColumnIds }
         val nameMaps = if (mappingIds.isEmpty()) emptyList() else catalog.getNameMaps(mappingIds).values
-        return DuckLakeSchemaDictionary.encode(bodyColumns, nameMaps)
+        return encodeReadSchemaDictionary(catalog, handle, bodyColumns, nameMaps, mappingIds.isNotEmpty())
     }
 
     /**

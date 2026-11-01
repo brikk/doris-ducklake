@@ -22,7 +22,7 @@ detekt {
     config.setFrom(rootProject.file("config/detekt/detekt.yml"))
     baseline = file("detekt-baseline.xml")
     source.setFrom("src", "test/src",
-        if (providers.gradleProperty("r07CatalogRepository").isPresent) "read-tiers/r07" else "read-tiers/released")
+        if (providers.gradleProperty("catalogReadCorrectnessCandidate").orNull == "true") "read-tiers/r07" else "read-tiers/released")
 }
 
 // Doris FE pins to JDK 17, so emit JDK 17 bytecode/ABI — but compile with the project-wide
@@ -77,33 +77,37 @@ repositories {
 
 val dorisVersion = "1.2-SNAPSHOT"
 
-// Local qualification only. Without this property the released 0.12.0 lane is unchanged.
+// Explicit candidate only. The released 0.12.0 lane and default output remain unchanged.
 // Do not use maven.repo.local: Doris's exclusive FE/SPI repository above must stay intact.
-val r07Repository = providers.gradleProperty("r07CatalogRepository")
-val r07Version = "0.13.0-SNAPSHOT"
-kotlin.sourceSets.main { kotlin.srcDir(if (r07Repository.isPresent) "read-tiers/r07" else "read-tiers/released") }
-if (r07Repository.isPresent) {
+val readCorrectnessCandidate = providers.gradleProperty("catalogReadCorrectnessCandidate").orNull == "true"
+check(!providers.gradleProperty("r07CatalogRepository").isPresent) {
+    "Local R07 repositories are retired; use -PcatalogReadCorrectnessCandidate=true for the published pinned candidate"
+}
+val r07Version = "0.13.0-20261101.082015-33"
+val candidateModules = setOf("ducklake-catalog", "slt-format", "ducklake-test-corpus-replay")
+kotlin.sourceSets.main { kotlin.srcDir(if (readCorrectnessCandidate) "read-tiers/r07" else "read-tiers/released") }
+if (readCorrectnessCandidate) {
+    // Honor an already isolated acceptance init-script output, never replace the default ZIP.
+    if (layout.buildDirectory.get().asFile == layout.projectDirectory.dir("build").asFile) {
+        layout.buildDirectory.set(layout.projectDirectory.dir("build/catalog-read-correctness-33"))
+    }
     kotlin.sourceSets.test { kotlin.srcDir("test/r07") }
     repositories.exclusiveContent {
         forRepository {
             repositories.maven {
                 name = "r07CatalogCandidate"
-                url = uri(r07Repository.get())
+                url = uri("https://central.sonatype.com/repository/maven-snapshots/")
                 metadataSources { gradleMetadata(); mavenPom() }
             }
         }
         filter {
-            listOf("ducklake-catalog", "slt-format", "ducklake-test-corpus-replay").forEach {
-                includeVersion("dev.brikk.ducklake", it, r07Version)
+            candidateModules.forEach {
+                includeModule("dev.brikk.ducklake", it)
             }
         }
     }
     configurations.configureEach {
         resolutionStrategy.eachDependency {
-            if (requested.group == "dev.brikk.ducklake" && requested.name in
-                setOf("ducklake-catalog", "slt-format", "ducklake-test-corpus-replay")) {
-                useVersion(r07Version)
-            }
             if (requested.group == "org.duckdb" && requested.name == "duckdb_jdbc") {
                 useVersion("2.0.0.0")
             }
@@ -113,17 +117,28 @@ if (r07Repository.isPresent) {
 
 val verifyR07Candidate by tasks.registering {
     group = "verification"
-    description = "Attests resolved R07 runtime/fixture JAR bytes (local opt-in only)."
+    description = "Attests published read-correctness candidate coordinates and all four JARs."
     doLast {
-        check(r07Repository.isPresent) { "Set -Pr07CatalogRepository to the immutable candidate repository" }
+        check(readCorrectnessCandidate) { "Set -PcatalogReadCorrectnessCandidate=true" }
         val expected = mapOf(
-            "ducklake-catalog-$r07Version.jar" to "9ae564720d48b78f8aa6d4349cc082a8ff11815dfe8a9e639a5c140cc95cbab6",
+            "ducklake-catalog-$r07Version.jar" to "01ffed5abb0b970b307dd4de1b7d7ab42320e33016447896204e5a36506a3041",
             "ducklake-catalog-$r07Version-test-fixtures.jar" to "ca33bee56b33703ea7bbe7b76153bbaccc0275478fc992d48768eb912a1a056f",
-            "ducklake-test-corpus-replay-$r07Version.jar" to "c8f847d4ba8ca8509a8b3a47c709c1e86b34e50c2c4e3c824b79e1256cba85a4",
+            "ducklake-test-corpus-replay-$r07Version.jar" to "bd97eba965f2234faa75cf27a788c45a70d4f030115e51b7506104267a9899b1",
             "slt-format-$r07Version.jar" to "6406d8fdf2ed16c7fd59465fbeeeb5d1f6e06274357bfd4b3516f779d2bfc409",
             "duckdb_jdbc-2.0.0.0.jar" to "5170daa90a43296705127ef3c80834ba1cd275ec9d765a9f7eee346ab0087186",
         )
         val resolved = configurations.testRuntimeClasspath.get().files
+        val identities = listOf("compileClasspath", "runtimeClasspath", "testCompileClasspath", "testRuntimeClasspath").flatMap { name ->
+            configurations.getByName(name).incoming.artifacts.artifacts.mapNotNull { artifact ->
+                val id = artifact.id.componentIdentifier as? ModuleComponentIdentifier
+                if (id?.group == "dev.brikk.ducklake" && id.module in candidateModules) {
+                    check(id.displayName.endsWith(":0.13.0-SNAPSHOT:20261101.082015-33")) {
+                        "Mixed candidate component on $name: $id"
+                    }
+                    "$name ${id.displayName} ${artifact.file.name} ${artifact.variant.displayName}"
+                } else null
+            }
+        }
         expected.forEach { (name, hash) ->
             val jar = resolved.single { it.name == name }
             val actual = MessageDigest.getInstance("SHA-256")
@@ -131,12 +146,14 @@ val verifyR07Candidate by tasks.registering {
             check(actual == hash) { "Candidate checksum mismatch: $jar ($actual)" }
             println("R07 SHA256 $actual $jar")
         }
-        check(resolved.none { it.name.matches(Regex("(ducklake-catalog|ducklake-test-corpus-replay|slt-format)-0\\.12\\.0.*")) })
+        val report = layout.buildDirectory.file("reports/catalog-candidate-identity.txt").get().asFile
+        report.parentFile.mkdirs()
+        report.writeText(identities.sorted().joinToString("\n", postfix = "\n"))
     }
 }
 
 tasks.withType<Test>().configureEach {
-    if (r07Repository.isPresent) {
+    if (readCorrectnessCandidate) {
         dependsOn(verifyR07Candidate)
         systemProperty("doris.r07", "true")
     }
@@ -185,7 +202,18 @@ dependencies {
     compileOnly("org.apache.avro:avro:1.12.1")
     compileOnly("org.apache.hadoop:hadoop-common:3.4.2")
 
-    implementation(libs.ducklake.catalog)
+    if (readCorrectnessCandidate) {
+        implementation("dev.brikk.ducklake:ducklake-catalog:$r07Version") { version { strictly(r07Version) } }
+        testImplementation(testFixtures("dev.brikk.ducklake:ducklake-catalog:$r07Version"))
+        testImplementation("dev.brikk.ducklake:ducklake-test-corpus-replay:$r07Version") { version { strictly(r07Version) } }
+        constraints {
+            testImplementation("dev.brikk.ducklake:slt-format:$r07Version") { version { strictly(r07Version) } }
+        }
+    } else {
+        implementation(libs.ducklake.catalog)
+        testImplementation(testFixtures(libs.ducklake.catalog))
+        testImplementation(libs.ducklake.test.corpus.replay)
+    }
 
     // S3-compatible object-store client for FE-side warehouse blob ops (cleanup_old_files:
     // physically delete files that expire_snapshots scheduled). The connector talks to blob
@@ -239,7 +267,6 @@ dependencies {
 
     // Shared Testcontainer fixture lives in the catalog's java-test-fixtures source set,
     // published as the -test-fixtures variant of dev.brikk.ducklake:ducklake-catalog.
-    testImplementation(testFixtures(libs.ducklake.catalog))
     testImplementation(libs.postgres.jdbc)
     // Used by tests to bootstrap the DuckLake metadata schema in Postgres via DuckDB's
     // postgres + ducklake extensions — same pattern as :ducklake-catalog and :trino-ducklake.
@@ -248,7 +275,6 @@ dependencies {
     // Corpus replay adapter (DorisReplayEngine): the runner seam + the mysql-protocol
     // driver the adapter uses to reach the live compose FE. Test-only; the corpus
     // test itself runs via the dedicated :doris-ducklake:corpusReplayTest task.
-    testImplementation(libs.ducklake.test.corpus.replay)
     testRuntimeOnly("com.mysql:mysql-connector-j:9.5.0")
 }
 
@@ -373,7 +399,7 @@ tasks.jar {
 // iceberg reference (api/spi/extension-spi/filesystem-api/logging) plus
 // fe-thrift, which is provided by fe-core at runtime.
 val pluginZip by tasks.registering(Zip::class) {
-    if (r07Repository.isPresent) dependsOn(verifyR07Candidate)
+    if (readCorrectnessCandidate) dependsOn(verifyR07Candidate)
     dependsOn(tasks.jar)
     archiveBaseName.set("doris-ducklake")
     archiveClassifier.set("plugin")
@@ -428,6 +454,7 @@ tasks.test {
     exclude("**/DuckLakeR07QualificationTest*")
     exclude("**/DuckLakeR07LiveQualificationTest*")
     exclude("**/DuckLakeR07LongPartitionNativeTest*")
+    exclude("**/DuckLakeReadCorrectnessLiveTest*")
     classpath = prependParquetFormat(classpath)
 }
 
@@ -444,7 +471,19 @@ tasks.register<Test>("java17PluginTest") {
     exclude("**/DuckLakeR07LongPartitionNativeTest*")
 }
 
-if (r07Repository.isPresent) {
+if (readCorrectnessCandidate) {
+    for ((taskName, jvm) in listOf("readCorrectnessLiveTest" to 25, "readCorrectnessLiveJava17Test" to 17)) {
+        tasks.register<Test>(taskName) {
+            description = "Bounded N03/H15/N19 probes on explicitly owned API26 infrastructure; no full corpus."
+            group = "verification"
+            testClassesDirs = sourceSets.test.get().output.classesDirs
+            classpath = prependParquetFormat(sourceSets.test.get().runtimeClasspath)
+            javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(jvm)) })
+            useJUnitPlatform()
+            include("**/DuckLakeReadCorrectnessLiveTest*")
+            outputs.upToDateWhen { false }
+        }
+    }
     tasks.register<Test>("r07ReadQualificationTest") {
         description = "Targeted native R07 consumer probes; no corpus campaign or deployment."
         group = "verification"

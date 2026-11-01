@@ -11,6 +11,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import dev.brikk.ducklake.corpus.OracleAttachment
 import dev.brikk.ducklake.corpus.ReplayEngineSkip
 import dev.brikk.ducklake.corpus.ReplayReadEngine
+import dev.brikk.ducklake.corpus.GoldenComparator
 
 /**
  * [ReplayReadEngine] adapter: mirrors corpus lake reads through a LIVE compose
@@ -227,7 +228,7 @@ internal class DorisReplayEngine(
         val rows = mutableListOf<List<String?>>()
         while (rs.next()) {
             rows += (1..cols).map { i ->
-                DorisValueNormalizer.normalize(rs.getObject(i), logicalBoolean[i - 1])
+                normalizeReplayCell(rs.getObject(i), logicalBoolean[i - 1])
             }
         }
         return rows
@@ -251,3 +252,8 @@ internal class DorisReplayEngine(
         runCatching { pg.close() }
     }
 }
+
+/** Replay's pinned native floating renderer, while retaining Doris Boolean/blob/temporal rules. */
+internal fun normalizeReplayCell(value: Any?, logicalBoolean: Boolean = false): String? =
+    if (value is Float || value is Double) GoldenComparator.renderCell(value)
+    else DorisValueNormalizer.normalize(value, logicalBoolean)

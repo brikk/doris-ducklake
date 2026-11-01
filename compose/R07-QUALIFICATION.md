@@ -1,5 +1,13 @@
 # Isolated R07 local trial
 
+**Historical API13 campaign instructions.** The local `r07CatalogRepository`
+override below is retired and deliberately refuses in the current build. Do not
+install today's API26 bundle into this retained stack or reinterpret these old
+results as testing a new catalog. The current published `-33` candidate uses
+`-PcatalogReadCorrectnessCandidate=true`, isolated output and the bounded API26
+runner documented in
+[read-correctness qualification](../dev-docs/VALIDATION-CATALOG-READ-CORRECTNESS-2026-11-01.md).
+
 This is **qualification, not deployment or 1.1 enablement**. It does not use the
 normal smoke driver (which includes writes/maintenance), the shared Trino
 substrate, the shared Doris containers, or any shared FE/BE filesystem mount.

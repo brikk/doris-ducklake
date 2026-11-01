@@ -35,8 +35,11 @@ transport and is not permission to stage scratch objects or clean up lake files.
 **No Doris 1.1 rollout is qualified.** Reader construction explicitly refuses
 final-1.1 before exposing metadata, write plans or maintenance. Merely resolving
 a table handle with the library flag off was not a safe admission check.
-The released 0.12.0 dependency remains the default; a checksum-locked local
-0.13.0-SNAPSHOT trial requires `-Pr07CatalogRepository=...`.
+The released 0.12.0 dependency remains the default. The old local
+`r07CatalogRepository` override is retired; the separate published `-33` candidate
+uses `-PcatalogReadCorrectnessCandidate=true`, isolated output and strict pins.
+See [the November1 intake](VALIDATION-CATALOG-READ-CORRECTNESS-2026-11-01.md);
+it does not relabel the historical API13 campaign below as API26 qualification.
 
 For explicitly injected opt-in catalogs in qualification tests, the planner
 additionally refuses historical file scans regardless of nullable `partial_max`,
