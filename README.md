@@ -5,7 +5,7 @@
 > table format (spec v1.0). It targets the `fe-connector` catalog SPI, which
 > **merged into Apache Doris `master`** (`#64304` *decouple external catalogs
 > from FE core into loadable connector plugins*, + the `fe/fe-connector` tree);
-> we target apache/doris `master` (source/SPI pin `62e3d81a42b`, plugin API **24.0**), **not** the
+> we target apache/doris `master` (source/SPI pin `8e10b235cf0`, plugin API **26.0**), **not** the
 > now-retired brikk fork `branch-catalog-spi`. The SPI is not in any tagged
 > Doris *release* yet, so a stock released Doris build still can't load it —
 > build the FE from master (see [`fe-patches/`](fe-patches/); PATCH-FREE). The
@@ -14,10 +14,11 @@
 > DuckLake adapter for an OLAP engine today, use
 > [`trino-ducklake`](../trino-ducklake/) instead.
 
-As checked on 2026-10-28, latest stable is **4.1.5**; the fetched `branch-4.2`
+As checked on 2026-10-31, latest stable is **4.1.5**; the fetched `branch-4.2`
 still lacks `fe/fe-connector`. Master/future 5.x is the plugin target.
-An API-24 plugin requires an API-24 FE; the `62e3d81a42b` re-vendor also requires
-matching FE/BE and the complete JNI-6 distribution because wire contracts changed.
+An API-26 plugin requires an API-26 FE and filesystem API 7; the `8e10b235cf0`
+re-vendor uses matching FE/BE and the complete JNI-6 distribution. API equality
+alone is not source/wire/runtime qualification.
 Connector and matching FE/BE isolated smoke qualification are green on this pin.
 The BE is an ASAN validation build, not a performance-qualified release build.
 The September API-9 FE + stock-4.1.4 smoke is historical evidence only; it does
@@ -67,7 +68,7 @@ toolchain (Kotlin emits 17 bytecode). Managed via [mise](https://mise.jdx.dev/)
 ```
 
 Install the matching Doris SPI/Thrift closure first (see the
-[build/qualification report](dev-docs/VALIDATION-DORIS-API24-2026-10-28.md)).
+[build/qualification report](dev-docs/VALIDATION-DORIS-API26-2026-10-31.md)).
 For isolated qualification, `-PdorisRepository=/path/to/pinned/repository` selects
 only the `org.apache.doris` artifacts; the default remains `mavenLocal()`.
 

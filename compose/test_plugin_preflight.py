@@ -64,9 +64,11 @@ class PluginArtifactTests(unittest.TestCase):
                 self.verify()
 
     def test_api_major_is_not_an_arbitrary_override(self):
-        write_plugin(self.archive, api="13.0")
-        with self.assertRaisesRegex(ValueError, "schema/API"):
-            self.verify()
+        for api in ("13.0", "24.0", "25.0"):
+            with self.subTest(api=api):
+                write_plugin(self.archive, api=api)
+                with self.assertRaisesRegex(ValueError, "schema/API"):
+                    self.verify()
 
     def test_malformed_receipt_object_and_duplicate_keys_are_rejected(self):
         write_plugin(self.archive)

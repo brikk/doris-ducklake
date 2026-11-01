@@ -327,7 +327,7 @@ tasks.register("qualificationDependencies") {
 // ConnectorMvccSnapshot) -> 9 (#68027 Hive OpenCSV) -> 10 (#66530 statement scan reuse)
 // -> 11 (#68320 generic write/DML contracts) -> 12 (#66399 Fluss scan capabilities)
 // -> 13 (#68786 binary/UUID/timestamp contracts) -> 24 (#69298 query task scheduling).
-// Current pin: 62e3d81a42b; matching FE/ASAN-BE qualification is recorded in FE-PATCHES.md.
+// Current pin: 8e10b235cf0; matching FE/ASAN-BE qualification is recorded in FE-PATCHES.md.
 // DuckLake retains INSERT-only writes and its existing type mappings; new opt-ins stay off.
 // Keep this equal to the pinned FE/SPI major. FE and BE must upgrade together: #68785/#68822
 // realigned Thrift field ids and are not compatible with an older master runtime pair.
@@ -344,7 +344,7 @@ val pluginIdentity by tasks.registering(GeneratePluginIdentity::class) {
     group = "build"
     description = "Fingerprints effective plugin payload/runtime bytes without Git/mtime or self-hash cycles."
     dependsOn(tasks.classes)
-    apiVersion.set("24.0")
+    apiVersion.set("26.0")
     payloadRoots.from(sourceSets.main.get().output)
     runtimeJars.from(packagedRuntimeJars)
     compileSdkJars.from(configurations.compileClasspath.get().incoming.artifactView {
@@ -359,7 +359,7 @@ tasks.jar {
     isPreserveFileTimestamps = false
     isReproducibleFileOrder = true
     manifest {
-        attributes("Doris-Connector-Plugin-Api-Version" to "24.0")
+        attributes("Doris-Connector-Plugin-Api-Version" to "26.0")
     }
     doFirst {
         manifest.attributes("Implementation-Version" to

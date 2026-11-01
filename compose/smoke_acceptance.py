@@ -35,7 +35,8 @@ class FullSmokeAcceptance(Acceptance):
             "command": ["sh", "-ec", 'pip install --quiet --no-cache-dir "duckdb==1.5.6"; exec python /bootstrap/init_ducklake.py']}
         write_json(self.substrate_file, config)
 
-    def full_phase(self, name, corrupt=False):
+    def full_phase(self, name, corrupt=False, bundle="B"):
+        require(bundle in self.bundles, "Unknown acceptance bundle")
         evidence = self.compose.parent / "build/smoke-deployments"
         before = set(evidence.glob("deploy-*")) if evidence.exists() else set()
         log = self.root / (name + "-docker.jsonl")
@@ -48,9 +49,9 @@ class FullSmokeAcceptance(Acceptance):
         write_json(path, spec)
         env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ.get("PATH", ""),
                    F24_ACCEPTANCE_DOCKER=str(path), PYTHONDONTWRITEBYTECODE="1", DORIS_FE_STARTUP_TIMEOUT="300",
-                   DORIS_EXPECTED_SOURCE="62e3d81a42b", DORIS_BE_PLATFORM="linux/amd64", DORIS_CORPUS_DIR=str(self.root / "corpus"))
+                   DORIS_EXPECTED_SOURCE="8e10b235cf0", DORIS_BE_PLATFORM="linux/amd64", DORIS_CORPUS_DIR=str(self.root / "corpus"))
         self.started = True
-        result = subprocess.run(["bash", str(self.compose / "smoke.sh"), "--plugin-zip", str(self.bundles["B"])],
+        result = subprocess.run(["bash", str(self.compose / "smoke.sh"), "--plugin-zip", str(self.bundles[bundle])],
                                 cwd=self.root, env=env, text=True, capture_output=True, timeout=1200)
         (self.root / (name + ".log")).write_text(result.stdout + result.stderr)
         created = set(evidence.glob("deploy-*")) - before
@@ -60,7 +61,8 @@ class FullSmokeAcceptance(Acceptance):
         ledger = json.loads((folder / "smoke-assertions.json").read_text()) if (folder / "smoke-assertions.json").exists() else {}
         records = [json.loads(line) for line in log.read_text().splitlines()]
         require(not any(r.get("scope_allowed") is False for r in records), "A foreign target was attempted")
-        self.result["phases"][name] = {"exit_code": result.returncode, "evidence": str(folder), "run_result": run,
+        self.result["phases"][name] = {"bundle": bundle, "build_id": self.artifacts[bundle]["build_id"],
+                                     "exit_code": result.returncode, "evidence": str(folder), "run_result": run,
                                      "assertion_status": ledger.get("status"), "checks": ledger.get("checks", [])}
         if corrupt:
             require(result.returncode != 0 and not run["run_success"] and not run["smoke_correctness_passed"], "Wrong tuple reached success")

@@ -15,8 +15,8 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
  > from FE core into loadable connector plugins* + the whole `fe/fe-connector` tree, incl.
  > `fe-connector-api` / `fe-connector-spi`). We now vendor from **`~/DEV/OSS/doris`, branch
  > `master`** (apache/doris), **not** the retired brikk fork `branch-catalog-spi`. Current
-  > source/SPI pin: **`62e3d81a42b`** (apache/doris master, connector-qualified 2026-10-28).
-  > Last runtime-validated FE/BE pin: **`62e3d81a42b`** (2026-10-28, ASAN BE). Master's `<revision>` is still
+  > source/SPI pin: **`8e10b235cf0`** (apache/doris master, connector-qualified 2026-10-31).
+  > Last runtime-validated FE/BE pin: **`8e10b235cf0`** (2026-10-31, ASAN BE). Master's `<revision>` is still
  > `1.2-SNAPSHOT`, so the installed `~/.m2` coordinates are unchanged.
  > **SPI-surface note:** #66407 merged `fe-connector-api` INTO `fe-connector-spi` and renamed the
  > `org.apache.doris.connector.api.*` packages to `…spi.*`. We now depend on **only** the
@@ -25,13 +25,58 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
  > stepped **1 -> 5 (#66407) -> 6 (#66413) -> 7 (#67182) -> 8 (#67904) -> 9 (#68027)**;
  > then **10 (#66530) -> 11 (#68320) -> 12 (#66399) -> 13 (#68786)**;
   > then **14 -> 15 -> 17 -> 18 -> 19 -> 20 -> 21 -> 22 -> 23 -> 24 (#69298)**;
-  > we stamp **`24.0`** in `build.gradle.kts` to match the source/SPI pin.
-  > **Deploy together:** the API-24 ZIP needs an API-24 FE; #68837 and #68785/#68822 require
+  > then **25 (#69683) -> 26 (#69835)**; we stamp **`26.0`** in `build.gradle.kts`.
+  > **Deploy together:** the API-26 ZIP needs an API-26 FE / filesystem API 7; #68837 and #68785/#68822 require
  > matching regenerated FE/BE Thrift. Matching-engine smoke qualification passed; the September
  > API-9 FE + stock-4.1.4 smoke does not qualify the new artifacts.
  > Keep this note, the Re-vendor log, and `compose/README.md` in sync.
 
 ### Re-vendor log
+
+- **2026-10-31 -> source/SPI/runtime pin `8e10b235cf0`**
+  (full SHA `8e10b235cf030d486b6840cfd64b6218ab515e6d`,59 commits beyond
+  `62e3d81a42b`). Pristine independent worktree
+  `/home/jayson/DEV/OSS/doris-ducklake-api26-8e10b235`; shared staged Duckbridge
+  work and retained stacks are preserved. No kernel production patch.
+
+  **Compatibility:** connector API24->26, filesystem API6->7, JNI6, BE execution19,
+  Thrift0.24.0 and Maven1.2-SNAPSHOT. API25 bounds split queues; API26 adds query-owned
+  scan cancellation/progress and lifetime cleanup. DuckLake remains synchronous,
+  with batching/streaming and other capability opt-ins disabled. New defaults are
+  not automatically adopted. A packaging guard now rejects a target manifest API
+  built from the wrong/missing/duplicate SDK declaration, including the actual
+  old-mavenLocal SDK24 negative control.
+
+  **Builds:** same verified October27 immutable build image, JDK17 and ASAN.
+  Full FE and complete native BE/JNI/CDC pass. Initial final native links hit
+  cgroup OOM in parallel; preserved objects were successfully linked serially
+  with one linker thread,8GiB/no extra swap. No sanitizer, package or glibc gate
+  was disabled. Native maximum undefined GLIBC is2.10; all9 JNI plugins pass
+  all6 static layout checks. Five exported compile JARs match actual FE host
+  bytes; only the eight rebuilt reactor modules are exported.
+
+  **Checks:** released catalog0.12.0/JDBC1.5.6.0 unchanged. Fresh candidate Java25
+  266passed/one existing skip, Java17 235passed/same skip;8 build-logic and130
+  frozen-source Python checks pass, plus Detekt/Java17 ABI/package gates.
+  Exact candidate A passes two real full28-check supported smokes, with A/B
+  loaded identity, preserved metadata/read/rollback, explicit persisted FE restart,
+  three TopN/type/native-write probe stages and450 exact DEFAULT queries. Same-count
+  tuple corruption and stale loaded-provider responses both refuse without current
+  passing negative receipts; stale provider refuses before allocation. Native S3
+  leaves JNI uninitialized. Disposable owned resources are cleaned.
+
+  **Images:** FE `doris-fe:ducklake-8e10b235-api26`, ID
+  `sha256:509f6ee46af21a51407788bef5df9afe878197d38ec3439e3edcdeaf98fad317`;
+  BE `doris-be:ducklake-8e10b235-api26-asan`, ID
+  `sha256:2155eba1d7a51b1a00e1c02972876b7fbcb36fb3058b28fa1f16f7b6516c80fb`.
+  Default pointers/volume names are source-qualified and separate from retained
+  API24/API13 artifacts. No in-place metadata migration, production/performance,
+  R07 campaign, JDBC/Quack or all-JNI-runtime qualification is claimed.
+
+  Promotion/final default checks and Duckbridge delivery are recorded in the
+  [API26 validation](../dev-docs/VALIDATION-DORIS-API26-2026-10-31.md) and
+  [build-reuse handoff](../dev-docs/HANDOFF-DUCKBRIDGE-DORIS-8e10b235-API26.md).
+  Historical API24 evidence and rollback remain below, not relabelled as API26.
 
 - **2026-10-28 -> source/SPI/runtime pin `62e3d81a42b`**
   (`[fix](iceberg) Refresh table before classifying expired files (#69703)`).

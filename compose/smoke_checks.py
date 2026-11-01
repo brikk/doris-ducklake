@@ -17,7 +17,7 @@ import sys
 from plugin_preflight import require
 
 
-SCOPE = "doris-smoke-supported-api24-v1"
+SCOPE = "doris-smoke-supported-api26-v1"
 REQUIRED = (
     "tpch_counts", "tpch_sample", "nullable_counts", "nullable_rows", "filter_plan", "filter_rows", "delete_file", "delete_count", "delete_rows",
     "ddl_schema_create", "ddl_columns", "ddl_empty", "ddl_insert", "ddl_bucket", "ddl_drop", "w2_rows", "w2_files",

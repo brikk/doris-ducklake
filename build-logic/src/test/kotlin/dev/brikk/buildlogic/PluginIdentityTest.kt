@@ -3,6 +3,7 @@ package dev.brikk.buildlogic
 import java.nio.file.Path
 import java.util.jar.Attributes
 import java.util.jar.JarOutputStream
+import java.util.jar.JarEntry
 import java.util.jar.Manifest
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
@@ -45,6 +46,27 @@ class PluginIdentityTest {
     fun sortingUsesUtf8RatherThanPlatformOrUtf16Order() {
         val entries = linkedMapOf("\uD800\uDC00.class" to a, "\uE000.class" to b)
         assertThat(PluginIdentity.sorted(entries).keys).containsExactly("\uE000.class", "\uD800\uDC00.class")
+    }
+
+    @Test
+    fun compileSdkMustDeclareExactlyTheTargetApi() {
+        val sdk = sdkJar("current.jar", "26.0")
+        PluginIdentity.verifyCompileSdk(setOf(sdk), "26.0")
+        for (files in listOf(setOf(sdkJar("old.jar", "24.0")), setOf(sdkJar("absent.jar", null)),
+                             setOf(sdkJar("blank.jar", "")), setOf(sdk, sdkJar("duplicate.jar", "26.0")))) {
+            assertThatThrownBy { PluginIdentity.verifyCompileSdk(files, "26.0") }
+                .isInstanceOf(IllegalArgumentException::class.java).hasMessageContaining("Compile SDK API")
+        }
+    }
+
+    private fun sdkJar(name: String, api: String?) = directory.resolve(name).toFile().also { file ->
+        JarOutputStream(file.outputStream()).use { jar ->
+            if (api != null) {
+                jar.putNextEntry(JarEntry(PluginIdentity.SDK_API_RESOURCE))
+                jar.write("api.version=$api\n".toByteArray())
+                jar.closeEntry()
+            }
+        }
     }
 
     @Test

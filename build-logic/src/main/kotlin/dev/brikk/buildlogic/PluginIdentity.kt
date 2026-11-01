@@ -6,6 +6,7 @@ import java.io.File
 import java.io.InputStream
 import java.nio.charset.StandardCharsets.UTF_8
 import java.security.MessageDigest
+import java.util.Properties
 import java.util.jar.Attributes
 import java.util.jar.Manifest
 import java.util.zip.ZipFile
@@ -30,6 +31,7 @@ object PluginIdentity {
     const val PROVIDER_PACKAGE = "dev/brikk/ducklake/doris/plugin/"
     const val PROVIDER_CLASS = "${PROVIDER_PACKAGE}DuckLakeConnectorProvider.class"
     const val PROVIDER_SERVICE = "META-INF/services/org.apache.doris.connector.spi.ConnectorProvider"
+    const val SDK_API_RESOURCE = "META-INF/doris/connector-plugin-api-version.properties"
 
     fun sha256(input: InputStream): String = input.use { stream ->
         val digest = MessageDigest.getInstance("SHA-256")
@@ -70,6 +72,22 @@ object PluginIdentity {
 
     fun sdkId(sdk: Map<String, String>): String =
         sha256(("doris-compile-sdk-v1\n" + records("S", sdk)).byteInputStream(UTF_8))
+
+    /** A new manifest must never be stamped using an old SNAPSHOT SDK from mavenLocal. */
+    fun verifyCompileSdk(files: Set<File>, api: String) {
+        val declarations = files.mapNotNull { file ->
+            ZipFile(file).use { zip ->
+                zip.getEntry(SDK_API_RESOURCE)?.let { entry ->
+                    val properties = Properties()
+                    zip.getInputStream(entry).use(properties::load)
+                    properties.getProperty("api.version", "")
+                }
+            }
+        }
+        require(declarations.size == 1 && declarations.single() == api) {
+            "Compile SDK API declarations $declarations do not match target $api; rebuild/select the matching Doris SDK"
+        }
+    }
 
     fun jarPayload(file: File): Map<String, String> = ZipFile(file).use { zip ->
         val result = linkedMapOf<String, String>()
@@ -138,6 +156,7 @@ abstract class GeneratePluginIdentity : DefaultTask() {
         val runtime = jarHashes(runtimeJars.files, "lib/")
         val sdk = jarHashes(compileSdkJars.files, "")
         require(sdk.isNotEmpty()) { "Compile SDK identity is missing" }
+        PluginIdentity.verifyCompileSdk(compileSdkJars.files, apiVersion.get())
         PluginIdentity.writeJson(identityFile.get().asFile, linkedMapOf(
             "schema" to PluginIdentity.SCHEMA,
             "api_version" to apiVersion.get(),

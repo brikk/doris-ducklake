@@ -43,12 +43,12 @@ def write_plugin(path, payload_value=b"compiled-A", dependency=b"dependency-A", 
 
 def compose_target():
     return {"name": "doris-ducklake-dev", "services": {"doris-fe": {
-        "container_name": "doris-ducklake-fe", "image": "doris-fe:ducklake-62e3d81a-api24",
+        "container_name": "doris-ducklake-fe", "image": "doris-fe:ducklake-8e10b235-api26",
         "volumes": [{"type": "volume", "source": "fe-plugin-ducklake",
                      "target": "/opt/apache-doris/fe/plugins/connector/ducklake"}], "networks": {"shared": {}}},
-        "doris-be": {"container_name": "doris-ducklake-be", "image": "doris-be:ducklake-62e3d81a-api24-asan", "networks": {"shared": {}}}},
+        "doris-be": {"container_name": "doris-ducklake-be", "image": "doris-be:ducklake-8e10b235-api26-asan", "networks": {"shared": {}}}},
         "networks": {"shared": {"name": "trino-ducklake-dev_default", "external": True}},
-        "volumes": {"fe-plugin-ducklake": {"name": "doris-ducklake-api24-62e3d81a-fe-plugin-ducklake"}}}
+        "volumes": {"fe-plugin-ducklake": {"name": "doris-ducklake-api26-8e10b235-fe-plugin-ducklake"}}}
 
 
 def substrate_target(custom=False):

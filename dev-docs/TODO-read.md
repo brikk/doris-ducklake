@@ -1,5 +1,14 @@
 # DuckLake-on-Doris — READ-path Working TODO
 
+**2026-10-31 runtime re-vendor:** qualified default pin is now `8e10b235cf0`,
+connector API26/filesystem7/JNI6. Full ASAN BE/JNI/CDC and FE, candidate/default
+JVM checks,130 Python checks, two exact-default full28-check smokes, A/B/rollback,
+persisted restart and typed probes pass. SDK/default ZIP are promoted as exact
+tested bytes; retained stacks and staged Duckbridge work are untouched. Build-reuse
+FYI is delivered to Duckbridge, not automatic adoption. See
+[API26 qualification and limits](VALIDATION-DORIS-API26-2026-10-31.md). No new
+streaming, inline/history/mapping or broader R07 capability is enabled.
+
 **2026-10-29 harness work:** F22 removes the cross-run startup sweep and restricts
 cleanup to acknowledged per-engine resources; see
 [ownership repair/evidence](VALIDATION-F22-CORPUS-OWNERSHIP-2026-10-29.md).

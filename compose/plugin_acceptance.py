@@ -20,15 +20,15 @@ import tempfile
 import uuid
 
 from plugin_deploy import claim_name, process_record
-from plugin_preflight import file_hash, require, verify_bundle
+from plugin_preflight import API, file_hash, require, verify_bundle
 from plugin_volume import verify_backup
 
 
-FE = "doris-fe:ducklake-62e3d81a-api24"
-BE = "doris-be:ducklake-62e3d81a-api24-asan"
+FE = "doris-fe:ducklake-8e10b235-api26"
+BE = "doris-be:ducklake-8e10b235-api26-asan"
 IMAGE_PINS = {
-    FE: "sha256:f41c6a1710c66f0d0ab0334d5431af85c2002e8399de09ae10b8559bccb8c22a",
-    BE: "sha256:ccca761cae5bc1e6122b4449c21d01117d74a095ce203cf9f4d27094ede8a2de",
+    FE: "sha256:509f6ee46af21a51407788bef5df9afe878197d38ec3439e3edcdeaf98fad317",
+    BE: "sha256:2155eba1d7a51b1a00e1c02972876b7fbcb36fb3058b28fa1f16f7b6516c80fb",
 }
 SCRIPTS = ("smoke.sh", "smoke_run.sh", "plugin_deploy.py", "plugin_attest.py", "plugin_preflight.py",
            "plugin_volume.py", "fe.conf", "smoke_lake.py", "step7-delete.py", "step-default.py", "w2-insert.py",
@@ -75,7 +75,7 @@ class Acceptance:
             self.artifacts[key] = verify_bundle(selected, selected.with_suffix(".identity.json"))
             self.bundles[key] = selected
         a, b = self.artifacts["A"], self.artifacts["B"]
-        require(a["build_id"] != b["build_id"] and a["api_version"] == b["api_version"] == "24.0", "A/B identity/API mismatch")
+        require(a["build_id"] != b["build_id"] and a["api_version"] == b["api_version"] == API, "A/B identity/API mismatch")
         require(a["provider_jar"] == b["provider_jar"] == "lib/doris-ducklake-0.0.1.jar", "A/B must share release version")
         require(a["compile_sdk"] == b["compile_sdk"] and a["compile_sdk_id"] == b["compile_sdk_id"], "A/B SDK differs")
         require({k: v for k, v in a["files"].items() if k != a["provider_jar"]} ==
@@ -107,7 +107,7 @@ class Acceptance:
 
     def protected(self):
         names = self.command(["container", "ls", "--all", "--format", "{{.Names}}"])
-        selected = [n for n in names.splitlines() if n.startswith(("doris-api24-", "doris-r07-", "doris-ducklake-", "trino-ducklake-"))]
+        selected = [n for n in names.splitlines() if n.startswith(("doris-api26-", "doris-api24-", "doris-r07-", "doris-ducklake-", "trino-ducklake-"))]
         containers = {}
         for name in selected:
             item = self.data("container", "inspect", name)[0]
@@ -195,7 +195,7 @@ class Acceptance:
         write_json(spec_path, spec)
         env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ.get("PATH", ""),
                    F24_ACCEPTANCE_DOCKER=str(spec_path), PYTHONDONTWRITEBYTECODE="1", DORIS_FE_STARTUP_TIMEOUT="300",
-                   DORIS_EXPECTED_SOURCE="62e3d81a42b", DORIS_BE_PLATFORM="linux/amd64", DORIS_CORPUS_DIR=str(self.root / "corpus"))
+                   DORIS_EXPECTED_SOURCE="8e10b235cf0", DORIS_BE_PLATFORM="linux/amd64", DORIS_CORPUS_DIR=str(self.root / "corpus"))
         args = ["bash", str(self.compose / "smoke.sh"), "--plugin-zip", str(self.bundles[bundle])]
         if not stale:
             args.append("--up-only")

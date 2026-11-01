@@ -1,4 +1,4 @@
-"""API-24 inventory parsing and run-receipt boundaries, without Docker."""
+"""API-24+ inventory parsing and run-receipt boundaries, without Docker."""
 
 import json
 from pathlib import Path

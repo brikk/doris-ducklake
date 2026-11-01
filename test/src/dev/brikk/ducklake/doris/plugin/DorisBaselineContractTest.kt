@@ -1,19 +1,23 @@
 package dev.brikk.ducklake.doris.plugin
 
 import java.util.Properties
+import java.util.concurrent.CancellationException
 
 import org.apache.doris.connector.spi.Connector
+import org.apache.doris.connector.spi.scan.ConnectorScanContext
+import org.apache.doris.connector.spi.scan.ConnectorScanRequest
 import org.apache.doris.thrift.TIcebergTableSink
 import org.apache.doris.thrift.TPaimonFileDesc
 import org.apache.doris.thrift.TQueryOptions
 import org.apache.doris.thrift.TReportExecStatusParams
 import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
 
-/** Pins the installed SPI and regenerated wire contract to 62e3d81a42b, not mutable Maven coordinates. */
+/** Pins the installed SPI and regenerated wire contract to 8e10b235cf0, not mutable Maven coordinates. */
 internal class DorisBaselineContractTest {
     @Test
-    fun installedSpiReportsApi24() {
+    fun installedSpiReportsApi26() {
         val properties = Properties()
         val resource = requireNotNull(
             Connector::class.java.getResourceAsStream(
@@ -21,7 +25,20 @@ internal class DorisBaselineContractTest {
             ),
         ) { "SPI API version resource missing" }
         resource.use { properties.load(it) }
-        assertThat(properties.getProperty("api.version")).isEqualTo("24.0")
+        assertThat(properties.getProperty("api.version")).isEqualTo("26.0")
+    }
+
+    @Test
+    fun api26RequestBatchesRetainTheSameExplicitCancellationContext() {
+        val context = ConnectorScanContext()
+        val handle = DuckLakeTableHandle("main", "facts", 1L, 2L, 3L)
+        val request = ConnectorScanRequest.builder(handle, emptyList()).scanContext(context).build()
+        val batch = request.withRequiredPartitions(listOf("p=1"))
+        assertThat(request.scanContext).isSameAs(context)
+        assertThat(batch.scanContext).isSameAs(context)
+        context.checkCancelled()
+        context.cancel()
+        assertThatThrownBy { batch.scanContext.checkCancelled() }.isInstanceOf(CancellationException::class.java)
     }
 
     @Test
