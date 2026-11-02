@@ -49,7 +49,7 @@ class FullSmokeAcceptance(Acceptance):
         write_json(path, spec)
         env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ.get("PATH", ""),
                    F24_ACCEPTANCE_DOCKER=str(path), PYTHONDONTWRITEBYTECODE="1", DORIS_FE_STARTUP_TIMEOUT="300",
-                   DORIS_EXPECTED_SOURCE="8e10b235cf0", DORIS_BE_PLATFORM="linux/amd64", DORIS_CORPUS_DIR=str(self.root / "corpus"))
+                   DORIS_EXPECTED_SOURCE="4bc7f426828", DORIS_BE_PLATFORM="linux/amd64", DORIS_CORPUS_DIR=str(self.root / "corpus"))
         self.started = True
         result = subprocess.run(["bash", str(self.compose / "smoke.sh"), "--plugin-zip", str(self.bundles[bundle])],
                                 cwd=self.root, env=env, text=True, capture_output=True, timeout=1200)

@@ -10,14 +10,15 @@ import org.apache.doris.thrift.TIcebergTableSink
 import org.apache.doris.thrift.TPaimonFileDesc
 import org.apache.doris.thrift.TQueryOptions
 import org.apache.doris.thrift.TReportExecStatusParams
+import org.apache.doris.thrift.TReportRequest
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
 
-/** Pins the installed SPI and regenerated wire contract to 8e10b235cf0, not mutable Maven coordinates. */
+/** Pins the installed SPI and regenerated wire contract to 4bc7f426828, not mutable Maven coordinates. */
 internal class DorisBaselineContractTest {
     @Test
-    fun installedSpiReportsApi26() {
+    fun installedSpiReportsApi27() {
         val properties = Properties()
         val resource = requireNotNull(
             Connector::class.java.getResourceAsStream(
@@ -25,7 +26,15 @@ internal class DorisBaselineContractTest {
             ),
         ) { "SPI API version resource missing" }
         resource.use { properties.load(it) }
-        assertThat(properties.getProperty("api.version")).isEqualTo("26.0")
+        assertThat(properties.getProperty("api.version")).isEqualTo("27.0")
+    }
+
+    @Test
+    fun scannerV2IsTheWireDefaultAndNewTelemetryFieldsAreAdditive() {
+        assertThat(TQueryOptions._Fields.ENABLE_FILE_SCANNER_V2.thriftFieldId).isEqualTo(1002.toShort())
+        assertThat(TQueryOptions().getFieldValue(TQueryOptions._Fields.ENABLE_FILE_SCANNER_V2)).isEqualTo(true)
+        assertThat(TReportRequest._Fields.TOP_QUERY_TABLETS.thriftFieldId).isEqualTo(18.toShort())
+        assertThat(TReportRequest._Fields.TOP_LOAD_TABLETS.thriftFieldId).isEqualTo(19.toShort())
     }
 
     @Test

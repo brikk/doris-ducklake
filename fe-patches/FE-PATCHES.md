@@ -15,8 +15,8 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
  > from FE core into loadable connector plugins* + the whole `fe/fe-connector` tree, incl.
  > `fe-connector-api` / `fe-connector-spi`). We now vendor from **`~/DEV/OSS/doris`, branch
  > `master`** (apache/doris), **not** the retired brikk fork `branch-catalog-spi`. Current
-  > source/SPI pin: **`8e10b235cf0`** (apache/doris master, connector-qualified 2026-10-31).
-  > Last runtime-validated FE/BE pin: **`8e10b235cf0`** (2026-10-31, ASAN BE). Master's `<revision>` is still
+  > source/SPI pin: **`4bc7f426828`** (apache/doris master, connector-qualified 2026-11-02).
+  > Last runtime-validated FE/BE pin: **`4bc7f426828`** (2026-11-02, ASAN BE). Master's `<revision>` is still
  > `1.2-SNAPSHOT`, so the installed `~/.m2` coordinates are unchanged.
  > **SPI-surface note:** #66407 merged `fe-connector-api` INTO `fe-connector-spi` and renamed the
  > `org.apache.doris.connector.api.*` packages to `…spi.*`. We now depend on **only** the
@@ -25,13 +25,47 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
  > stepped **1 -> 5 (#66407) -> 6 (#66413) -> 7 (#67182) -> 8 (#67904) -> 9 (#68027)**;
  > then **10 (#66530) -> 11 (#68320) -> 12 (#66399) -> 13 (#68786)**;
   > then **14 -> 15 -> 17 -> 18 -> 19 -> 20 -> 21 -> 22 -> 23 -> 24 (#69298)**;
-  > then **25 (#69683) -> 26 (#69835)**; we stamp **`26.0`** in `build.gradle.kts`.
-  > **Deploy together:** the API-26 ZIP needs an API-26 FE / filesystem API 7; #68837 and #68785/#68822 require
+  > then **25 (#69683) -> 26 (#69835) -> 27 (#69488)**; we stamp **`27.0`** in `build.gradle.kts`.
+  > **Deploy together:** the API-27 ZIP needs an API-27 FE / filesystem API 7; #68837 and #68785/#68822 require
  > matching regenerated FE/BE Thrift. Matching-engine smoke qualification passed; the September
  > API-9 FE + stock-4.1.4 smoke does not qualify the new artifacts.
  > Keep this note, the Re-vendor log, and `compose/README.md` in sync.
 
 ### Re-vendor log
+
+- **2026-11-02 -> source/SPI/runtime pin `4bc7f426828`**
+  (full SHA `4bc7f426828e4cedfd2b7ce9b76fe95b14b5b146`,37 commits beyond API26).
+  Pristine independent worktree `/home/jayson/DEV/OSS/doris-ducklake-api27-4bc7f426`;
+  no production kernel patch. Matching full FE/full ASAN BE/complete JNI/CDC built
+  in immutable image `apache/doris@sha256:922fc3d4d44e7fdd47a611b68b0097a888e0da5a101151917b1052c4c8abb17d`.
+  Actual linked static Brotli1.0.10 and Arrow24 verified; LLD one-thread/one-link
+  Ninja pool avoids concurrent final-link OOM without removing source/gates/ASAN.
+  Full native maximum required GLIBC2.10;9 plugins pass all6 static layout checks.
+
+  Connector API27 adds write-only-default capability; filesystem7/JNI6/exec19/
+  Thrift0.24/Maven1.2-SNAPSHOT stay. DuckLake does not opt into the new capability
+  or timestamp marker. FileScannerV2 is mandatory; its old switch is a deprecated
+  no-op. Default catalog0.12/JDBC1.5.6 and separate published -33 candidate stay
+  distinct; shared complete nested-native dictionary and existing refusal boundaries
+  are preserved.
+
+  Exact API27 A passes two full28-check smokes, real A/B/read/metadata/rollback,
+  persisted FE restart,450 exact DEFAULT queries, TopN/position-delete, ordinary
+  nested values/NULL parents, timestamp/BLOB/timezone and native-write probes; both
+  tuple-corruption and stale-provider negatives refuse. Separate Java25/17 live
+  default-nested and candidate quoted-name/replay harnesses pass, with measured
+  mirror coverage and wrong-hash refusal. No broad R07/corpus or production claim.
+
+  FE image `doris-fe:ducklake-4bc7f426-api27`, ID
+  `sha256:54d04bc777b9eb3ae7ebfc7841969a3dc7db0ec81286dc4e640e98ab717b8053`;
+  BE `doris-be:ducklake-4bc7f426-api27-asan`, ID
+  `sha256:6666e38d600f56ba689e21747db038d4cd2626286e69d094467089abd27ba7e8`.
+  Actual SDK/FE host bytes match. The old SDK directories/default bundles/images/
+  volumes and shared staged Duckbridge work are retained; no metadata migration.
+  [API27 validation](../dev-docs/VALIDATION-DORIS-API27-2026-11-02.md) records final
+  consumer/promotion closeout. At the user's explicit request the
+  [Duckbridge handoff](../dev-docs/HANDOFF-FOR-DUCKBRIDGE-DORIS-4bc7f426-API27.md)
+  is provided to the user only: **no Duckbridge message/dispatch/project note**.
 
 - **2026-10-31 -> source/SPI/runtime pin `8e10b235cf0`**
   (full SHA `8e10b235cf030d486b6840cfd64b6218ab515e6d`,59 commits beyond

@@ -1,4 +1,4 @@
-"""Bounded published-candidate acceptance on owned API26 FE/BE + PostgreSQL/S3."""
+"""Bounded candidate/default acceptance on owned API27 FE/BE + PostgreSQL/S3."""
 import argparse
 import json
 import os
@@ -150,7 +150,7 @@ def main():
     except Exception as error:
         print("Read-correctness acceptance failed:", str(error).replace(fixture.password, "<redacted>"))
         return 1
-    print("PASS bounded API26 " + ("default nested" if args.released else "candidate native-file/replay") + " acceptance:", fixture.root)
+    print("PASS bounded API27 " + ("default nested" if args.released else "candidate native-file/replay") + " acceptance:", fixture.root)
     return 0
 
 

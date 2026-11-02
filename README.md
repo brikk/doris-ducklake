@@ -5,7 +5,7 @@
 > table format (spec v1.0). It targets the `fe-connector` catalog SPI, which
 > **merged into Apache Doris `master`** (`#64304` *decouple external catalogs
 > from FE core into loadable connector plugins*, + the `fe/fe-connector` tree);
-> we target apache/doris `master` (source/SPI pin `8e10b235cf0`, plugin API **26.0**), **not** the
+> we target apache/doris `master` (source/SPI pin `4bc7f426828`, plugin API **27.0**), **not** the
 > now-retired brikk fork `branch-catalog-spi`. The SPI is not in any tagged
 > Doris *release* yet, so a stock released Doris build still can't load it —
 > build the FE from master (see [`fe-patches/`](fe-patches/); PATCH-FREE). The
@@ -14,9 +14,9 @@
 > DuckLake adapter for an OLAP engine today, use
 > [`trino-ducklake`](../trino-ducklake/) instead.
 
-As checked on 2026-10-31, latest stable is **4.1.5**; the fetched `branch-4.2`
+As checked on 2026-11-02, latest stable is **4.1.5**; the fetched `branch-4.2`
 still lacks `fe/fe-connector`. Master/future 5.x is the plugin target.
-An API-26 plugin requires an API-26 FE and filesystem API 7; the `8e10b235cf0`
+An API-27 plugin requires an API-27 FE and filesystem API 7; the `4bc7f426828`
 re-vendor uses matching FE/BE and the complete JNI-6 distribution. API equality
 alone is not source/wire/runtime qualification.
 Connector and matching FE/BE isolated smoke qualification are green on this pin.
@@ -41,6 +41,9 @@ describe the legacy tier, not blanket 1.1 support or production approval.
 The [published read-correctness intake](dev-docs/VALIDATION-CATALOG-READ-CORRECTNESS-2026-11-01.md)
 records its separate parser/replay checks; old API13 campaign results are not
 qualification of the new snapshot on API26.
+The [API27 qualification](dev-docs/VALIDATION-DORIS-API27-2026-11-02.md) records its
+separate runtime checks; catalog0.12.0 remains the default. File scans are now V2-only;
+`enable_file_scanner_v2` is a deprecated no-op, not a legacy-reader fallback switch.
 
 ## Architecture — why this is read-focused, and different from Trino
 
@@ -72,7 +75,7 @@ toolchain (Kotlin emits 17 bytecode). Managed via [mise](https://mise.jdx.dev/)
 ```
 
 Install the matching Doris SPI/Thrift closure first (see the
-[build/qualification report](dev-docs/VALIDATION-DORIS-API26-2026-10-31.md)).
+[build/qualification report](dev-docs/VALIDATION-DORIS-API27-2026-11-02.md)).
 For isolated qualification, `-PdorisRepository=/path/to/pinned/repository` selects
 only the `org.apache.doris` artifacts; the default remains `mavenLocal()`.
 

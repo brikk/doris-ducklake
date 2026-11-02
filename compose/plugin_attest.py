@@ -113,7 +113,7 @@ class ProviderAttestation:
             time.sleep(2)
         self.gate("be_registered")
         fe_versions = alive_versions(self.query("SHOW FRONTENDS", headers=True))
-        expected_source = os.environ.get("DORIS_EXPECTED_SOURCE", "8e10b235cf0")
+        expected_source = os.environ.get("DORIS_EXPECTED_SOURCE", "4bc7f426828")
         require(re.fullmatch(r"[0-9a-f]{7,40}", expected_source), "Invalid expected Doris source pin")
         expected = "doris-0.0.0-" + expected_source
         d.state["runtime_sources"] = {"expected": expected, "fe": fe_versions, "be": be_versions}

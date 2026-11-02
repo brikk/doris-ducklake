@@ -50,7 +50,7 @@ internal class DuckLakeReadCorrectnessLiveTest {
             } }
         }
         fe().use { c -> c.createStatement().use { s ->
-            s.executeQuery("SHOW FRONTENDS").use { r -> check(r.next()); assertThat(r.getString("Version")).contains("8e10b235cf0") }
+            s.executeQuery("SHOW FRONTENDS").use { r -> check(r.next()); assertThat(r.getString("Version")).contains("4bc7f426828") }
             s.executeQuery("SELECT id,s.`a,b`,s.`MiXeD`,s.`x:y`,s.`q\"uote`,s.`back\\slash`,s.` spaced `,s.`雪`,s.`<angle>`," +
                 "struct_element(element_at(items,1),'x:y'),struct_element(element_at(attrs,'k'),'a,b') FROM $catalog.tpch.n03 ORDER BY id").use { r ->
                 val actual = buildList { while (r.next()) add((1..r.metaData.columnCount).map { r.getString(it) }) }
@@ -74,7 +74,7 @@ internal class DuckLakeReadCorrectnessLiveTest {
     @Test
     fun boundedReplayMeasuresActualSharedLakeMirrorsAndRejectsWrongBooleanHash() {
         val engine = object : ReplayReadEngine {
-            override val name = "doris-api26-read-correctness"
+            override val name = "doris-api27-read-correctness"
             override fun connect(attachment: OracleAttachment) {
                 assertThat(attachment.dataPath).isEqualTo(p.getProperty("data.path"))
             }

@@ -64,6 +64,7 @@ internal class DuckLakeConnectorCapabilitiesTest {
                 ConnectorCapability.SUPPORTS_VIEW,
                 ConnectorCapability.SUPPORTS_COLUMN_AUTO_ANALYZE,
                 ConnectorCapability.SUPPORTS_METADATA_PRELOAD,
+                ConnectorCapability.SUPPORTS_WRITE_ONLY_DEFAULTS,
             )
     }
 }

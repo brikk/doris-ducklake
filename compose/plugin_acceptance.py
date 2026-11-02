@@ -24,11 +24,11 @@ from plugin_preflight import API, file_hash, require, verify_bundle
 from plugin_volume import verify_backup
 
 
-FE = "doris-fe:ducklake-8e10b235-api26"
-BE = "doris-be:ducklake-8e10b235-api26-asan"
+FE = "doris-fe:ducklake-4bc7f426-api27"
+BE = "doris-be:ducklake-4bc7f426-api27-asan"
 IMAGE_PINS = {
-    FE: "sha256:509f6ee46af21a51407788bef5df9afe878197d38ec3439e3edcdeaf98fad317",
-    BE: "sha256:2155eba1d7a51b1a00e1c02972876b7fbcb36fb3058b28fa1f16f7b6516c80fb",
+    FE: "sha256:54d04bc777b9eb3ae7ebfc7841969a3dc7db0ec81286dc4e640e98ab717b8053",
+    BE: "sha256:6666e38d600f56ba689e21747db038d4cd2626286e69d094467089abd27ba7e8",
 }
 SCRIPTS = ("smoke.sh", "smoke_run.sh", "plugin_deploy.py", "plugin_attest.py", "plugin_preflight.py",
            "plugin_volume.py", "fe.conf", "smoke_lake.py", "step7-delete.py", "step-default.py", "w2-insert.py",
@@ -107,7 +107,7 @@ class Acceptance:
 
     def protected(self):
         names = self.command(["container", "ls", "--all", "--format", "{{.Names}}"])
-        selected = [n for n in names.splitlines() if n.startswith(("doris-api26-", "doris-api24-", "doris-r07-", "doris-ducklake-", "trino-ducklake-"))]
+        selected = [n for n in names.splitlines() if n.startswith(("doris-api27-", "doris-api26-", "doris-api24-", "doris-r07-", "doris-ducklake-", "trino-ducklake-"))]
         containers = {}
         for name in selected:
             item = self.data("container", "inspect", name)[0]
@@ -195,7 +195,7 @@ class Acceptance:
         write_json(spec_path, spec)
         env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ.get("PATH", ""),
                    F24_ACCEPTANCE_DOCKER=str(spec_path), PYTHONDONTWRITEBYTECODE="1", DORIS_FE_STARTUP_TIMEOUT="300",
-                   DORIS_EXPECTED_SOURCE="8e10b235cf0", DORIS_BE_PLATFORM="linux/amd64", DORIS_CORPUS_DIR=str(self.root / "corpus"))
+                   DORIS_EXPECTED_SOURCE="4bc7f426828", DORIS_BE_PLATFORM="linux/amd64", DORIS_CORPUS_DIR=str(self.root / "corpus"))
         args = ["bash", str(self.compose / "smoke.sh"), "--plugin-zip", str(self.bundles[bundle])]
         if not stale:
             args.append("--up-only")

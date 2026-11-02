@@ -401,7 +401,7 @@ def fake_docker_command(lock):
             if scenario == "be_registration_timeout" and sql == "SHOW BACKENDS":
                 return 0
             print("Alive\tWrongColumn" if scenario == "bad_source_headers" else "Alive\tVersion")
-            version = "doris-0.0.0-8e10b235cf0"
+            version = "doris-0.0.0-4bc7f426828"
             if scenario == "stale_master_be" and sql == "SHOW BACKENDS":
                 version = "doris-0.0.0-96d0ac68e84"
             if scenario == "stale_matched_pair":
@@ -505,13 +505,13 @@ class SmokeDriverTests(unittest.TestCase):
     def test_default_requires_matching_master_and_preserves_complete_plugin_layout(self):
         compose = (SOURCE / "docker-compose.yml").read_text()
         overlay = (SOURCE / "be-overlay" / "Dockerfile").read_text()
-        self.assertIn("image: ${DORIS_FE_IMAGE:-doris-fe:ducklake-8e10b235-api26}", compose)
-        self.assertIn("image: ${DORIS_BE_IMAGE:-doris-be:ducklake-8e10b235-api26-asan}", compose)
-        volume = "doris-ducklake-api26-8e10b235-fe-plugin-ducklake"
+        self.assertIn("image: ${DORIS_FE_IMAGE:-doris-fe:ducklake-4bc7f426-api27}", compose)
+        self.assertIn("image: ${DORIS_BE_IMAGE:-doris-be:ducklake-4bc7f426-api27-asan}", compose)
+        volume = "doris-ducklake-api27-4bc7f426-fe-plugin-ducklake"
         self.assertIn(f"name: {volume}", compose)
         self.assertIn("plugin_preflight.py", (SOURCE / "smoke.sh").read_text())
-        self.assertIn("name: doris-ducklake-api26-8e10b235-fe-meta", compose)
-        self.assertIn("name: doris-ducklake-api26-8e10b235-be-storage", compose)
+        self.assertIn("name: doris-ducklake-api27-4bc7f426-fe-meta", compose)
+        self.assertIn("name: doris-ducklake-api27-4bc7f426-be-storage", compose)
         self.assertNotIn("apache/doris:be-4.1.3", compose)
         self.assertIn("ARG BASE_IMAGE=apache/doris:be-4.1.4", overlay)
         self.assertIn("COPY ${OUTPUT_PATH}/be/plugins ${DORIS_BE_HOME}/plugins", overlay)

@@ -19,7 +19,7 @@ internal class DuckLakeDefaultNestedLiveTest {
             connection.createStatement().use { statement ->
                 statement.executeQuery("SHOW FRONTENDS").use { rows ->
                     check(rows.next())
-                    assertThat(rows.getString("Version")).contains("8e10b235cf0")
+                    assertThat(rows.getString("Version")).contains("4bc7f426828")
                 }
                 statement.executeQuery("SELECT id,s.a,s.label,struct_element(element_at(items,1),'x')," +
                     "struct_element(element_at(attrs,'k'),'a') FROM $catalog.tpch.default_nested ORDER BY id").use { rows ->
