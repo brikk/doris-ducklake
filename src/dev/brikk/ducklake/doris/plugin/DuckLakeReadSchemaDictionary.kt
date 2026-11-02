@@ -18,7 +18,7 @@ import org.apache.thrift.TDeserializer
 import org.apache.thrift.TSerializer
 import org.apache.thrift.protocol.TBinaryProtocol
 
-/** Current native files only. A partial scalar dictionary is NOT a name fallback for omitted fields. */
+/** Shared by released/candidate lanes for current native files; omitted nested fields are NOT a name fallback. */
 internal fun encodeReadSchemaDictionary(
     catalog: DucklakeCatalog,
     handle: DuckLakeTableHandle,

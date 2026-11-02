@@ -163,9 +163,9 @@ non-degraded core only.
 | `timestamptz` | DATETIMEV2(6) / TIMESTAMPTZ | Yes | — | Degraded (BE-gated) by default — read as naive UTC micros; the 4.1.x BE can't read a UTC-micros parquet column into a zone-aware slot, so zone-aware typing is deferred (correct UTC values). Set `enable.mapping.timestamp_tz=true` to map to zone-aware `TIMESTAMPTZ` on a master/nightly BE (see Configuration) |
 | `time` | STRING | Yes | — | Degraded — Doris has no first-class TIME |
 | `timetz` | STRING | Yes | — | Degraded |
-| `list<T>` | ARRAY(T) | Yes | — | Full nesting on read |
-| `struct<...>` | STRUCT(...) | Yes | — | Full nesting on read |
-| `map<K,V>` | MAP(K,V) | Yes | — | Full nesting on read |
+| `list<T>` | ARRAY(T) | Guarded | — | Current native files; nested legacy mapped files/history refuse |
+| `struct<...>` | STRUCT(...) | Guarded | — | Current native files; default-lane ordinary-name fixture qualified separately below |
+| `map<K,V>` | MAP(K,V) | Guarded | — | Current native files; nested legacy mapped files/history refuse |
 | `json` | STRING | Yes | — | Degraded — stored as string, no JSON functions |
 | `variant` | STRING | Yes | — | Degraded |
 | `interval` | STRING | Yes | — | Degraded |
@@ -175,6 +175,13 @@ non-degraded core only.
 operators/functions aren't available through Doris. Write of nested and most
 degraded types is not yet implemented (v1 CREATE TABLE accepts the
 non-degraded scalar core).
+
+Nested native-file reads use a complete parent-aware field-ID dictionary in both
+build configurations; a scalar-only dictionary could silently fill populated nested
+columns with NULL. See [default catalog0.12 reproduction/fix](dev-docs/VALIDATION-DEFAULT-NESTED-READS-2026-11-01.md).
+This does not promote catalog0.13 or backport its quoted-signature parser: default
+catalog0.12 parser/naming limits remain, and nested defaults/evolution, mapped files,
+history, inline transport and final1.1 nested reads are not blanket-qualified.
 
 ## Read Operations
 
@@ -193,12 +200,12 @@ metadata, and comments dirs.
 | Partition-bearing scan ranges | Yes | Identity partition values surfaced so the BE stops path-parsing the (non-hive) layout |
 | COUNT(*) pushdown | Yes | Served from `ducklake_data_file.record_count` when exactly safe; refuses (BE counts by reading) on any filter, delete file, inlined state, non-latest snapshot, or partial (compacted) file |
 | Parquet data files | Yes | Via the Doris BE native Parquet reader |
-| Time travel — FOR VERSION AS OF | Yes | By snapshot ID (DuckLake version == snapshot id) |
-| Time travel — FOR TIMESTAMP AS OF | Yes | Resolves to the snapshot active at-or-before the instant |
+| Time travel — FOR VERSION AS OF | Yes, scalar tier | By snapshot ID; nested file history explicitly refuses |
+| Time travel — FOR TIMESTAMP AS OF | Yes, scalar tier | Resolves to the snapshot active at-or-before the instant; nested file history refuses |
 | Snapshot pinning (MVCC) | Yes | `beginQuerySnapshot` / `applySnapshot` thread the resolved snapshot onto the scan |
 | Table statistics | Yes | Row count + on-disk size from `ducklake_table_stats` |
 | Schema evolution on read | Yes | Renamed / added columns read correctly; a column added with `DEFAULT` backfills its `initial_default` value for older rows (scalar types; complex/binary skip to NULL), otherwise NULL; across the alter suite |
-| Registered files (`add_files`) | Yes | Externally-registered Parquet read via `ducklake_name_mapping` (case/rename/reorder resolved), including hive-layout directory partitions (`key=value/` path values filled). A table mixing hive-layout `add_files` files with natively-partitioned files fails loud rather than mis-filling |
+| Registered files (`add_files`) | Yes, scalar tier | Externally-registered Parquet read via `ducklake_name_mapping` (case/rename/reorder resolved), including hive-layout directory partitions (`key=value/` path values filled). Nested mapped-file scans refuse. A table mixing hive-layout `add_files` files with natively-partitioned files fails loud rather than mis-filling |
 | Inlined data (small tables) | No (default) | **Hard-blocked by default** (loud error) — DuckLake keeps small writes in `ducklake_inlined_*` catalog rows, not Parquet. An experimental dev-only path (`experimental.inlined.reads=true`) synthesizes a temp Parquet, but it requires FE and BE to share warehouse storage as a local filesystem, so it is NOT production-viable. A distributed-cluster solution (object-store write or an SPI payload channel) is a required follow-up — see dev-docs. |
 | Delete files (merge-on-read) | Yes, latest snapshot | DuckLake OPTIONAL position-delete columns read correctly on matching master FE/BE `96d0ac68e84` (live 100→93 probe). Historical reads over a delete file containing entries from later snapshots remain unsafe (F08) and need filtering or a fail-closed guard. |
 | Time travel over a compaction boundary | Guarded | A read AS OF a snapshot older than a `merge_adjacent_files` compaction needs a per-row hidden-column snapshot filter the BE can't apply — fails loudly instead of over-returning. Latest-snapshot reads unaffected. |

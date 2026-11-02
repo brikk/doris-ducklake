@@ -455,6 +455,7 @@ tasks.test {
     exclude("**/DuckLakeR07LiveQualificationTest*")
     exclude("**/DuckLakeR07LongPartitionNativeTest*")
     exclude("**/DuckLakeReadCorrectnessLiveTest*")
+    exclude("**/DuckLakeDefaultNestedLiveTest*")
     classpath = prependParquetFormat(classpath)
 }
 
@@ -469,6 +470,20 @@ tasks.register<Test>("java17PluginTest") {
     exclude("**/DuckLakeR07QualificationTest*")
     exclude("**/DuckLakeR07LiveQualificationTest*")
     exclude("**/DuckLakeR07LongPartitionNativeTest*")
+}
+
+for ((taskName, jvm) in listOf("defaultNestedLiveTest" to 25, "defaultNestedLiveJava17Test" to 17)) {
+    tasks.register<Test>(taskName) {
+        description = "Current native mixed scalar/nested reads on explicitly owned default API26/catalog0.12 infrastructure."
+        group = "verification"
+        testClassesDirs = sourceSets.test.get().output.classesDirs
+        classpath = prependParquetFormat(sourceSets.test.get().runtimeClasspath)
+        javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(jvm)) })
+        useJUnitPlatform()
+        include("**/DuckLakeDefaultNestedLiveTest*")
+        doFirst { check(!readCorrectnessCandidate) { "Default-lane test must not select the candidate" } }
+        outputs.upToDateWhen { false }
+    }
 }
 
 if (readCorrectnessCandidate) {

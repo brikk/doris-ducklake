@@ -14,6 +14,14 @@ from smoke_acceptance import FullSmokeAcceptance
 
 
 class ReadCorrectnessAcceptance(FullSmokeAcceptance):
+    candidate = True
+    phase_name = "candidate-full-supported"
+    seed_script = "read_correctness_seed.py"
+    output_directory = "catalog-read-correctness-33"
+    live_tasks = ("readCorrectnessLiveTest", "readCorrectnessLiveJava17Test")
+    live_test_count = 2
+    live_marker = "positive mirrors=2/2; wrong-hash=1 failed, later mirror=1/1"
+
     def source_hashes(self):
         project = self.source.parent
         files = [project / "build.gradle.kts", project / "gradle/libs.versions.toml"]
@@ -33,7 +41,7 @@ class ReadCorrectnessAcceptance(FullSmokeAcceptance):
             # the bind race, Compose fails; never stop/adopt that process or relax the gate.
             config["services"][service]["ports"] = [f"127.0.0.1:{published}:{port}"]
             write_json(file, config)
-        for name in ("read_correctness_seed.py", "read_correctness_acceptance.py"):
+        for name in (self.seed_script, "read_correctness_acceptance.py"):
             shutil.copy2(self.source / name, self.root / "controller-sources" / name)
             self.result["copied_tooling_sha256"][name] = file_hash(self.source / name)
         self.result["source_sha256"] = self.source_hashes()
@@ -44,14 +52,14 @@ class ReadCorrectnessAcceptance(FullSmokeAcceptance):
         return binding[0]["HostPort"]
 
     def seed_nested(self):
-        run = self.result["phases"]["candidate-full-supported"]["correctness"]["run_id"]
+        run = self.result["phases"][self.phase_name]["correctness"]["run_id"]
         self.fixture_database = "doris_smoke_" + run
         self.fixture_data = f"s3://ducklake/doris-smoke/{run}/"
         env = dict(os.environ, SMOKE_RUN_ID=run, PG_DB=self.fixture_database, DATA_PATH=self.fixture_data,
                    PG_HOST=self.pg, PG_USER="ducklake", PG_PASSWORD=self.password, S3_ENDPOINT=self.minio + ":9000",
                    S3_KEY_ID="f24-fixture", S3_SECRET=self.password)
         args = [self.docker, "run", "--rm", "--pull=never", "--network", self.project + "-substrate-network",
-                "-v", str(self.root / "controller-sources/read_correctness_seed.py") + ":/script.py:ro",
+                "-v", str(self.root / "controller-sources" / self.seed_script) + ":/script.py:ro",
                 "-v", str(self.compose / "smoke_lake.py") + ":/smoke_lake.py:ro"]
         for key in ("SMOKE_RUN_ID", "PG_DB", "DATA_PATH", "PG_HOST", "PG_USER", "PG_PASSWORD", "S3_ENDPOINT", "S3_KEY_ID", "S3_SECRET"):
             args += ["-e", key]
@@ -77,17 +85,19 @@ class ReadCorrectnessAcceptance(FullSmokeAcceptance):
         print("Read-correctness evidence:", self.root, flush=True)
         try:
             self.prepare()
-            self.full_phase("candidate-full-supported", bundle="A")
+            self.full_phase(self.phase_name, bundle="A")
             self.seed_nested()
             project = self.source.parent
             env = dict(os.environ, DORIS_READ_CORRECTNESS_FIXTURE=str(self.fixture_file))
             java_tmp = self.root / "java-tmp"
             java_tmp.mkdir()
             init = self.root / "live-tests.init.gradle"
-            init.write_text("allprojects { tasks.withType(Test).configureEach { maxHeapSize = '768m'; maxParallelForks = 1; " +
+            init.write_text("gradle.beforeProject { project -> if (project.projectDir == new File(" + json.dumps(str(project)) +
+                            ")) project.layout.buildDirectory.set(new File(project.projectDir, " + json.dumps("build/" + self.output_directory) + ")) }\n" +
+                            "allprojects { tasks.withType(Test).configureEach { maxHeapSize = '768m'; maxParallelForks = 1; " +
                             "systemProperty 'java.io.tmpdir', " + json.dumps(str(java_tmp)) + " } }\n")
-            command = [str(project / "gradlew"), "-I", str(init),
-                       "-PcatalogReadCorrectnessCandidate=true", "readCorrectnessLiveTest", "readCorrectnessLiveJava17Test",
+            command = [str(project / "gradlew"), "--project-cache-dir", str(self.root / "gradle-project-cache"), "-I", str(init),
+                       "-PcatalogReadCorrectnessCandidate=" + str(self.candidate).lower(), *self.live_tasks, "--continue",
                        "--no-daemon", "--max-workers=1", "-Pkotlin.compiler.execution.strategy=in-process",
                        "-Dorg.gradle.jvmargs=-Xmx1536m -XX:MaxMetaspaceSize=768m -Djava.io.tmpdir=" + str(java_tmp)]
             with (self.root / "live-jvm.log").open("w") as log:
@@ -97,13 +107,13 @@ class ReadCorrectnessAcceptance(FullSmokeAcceptance):
             self.result["live_jvm_exit"] = result.returncode
             require(result.returncode == 0, "Live nested/replay JVM checks failed; inspect live-jvm.log")
             self.result["live_tests"] = {}
-            for task in ("readCorrectnessLiveTest", "readCorrectnessLiveJava17Test"):
-                files = list((project / "build/catalog-read-correctness-33/test-results" / task).glob("TEST-*.xml"))
+            for task in self.live_tasks:
+                files = list((project / "build" / self.output_directory / "test-results" / task).glob("TEST-*.xml"))
                 require(len(files) == 1, "Missing bounded live test XML")
                 suite = ET.parse(files[0]).getroot()
                 counts = {key: int(suite.attrib[key]) for key in ("tests", "failures", "errors", "skipped")}
-                require(counts == {"tests": 2, "failures": 0, "errors": 0, "skipped": 0}, "Incomplete live tests")
-                require("positive mirrors=2/2; wrong-hash=1 failed, later mirror=1/1" in files[0].read_text(), "Missing measured mirror evidence")
+                require(counts == {"tests": self.live_test_count, "failures": 0, "errors": 0, "skipped": 0}, "Incomplete live tests")
+                require(self.live_marker in files[0].read_text(), "Missing live read evidence")
                 require(self.password not in files[0].read_text(), "Credential in live test receipt")
                 shutil.copy2(files[0], self.root / (task + ".xml"))
                 self.result["live_tests"][task] = counts
@@ -131,15 +141,32 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("bundle-a", "bundle-b", "duckdb", "evidence-root"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--released", action="store_true", help="Run catalog0.12 default-lane nested probes, not the candidate")
     args = parser.parse_args()
-    fixture = ReadCorrectnessAcceptance(args.bundle_a, args.bundle_b, args.duckdb, args.evidence_root)
+    kind = DefaultNestedAcceptance if args.released else ReadCorrectnessAcceptance
+    fixture = kind(args.bundle_a, args.bundle_b, args.duckdb, args.evidence_root)
     try:
         fixture.run()
     except Exception as error:
         print("Read-correctness acceptance failed:", str(error).replace(fixture.password, "<redacted>"))
         return 1
-    print("PASS bounded API26 candidate native-file/replay acceptance:", fixture.root)
+    print("PASS bounded API26 " + ("default nested" if args.released else "candidate native-file/replay") + " acceptance:", fixture.root)
     return 0
+
+
+class DefaultNestedAcceptance(ReadCorrectnessAcceptance):
+    candidate = False
+    phase_name = "released-full-supported"
+    seed_script = "default_nested_seed.py"
+    output_directory = "default-nested-qualification"
+    live_tasks = ("defaultNestedLiveTest", "defaultNestedLiveJava17Test")
+    live_test_count = 1
+    live_marker = "DEFAULT NESTED native reads passed"
+
+    def prepare(self):
+        require("lib/ducklake-catalog-0.12.0.jar" in self.artifacts["A"]["files"], "Not a default catalog0.12 bundle")
+        super().prepare()
+        self.result["lane"] = "released-catalog-0.12.0"
 
 
 if __name__ == "__main__":

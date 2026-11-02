@@ -39,17 +39,13 @@ import org.apache.thrift.protocol.TBinaryProtocol
  * [TField.name_mapping] lets the BE's `by_parquet_field_id_with_name_mapping`
  * fallback bind a file column by name when it has no embedded field id.
  *
- * **v1 scope: SCALAR top-level columns only.** The dictionary is built ONLY
- * from scalar columns. Nested columns (list/struct/map) are deliberately
- * OMITTED — they read by name today (which works for un-renamed nested
- * columns), and emitting a nested-type [TField] without its full subfield
- * tree crashes the BE: `by_parquet_field_id` recurses into a container field
- * expecting children (`be/src/format/table/table_format_reader.cpp:383,422`)
- * and SIGABRTs the BE when they're absent. Per-subfield field-id evolution
- * (the correct nested dictionary) is a later item; the catalog's `getNameMaps`
- * itself returns only `parent_column IS NULL` top-level entries. A dictionary
- * covering a subset of columns is safe: the BE only field-id-matches the
- * columns present and name-matches the rest.
+ * This is the scalar-only builder used by [encodeReadSchemaDictionary]. Never
+ * send its partial result alone for a scan requesting nested columns: the API26
+ * BE treats a supplied dictionary as the complete field set and fills omitted
+ * roots with NULL, not a per-column name fallback. The shared wrapper appends
+ * complete parent-aware native STRUCT/LIST/MAP trees, or refuses unqualified
+ * nested history/mappings. A container field without its full subtree is also
+ * invalid and can crash the native reader; do not fabricate partial trees.
  */
 internal object DuckLakeSchemaDictionary {
 
