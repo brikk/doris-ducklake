@@ -1,7 +1,7 @@
 # REPORT: Doris P6 iceberg SPI cutover (`branch-catalog-spi` @ `8b391c7459d`) — what it unlocks for ducklake
 
 Date: 2026-07-05. Analyzed commit: `8b391c7459d2358f187577fb5571313255815230`
-"[refactor](catalog) P6 iceberg: migrate to catalog SPI + cutover + remove legacy
+"\[refactor](catalog) P6 iceberg: migrate to catalog SPI + cutover + remove legacy
 fe-core subsystem (#64688)" — tip of `origin/branch-catalog-spi`, parent
 `494ec177d58` (P3b). ~685 files, +79,738/−23,744. The FE worktree
 (`~/DEV/OSS/doris-catalog-spi`) was reset from the stale rebased P3b line to this
@@ -250,14 +250,14 @@ Everything re-validated live on the new baseline:
 match on the commit *message* (subject line), not the hash.
 
 - **Last-reviewed tip:** `c0865b021b0`
-  "[doc](catalog) HANDOFF: $position_deletes port done; e2e is the only
+  "\[doc](catalog) HANDOFF: $position_deletes port done; e2e is the only
   remaining flip gate"
 - **Baseline we diffed from (previous known-good reference point):**
   `c215c4c77c5`
-  "[fix](build) fix parallel -T shade race in fe-connector-paimon-hive-shade"
+  "\[fix](build) fix parallel -T shade race in fe-connector-paimon-hive-shade"
 - **Range reviewed:** `c215c4c77c5..c0865b021b0` — 5 commits, of which **4 are
   doc/HANDOFF** and exactly **one carries code**:
-  - `2e49827ecdd` "[feat](catalog) P6.6: support the iceberg $position_deletes
+  - `2e49827ecdd` "\[feat](catalog) P6.6: support the iceberg $position_deletes
     system table on the connector SPI" (ports upstream #65135 / `0814e49bea7`).
 
 ### Impact on our plugin: none that breaks us; one invariant we already satisfy

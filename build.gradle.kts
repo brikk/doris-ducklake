@@ -55,7 +55,7 @@ kotlin {
 
 // The Doris fe-connector-api / spi artifacts are built from apache/doris `master` (the
 // connector SPI merged upstream via #64304) and installed into ~/.m2 — see
-// fe-patches/FE-PATCHES.md "Re-vendor log". Master's <revision> is 1.2-SNAPSHOT, so the
+// dev-docs/DORIS-RUNTIME.md. Master's <revision> is 1.2-SNAPSHOT, so the
 // coordinates below are unchanged. A pin-specific repository can qualify a new
 // baseline without overwriting the current mavenLocal artifacts. Both choices
 // are scoped to org.apache.doris so they can't shadow other dependencies.
@@ -353,7 +353,7 @@ tasks.register("qualificationDependencies") {
 // ConnectorMvccSnapshot) -> 9 (#68027 Hive OpenCSV) -> 10 (#66530 statement scan reuse)
 // -> 11 (#68320 generic write/DML contracts) -> 12 (#66399 Fluss scan capabilities)
 // -> 13 (#68786 binary/UUID/timestamp contracts) -> 24 (#69298 query task scheduling).
-// API27 candidate pin: 4bc7f426828; matching FE/ASAN-BE qualification is recorded in FE-PATCHES.md.
+// Qualified API27 pin: 4bc7f426828; matching FE/ASAN-BE evidence is indexed in dev-docs/DORIS-RUNTIME.md.
 // DuckLake retains INSERT-only writes and its existing type mappings; new opt-ins stay off.
 // Keep this equal to the pinned FE/SPI major. FE and BE must upgrade together: #68785/#68822
 // realigned Thrift field ids and are not compatible with an older master runtime pair.

@@ -10,11 +10,11 @@ library API, partitioning model, etc. is owned by the SPI plan and the
 legacy main plan.
 
 Working order of operations + current state live in
-[`TODO-read.md`](./TODO-read.md). The "Roadmap to
+[`TODO-read.md`](TODO-read-through-2026-11-02.md). The "Roadmap to
 `SELECT *`" section at the top of the TODO is the ordered execution
 sequence; this document is the load-bearing review.
 
-[`ducklake-doris-friction.md`](./ducklake-doris-friction.md) is the
+[`ducklake-doris-friction.md`](ducklake-doris-friction-through-2026-11-02.md) is the
 sister doc: a running log of SPI / FE / BE surprises hit during
 implementation, sized for the Doris team to scan for small upstream
 fixes. The sanity check is a one-shot architectural review; the

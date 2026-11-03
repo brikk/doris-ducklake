@@ -1,5 +1,8 @@
 # FE patches for the DuckLake plugin connector (OBSOLETE — historical)
 
+> Archived re-vendor ledger and former patch instructions. Use
+> [DORIS-RUNTIME.md](../DORIS-RUNTIME.md) for the current build contract.
+
 The DuckLake connector is a Doris **plugin (SPI) connector**. The Doris FE used
 to carry two generic guards keyed on a hard-coded catalog-type set that didn't
 know about `"ducklake"`. Upstream #66135 (`fce5af4e041`, 2026-07-27) removed
@@ -62,9 +65,9 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
   `sha256:6666e38d600f56ba689e21747db038d4cd2626286e69d094467089abd27ba7e8`.
   Actual SDK/FE host bytes match. The old SDK directories/default bundles/images/
   volumes and shared staged Duckbridge work are retained; no metadata migration.
-  [API27 validation](../dev-docs/VALIDATION-DORIS-API27-2026-11-02.md) records final
+  [API27 validation](../VALIDATION-DORIS-API27-2026-11-02.md) records final
   consumer/promotion closeout. At the user's explicit request the
-  [Duckbridge handoff](../dev-docs/HANDOFF-FOR-DUCKBRIDGE-DORIS-4bc7f426-API27.md)
+  [Duckbridge handoff](../HANDOFF-FOR-DUCKBRIDGE-DORIS-4bc7f426-API27.md)
   is provided to the user only: **no Duckbridge message/dispatch/project note**.
 
 - **2026-10-31 -> source/SPI/runtime pin `8e10b235cf0`**
@@ -108,8 +111,8 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
   R07 campaign, JDBC/Quack or all-JNI-runtime qualification is claimed.
 
   Promotion/final default checks and Duckbridge delivery are recorded in the
-  [API26 validation](../dev-docs/VALIDATION-DORIS-API26-2026-10-31.md) and
-  [build-reuse handoff](../dev-docs/HANDOFF-DUCKBRIDGE-DORIS-8e10b235-API26.md).
+  [API26 validation](VALIDATION-DORIS-API26-2026-10-31.md) and
+  [build-reuse handoff](HANDOFF-DUCKBRIDGE-DORIS-8e10b235-API26.md).
   Historical API24 evidence and rollback remain below, not relabelled as API26.
 
 - **2026-10-28 -> source/SPI/runtime pin `62e3d81a42b`**
@@ -173,9 +176,9 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
   R07 live repin/campaign or Duckbridge JDBC qualification. Experimental FE-side inline
   writer classpath is not requalified (host core Parquet is now 1.18.1).
   Full hashes, commands, evidence and rollback:
-  [`VALIDATION-DORIS-API24-2026-10-28.md`](../dev-docs/VALIDATION-DORIS-API24-2026-10-28.md).
+  [`VALIDATION-DORIS-API24-2026-10-28.md`](VALIDATION-DORIS-API24-2026-10-28.md).
   Mandatory Duckbridge build-reuse handoff:
-  [`HANDOFF-DUCKBRIDGE-DORIS-62e3d81a-API24.md`](../dev-docs/HANDOFF-DUCKBRIDGE-DORIS-62e3d81a-API24.md).
+  [`HANDOFF-DUCKBRIDGE-DORIS-62e3d81a-API24.md`](HANDOFF-DUCKBRIDGE-DORIS-62e3d81a-API24.md).
 
 - **2026-10-10 -> source/SPI pin `dd456ab7a89`**
   (`[improvement](mtmv) Judge a base table column change by the MV query it reaches (#68646)`).
@@ -290,7 +293,8 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
   Duckbridge JDBC/JNI runtime validation was performed. F22/F24/F25 remain separate
   review findings; the new version/default guards do not close every harness issue.
   Duckbridge follow-up:
-  [`HANDOFF-doris-master-dd456ab7-api13.md`](../../duckbridge/dev-docs/HANDOFF-doris-master-dd456ab7-api13.md).
+  `duckbridge/dev-docs/HANDOFF-doris-master-dd456ab7-api13.md` (historical sibling
+  reference; not present at that path in this checkout).
 
 - **2026-09-19 -> source/SPI pin `8fc58e929b2`**
   (`[fix](iceberg) Reject server planning before snapshot conversion (#68095)`).
@@ -431,7 +435,8 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
   findings remain unchanged. No corpus replay was run because F22's broad cleanup
   guard remains open. `branch-4.2` has no connector SPI and remains unsuitable.
   Duckbridge follow-up is captured in
-  [`../duckbridge/dev-docs/HANDOFF-doris-master-96d0ac68-lazy-jvm.md`](../../duckbridge/dev-docs/HANDOFF-doris-master-96d0ac68-lazy-jvm.md).
+  `duckbridge/dev-docs/HANDOFF-doris-master-96d0ac68-lazy-jvm.md` (historical sibling
+  reference; not present at that path in this checkout).
 
 - **2026-09-09 -> source/SPI pin `0557668f405`**
   (`[fix](cloud) Exclude covered rowsets from compaction minimum timestamps (#67617)`).
@@ -768,13 +773,13 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
   - **Other SPI-window commits (no action):** #66331 ADBC catalog (new, not our path); #66403/#66247
     paimon fixes; #65126 external metadata-cache refactor.
 
-- **2026-08-02 → pin `0c01156be7f`** (`[feat](thirdparty) add arrow-adbc to the thirdparty build
+- **2026-08-02 → pin `0c01156be7f`** (`\[feat](thirdparty) add arrow-adbc to the thirdparty build
   (#66358)`). Routine bump from `ded91fb9fb3` (+9 upstream commits). **Zero plugin `.kt` changes**
-  — main + test compile clean. The one SPI-touching commit is **#66347 `[feat](connector) give each
+  — main + test compile clean. The one SPI-touching commit is **#66347 `\[feat](connector) give each
 
-- **2026-08-02 → pin `0c01156be7f`** (`[feat](thirdparty) add arrow-adbc to the thirdparty build
+- **2026-08-02 → pin `0c01156be7f`** (`\[feat](thirdparty) add arrow-adbc to the thirdparty build
   (#66358)`). Routine bump from `ded91fb9fb3` (+9 upstream commits). **Zero plugin `.kt` changes**
-  — main + test compile clean. The one SPI-touching commit is **#66347 `[feat](connector) give each
+  — main + test compile clean. The one SPI-touching commit is **#66347 `\[feat](connector) give each
   connector plugin its own conf file`**: adds `ConnectorConf`/`ConnectorConfFile`, a **default**
   `ConnectorContext.getConnectorConfig()` (reads `<pluginDir>/<name>.conf`), and a **default**
   `ConnectorProvider.name()` (= `getType()`). Both are `default` methods and we only *consume*
@@ -784,7 +789,7 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
   TIMESTAMPTZ *arrow*/Flight-SQL reader — NOT the BE parquet reader, so the timestamptz friction
   stands.) Compile-verified only; not re-smoked (no SPI-surface change vs the 2026-07-31 full pass).
 
-- **2026-07-31 → MIGRATED TO apache/doris `master`, pin `ded91fb9fb3`** (`[fix](ci) Skip
+- **2026-07-31 → MIGRATED TO apache/doris `master`, pin `ded91fb9fb3`** (`\[fix](ci) Skip
   usage-limited Codex review accounts (#66319)`). The connector SPI was merged upstream, so we
   retired the brikk fork branch `branch-catalog-spi` and now build the FE + the `~/.m2` compile
   jars straight from **apache/doris master** (`~/DEV/OSS/doris`). Master is +316 commits over the
@@ -802,7 +807,7 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
     pre-existing, upstream/BE — NOT connector): §8b-count bare `COUNT(v)` (`colUniqueId=-1`) and
     Step-7 delete BE parquet-nullability (`Not nullable column has null values`).
 
-- **2026-07-29 → pin `0da96f1ad3e`, subject `[chore](handoff) record the 2026-07-30 rebase
+- **2026-07-29 → pin `0da96f1ad3e`, subject `\[chore](handoff) record the 2026-07-30 rebase
   onto 794d514479e (upstream #65991)`** (SHAs churn on rebase — match the subject). Bumped
   from `a0c10f0672b`. Still PATCH-FREE (unchanged since #66135). Driver: the Doris team is
   about to use this connector as their first external SPI test case, so we want to be current.
@@ -823,7 +828,7 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
   - **Smoke: FULL PASS.** All green incl. bucket-partitioned no-`ENGINE=` CREATE TABLE,
     W2/W2c/W3, DEFAULT backfill, GC. Known-blocked unchanged: §8b-count `COUNT(v)`
     (`colUniqueId=-1`) and Step-7 delete nullability.
-- **2026-07-27 → pin `a0c10f0672b`, subject `[chore](handoff) record the 2026-07-27c rebase
+- **2026-07-27 → pin `a0c10f0672b`, subject `\[chore](handoff) record the 2026-07-27c rebase
   onto e7b7f1d1359 (upstream #66004 storage facade)`** (SHAs churn on rebase — match the
   subject). **First PATCH-FREE build.** #66135 (`fce5af4e041`) removed BOTH FE-patch anchors:
   `CatalogFactory.SPI_READY_TYPES` (a provider claiming its type is enough — "installing a
@@ -846,7 +851,7 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
   - **Smoke: FULL PASS.** Reads green, W1/W2/W2c/W3 green, S3 reads green. **Known-blocked unchanged:**
     §8b-count `COUNT(<nullable col>)` (colUniqueId=-1) and Step-7 delete nullability — both pre-existing
     upstream, tracked in `../dev-docs/TODO-read.md`.
-- **2026-07-22 → tip subject `[fix](catalog) migrate rebased-in PhysicalStorageLayerAggregateTest
+- **2026-07-22 → tip subject `\[fix](catalog) migrate rebased-in PhysicalStorageLayerAggregateTest
   to PluginDrivenExternalTable`** (was `d56c8f356c3`; SHAs churn on rebase — match the subject).
   Bumped from `568c4bb4571` past 5 new catalog commits (another rebase). Committed
   `ducklake-fe.patch` applied **`git apply --check` clean** (both anchors survived); FE built, SPI
@@ -901,7 +906,7 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
     structure refactor; inert for us).
   - `d56c8f356` migrate `PhysicalStorageLayerAggregateTest` → `PluginDrivenExternalTable` (fe-core
     test-only; confirms our path is the storage-layer-aggregate / count-pushdown test target now).
-- **2026-07-21 → tip subject `[perf](catalog) two-level cross-query cache for external
+- **2026-07-21 → tip subject `\[perf](catalog) two-level cross-query cache for external
   partition derived views (#65829)`** (was `568c4bb4571`; SHAs churn on rebase — match
   the subject). Bumped from `b2dff681aad` past 4 new catalog commits (full rebase; all
   hashes changed). **Connector unaffected — recompiles with zero source changes:**
@@ -937,9 +942,9 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
     Nereids partition items — so no ranges are cached. No breakage. **Future
     optimization** (tracked in `../dev-docs/TODO-read.md`): if we ever surface Nereids
     partition items, this cross-query cache engages for free.
-- **2026-07-18 → tip subject `[feat](catalog) fe-connector-iceberg: port #64966 REST
+- **2026-07-18 → tip subject `\[feat](catalog) fe-connector-iceberg: port #64966 REST
   401 re-auth to the connector`** (was `b2dff681aad`; SHAs churn on rebase — match the
-  subject). Re-diffed after the **Hive P11 migration** (`[refactor](catalog) Catalog spi
+  subject). Re-diffed after the **Hive P11 migration** (`\[refactor](catalog) Catalog spi
   11 hive (#65473)`, 791 files) + fe-core dead-code removals. **Connector unaffected:**
   `fe-connector-api`/`-spi` grew ~1,884 lines but **100% additive `default`s — zero
   removed/changed signatures**, and **no thrift/gensrc change**, so the plugin recompiles

@@ -1,189 +1,69 @@
-# doris-ducklake — crutches, shortcuts & honest caveats
+# Safety invariants and qualification limits
 
-A single audited inventory of everything in this module that is NOT
-production-clean: dev/compose-only paths, masquerades, silent-degradation
-risks (and how each is actually handled), gated/opt-in features, skipped tests,
-and test-only workarounds. Written 2026-07-07 after the inlined-data review.
-Keep this current — if you add a shortcut, add it here.
+Current default: catalog 0.12.0 on the exact [API27 runtime](DORIS-RUNTIME.md).
+The [published candidate](CATALOG-CANDIDATE.md) is separate and default-off.
+This inventory records contracts to preserve, not a production-clean verdict.
 
-Verdict up front: **one feature is a genuine dev-only crutch (now hard-blocked
-by default); the rest are either deliberate documented degradations that fail
-LOUD, or compose test-harness config, not connector behavior.**
+## Native reader bridge
 
-## R07 final-1.1 qualification boundary (2026-10-23)
+- Ranges deliberately use Iceberg-shaped thrift/`table_format_type="iceberg"` to
+  reach the native reader. This transport choice does not prove DuckLake semantics.
+- Never set top-level `TIcebergFileDesc.content` to position-delete/deletion-vector
+  values 1/3 on data ranges: the BE routes those to a delete system-table reader.
+  Delete descriptors belong in the per-delete-file list.
+- Emit `file_format_type=parquet` at scan-node level; range format alone is insufficient.
+- Scan-wide schema/credentials and per-range file/delete/path values have different
+  ownership. Test with engine-prepopulated thrift, not just empty descriptors.
+- Current native nested reads require a **complete parent-aware field-ID tree**.
+  Scalar-only dictionaries can turn populated nullable nested roots into NULL.
+  Preserve depth/node/ID/arity validation and unsupported mapping/history refusals.
 
-**Updated October 24:** the [implementation continuation](VALIDATION-R07-IMPLEMENTATION-2026-10-24.md)
-adds a default-off, bounded PostgreSQL/S3 native-file tier in the exact candidate
-build, including current and qualified recent-history scans. This supersedes
-the refusal-only checkpoint below, not the no-production/no-write boundary.
-Distributed inline payloads, required per-row historical filters and CDC remain
-closed. The new tier does not use the old temp-Parquet/shared-filesystem crutch.
-The [controlled-capture continuation](VALIDATION-R07-CONTROL-DEFAULTS-2026-10-24.md)
-adds real JDBC deadlines; API-13 still has no in-flight metadata cancellation
-registration. Scope-end cleanup is not treated as a cancellation hook.
-The QG-02 lifecycle repair keeps Object methods and closing a non-owning facade
-outside lazy capture: they issue no SQL/S3 work and consume no planning budget.
-Metadata capture remains deferred and statement-scoped; this does not introduce
-an in-flight cancellation or engine lifecycle hook.
-The same continuation replaces raw initial-default parsing in this tier with the
-public decoded missing-field API, called only after native footer field-ID absence
-is proved. Canonical SQL defaults use the real API-13 override; nested/degraded
-types and non-NULL floating-point missing-field defaults remain unqualified.
-The API-13 engine does expose an owned filesystem; that is not a query row-payload
-transport and is not permission to stage scratch objects or clean up lake files.
+## Default refusals and incomplete semantics
 
-**No Doris 1.1 rollout is qualified.** Reader construction explicitly refuses
-final-1.1 before exposing metadata, write plans or maintenance. Merely resolving
-a table handle with the library flag off was not a safe admission check.
-The released 0.12.0 dependency remains the default. The old local
-`r07CatalogRepository` override is retired; the separate published `-33` candidate
-uses `-PcatalogReadCorrectnessCandidate=true`, isolated output and strict pins.
-See [the November1 intake](VALIDATION-CATALOG-READ-CORRECTNESS-2026-11-01.md);
-it does not relabel the historical API13 campaign below as API26 qualification.
+- Inline DATA is off by default; the experimental scalar temp-Parquet path requires
+  shared local filesystem access. It is not a distributed transport. Concurrency,
+  namespace, timestamps and cleanup have remaining findings (M09/M10).
+- Inline DELETEs refuse. Partial data-file history requiring a hidden snapshot
+  filter refuses. Historical delete visibility is a **separate unsafe gap (F08)**,
+  not repaired by the partial-data guard.
+- COUNT/LIMIT metadata shortcuts only apply under their narrow eligibility gates;
+  filters, deletes, inline/partial state or nonlatest history require normal scans.
+- Imported embedded field IDs are not universally authoritative (F11). A conflict-aware
+  scan-node name union cannot express every per-file mapping/evolution (F12/O04).
+- Mapping descriptors are not value/round-trip proofs. Nanoseconds lose precision;
+  int128 does not wholly fit DECIMAL(38,0); unsigned read widening is not write-domain
+  enforcement. See [TYPES.md](TYPES.md).
+- New API27 write-only-default and timestamp semantic markers stay unadopted.
 
-For explicitly injected opt-in catalogs in qualification tests, the planner
-additionally refuses historical file scans regardless of nullable `partial_max`,
-all final-1.1 delete-file scans (tagged Parquet and both Puffin shapes), and live
-inline rows even with the old dev flag. Current DATA scans are also refused:
-a long-lived legacy connector cannot silently open 1.1 after an external format
-change. It emits no final-1.1 exact metadata
-COUNT/LIMIT trimming, pruning or gross row-count estimate. These guards are not
-an alternative public 1.1 opt-in. The existing dev-only inline channel and absence
-of CDC are blockers, not new distributed functionality. Each scan-provider call
-now owns a read session; this does not supply a statement-wide FE session,
-complete companion traversal budgets or physical-file leases.
+## Maintenance, lifecycle and credentials
 
-## 1. Genuine crutch — inlined-data reads (HARD-BLOCKED by default)
+- Keep managed-residue/age/reference/raw-key guards. F01's scheme-alias repair
+  does not authorize key normalization, wider deletion or bypassing SDK-rewritten-key
+  refusals. [F01 evidence](VALIDATION-F01-2026-10-31.md).
+- Catalog-wide maintenance is not authorized merely by ALTER on the named table (F02).
+  Explicit snapshot IDs bypass age floors; retention is not a physical reader lease.
+- Register JDBC drivers under the shared plugin classloader. Catalog close closes
+  its pool, not the shared driver registration. Deregistration requires an unload hook.
+- S3/AWS credential aliases for the BE do not establish maintenance client parity
+  (M11) or a credential-isolated tenant boundary.
 
-- **What:** reading DuckLake inlined rows (`ducklake_inlined_data_*`) works by
-  the FE synthesizing a temp Parquet the BE scans by path.
-- **Why it's a crutch:** the BE opens the file by path, so it only works when
-  FE and BE share warehouse storage as a local filesystem (a compose bind
-  mount). A distributed FE/BE cluster cannot use it.
-- **How it's contained:** OFF by default — a table with live inlined rows
-  throws a loud, actionable error unless the catalog property
-  `experimental.inlined.reads=true` is set. So it can't be used by accident.
-- **Follow-up (blocking for production):** an object-store temp write + GC, or
-  an SPI channel that streams the rows to the BE without shared storage. See
-  friction log 2026-07-07 "No way to hand a small FE-built payload to the BE
-  without shared storage" and TODO-read.
-- **Secondary smell:** even opted-in, the temp file lives on shared warehouse
-  storage, so DuckLake's own `GLOB('<data_path>/**')` file-count queries count
-  it (3 corpus files skip-listed for this, honestly). No temp-file GC yet.
+## Tests and operations
 
-## 2. Masquerade — `table_format_type = "iceberg"` (deliberate, load-bearing)
+- One parked inline-delete test stays disabled. Corpus assumptions/skips are not
+  successful coverage; count actual mirrors and keep unsupported reasons explicit.
+- Real `parquet-format-structures` precedes the fat `fe-thrift` on test classpaths.
+  That test repair is not qualification of the dev inline writer in the FE's host
+  Parquet classpath.
+- Unit tests, static nine-plugin/six-layout checks and native-S3 runtime tests have
+  different scopes. Lazy native S3 with an uninitialized JNI registry does not test
+  every Java plugin or Duckbridge JDBC/Quack.
+- Full smoke passes require exact typed assertions and current owner/build/runtime
+  receipts, not a printed completion line. See [COMPOSE.md](COMPOSE.md).
+- Loopback publication plus authenticated SSH is development containment, not Doris
+  tenant authorization or proof of host-firewall reachability. Never infer internet
+  exposure solely from a retained all-interface binding.
+- No automatic legacy-container migration, hot reload, global cleanup sweep or
+  metadata reset is an upgrade/recovery mechanism.
 
-- **What:** every scan range reports `table_format_type = "iceberg"` and packs
-  the file shape into `iceberg_params`, so the BE dispatches its native Iceberg
-  reader. Position deletes ride `iceberg_params.delete_files`.
-- **Is it a hack?** No — DuckLake is genuinely Iceberg-shaped (positional
-  deletes are iceberg-spec-compatible; field_id == column_id), so the iceberg
-  reader reads DuckLake files correctly. This is the whole plugin's read/write
-  mechanism, not a shortcut, and it's how paimon/hudi ride shared BE readers
-  too. Not silent-wrong; validated by the corpus + live smoke.
-- **Upstream ask (nice-to-have, not a fix):** `DuckLakeScanRange.TABLE_FORMAT_TYPE`
-  has a `TODO(option-B)` to flip to `"ducklake"` once the BE adds a 5-line
-  dispatch synonym. The thrift bytes are identical; purely cosmetic.
-- **LOAD-BEARING INVARIANT (do not violate):** our data ranges MUST NEVER set
-  the **top-level** `TIcebergFileDesc.content` to `1` (position-delete) or `3`
-  (deletion-vector). Upstream's `$position_deletes` sys-table feature made the
-  top-level `content` in `{1,3}` (+ a PARQUET/ORC range format) BE's sole
-  routing key into `iceberg_position_delete_sys_table_reader`
-  (`file_scanner.cpp` / `file_scanner_v2.cpp`) — a range that trips it also
-  gets its native reader to assert exactly one delete descriptor. Because we
-  masquerade as `table_format_type="iceberg"`, that BE routing applies to us
-  too. We currently comply: `DuckLakeScanRange.populateRangeParams`
-  (`DuckLakeScanRange.kt`) sets `content` ONLY on the per-delete-file
-  descriptors (`toThrift`), never on the top-level `fileDesc`. If a future edit
-  ever needs a top-level content flag, verify it can't be `1`/`3` or it will be
-  silently misrouted into the sys-table reader. Last checked against upstream:
-  see REPORT-doris-p6-iceberg-spi-cutover.md §"2026-07-15 upstream re-check".
-
-## 3. Deliberate type degradations (fail loud OR documented-lossy, never silent-wrong)
-
-All in `DuckLakeTypeMapping`, mirrored from the trino plugin's choices, pinned
-by `DuckLakeTypeMappingTest` + `DuckLakeTemporalTypeAuditTest`:
-
-- **`timestamptz` → naive `DATETIMEV2(6)`** — BE-gated: the 4.1.0 BE can't read
-  a UTC-micros parquet column into a `TimeStampTz` slot. Values are correct
-  UTC; only zone-aware typing is lost. Restore `TIMESTAMPTZ` when the BE
-  supports it (friction 2026-07-07).
-- **`timestamp_ns` → `DATETIMEV2(6)`** — Doris caps datetime scale at 6; nanos
-  clamp to micros (trino does the same).
-- **`time`/`timetz` → STRING, `json`/`variant`/`interval` → STRING,
-  `uuid` → VARBINARY, `uint64` → DECIMALV3(20,0), `uint128` → STRING,
-  `int128` → DECIMALV3(38,0), geometry family → VARBINARY** — no first-class
-  Doris type; data round-trips, type-specific ops unavailable.
-- **Write-side (`DuckLakeCreateTableMapper`, `DuckLakeCreatePartitionMapper`)
-  THROW on unmappable types / on `DISTRIBUTED BY` (CRC32 ≠ murmur3)** rather
-  than silently corrupt — the correct-by-loud posture.
-
-These are the honest kind: a user sees a degraded type or a clear error, never
-a wrong value.
-
-## 4. Loud correctness gates (fail rather than silently over/under-return)
-
-In `DuckLakeScanPlanProvider`, all throwing `DorisConnectorException`:
-
-- **Inlined DELETEs** (`failOnInlinedDeletes`) — can't apply catalog-side
-  positional tombstones; would over-return. Stage 2.
-- **Time travel over a compacted (partial) file** (`failOnUnfilterablePartialFile`)
-  — `partial_max > snapshot` needs a per-row hidden-column filter the BE can't
-  apply; would over-return. Latest-snapshot reads unaffected.
-- **COUNT(\*) pushdown** refuses on any filter / delete / inlined / non-latest
-  / partial file (serves the `-1` sentinel → BE counts by reading).
-- **Historical delete snapshot filtering** — OPTIONAL position deletes work at
-  the latest snapshot, but F08 remains unsafe for multi-snapshot delete files.
-
-## 5. Known upstream-blocked gaps (documented, not worked around)
-
-- **Historical position-delete visibility** — needs the hidden DuckLake snapshot
-  predicate or a fail-closed guard (F08).
-- **BE timestamptz→TimeStampTz** conversion — version-gated (see §3).
-- **Per-file column mapping** (add_files DROP+re-ADD name collision over id-less
-  files) — the scan-node-level schema dictionary can't express per-file maps;
-  needs per-range schema info or a BE hook. 2 corpus files skipped.
-All in the friction log with pickable upstream fixes.
-
-**Resolved runtime gap:** scalar evolved-column DEFAULT projection/predicates
-are live-green at `dd456ab7a89` (50 exact checks, two smokes, post-restart read).
-Older `96d0ac68e84` predicate/crash evidence remains in the friction log. The
-DEFAULT smoke check now fails nonzero and retains the failed fixture.
-
-## 6. Test-harness shortcuts (test-only; no product impact)
-
-- **`DuckLakeInlinedParquetWriterTest` — RESOLVED 2026-07-07** (was
-  assume-skipped). The failure was NOT a JDK issue: the fat `~/.m2` fe-thrift
-  (`mvn install -P flatten`) bundles a stale shaded `org.apache.parquet.format.*`
-  that shadowed the real `parquet-format-structures-1.17.0` on the test
-   classpath (`NoSuchMethodError: PageHeader.setData_page_header`). The old
-   slim-FE explanation does NOT describe the current API-13 image: the R07
-   audit finds 382 bundled Parquet classes in BOTH Maven-local and live FE
-   fe-thrift, with identical PageHeader bytes. Runtime classpath order puts
-   real parquet-format-structures 1.18.0 before fe-thrift. Tests are fixed by
-  reordering `parquet-format-structures` ahead of fe-thrift on the test
-  classpath (`prependParquetFormat`) + adding the `hadoop-mapreduce-client-core`
-  test dep parquet-hadoop needs. The writer round-trip now has real unit
-  coverage (8 tests). Also: the `:ducklake-corpus-replay` module was lowered to
-  JVM-17 bytecode so `:doris-ducklake` is a single consistent 17 toolchain
-  (removed the JVM-25 test overrides + classpath-attribute hack).
-- **Corpus `assumeTrue` gates** — skip the mirror when there's no live FE/PG or
-  the duckdb extensions aren't installable. Correct (the mirror needs a
-  cluster); plain `:doris-ducklake:test` never depends on them.
-- **One `@Disabled` test** — the Step-7.5 inline-delete fixture in
-  `DuckLakeScanPlanProviderTest` (needs a direct `ducklake_inlined_delete_*`
-  PG seed). Tracks the Stage-2 inlined-delete work.
-- **Corpus skip-list** — every entry has a documented reason; categories:
-  dialect (DuckDB-only SQL), oracle-local (non-lake reference tables),
-  harness-unmirrorable (fault injection), and the real gaps above. After the
-  inlined-data review, the earlier false "harness variance" GLOB skips were
-  corrected to the true cause (our temp file on shared storage).
-
-## 7. Compose / cluster config (not connector behavior)
-
-- **`enable_local_shuffle_planner=false` shim** in `smoke.sh` — current master FE
-  plans `LOCAL_EXCHANGE_NODE` (thrift 38), which stock 4.1.4 rejects. It is gated
-  to the stock compatibility axis and skipped for matching master BE images.
-- **BE platform auto-detect** (arm64 default ↔ amd64 host) — dev ergonomics.
-- **Former FE patches** (`fe-patches/`) — historical only; both generic seams
-  landed upstream and current master builds patch-free.
+Original diagnoses and resolved test workarounds are retained in
+[the archived inventory](archive/CRUTCHES-AND-SHORTCUTS-through-2026-11-02.md).

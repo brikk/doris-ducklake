@@ -1,132 +1,56 @@
-# DESIGN: Doris adapter for the DuckLake corpus replay runner
+# Corpus replay contract and usage
 
-> Created 2026-07-05. Status: **LIVE** (2026-07-06) — `DorisReplayEngine` +
-> `DorisCorpusReplayTest` mirror the corpus against a compose FE+BE via
-> `./gradlew :doris-ducklake:corpusReplayTest` (starter dirs; add
-> `-Dducklake.corpus.dirs=all` for the full corpus). Starter-dirs result:
-> **477 passed, 0 failed** (skips = documented gaps). Backend axis landed in
-> runner commit `8c0ed16` (`OracleAttachment` + `ReplayEngineSkip` +
-> `metadataRewriter`); corpus = duckdb/ducklake pinned at `c23aca43`
-> (v1.5-variegata ↔ DuckDB 1.5.4).
->
-> **First-contact findings (2026-07-06):**
-> 1. **REAL BUG: silent wrong rows on inlined state.** DuckLake inlines small
->    INSERTs/DELETEs into `ducklake_inlined_*` metadata rows by default on PG
->    backends; our read path served file rows only → empty/stale results with
->    no error. Fixed: `DuckLakeScanPlanProvider.failOnLiveInlinedState` throws
->    a documented-gap `DorisConnectorException` at plan time ("never silently
->    wrong"). Serving inlined rows is now a TODO-read item.
-> 2. FE **catalog-cache staleness** vs an external writer: the adapter issues
->    `REFRESH CATALOG` before every mirrored query (the documented Doris
->    freshness contract for externally-written catalogs).
-> 3. DuckDB inline time travel (`AT (VERSION => …)`) reaches the FE parser as
->    an empty-detail error — denied in `DorisCorpusDialect` (`\bAT\s*\(`).
-> 4. `general/metadata_cache.test` file-skipped: the known BE
->    parquet-nullability delete gap (friction 2026-05-19).
+The replay adapter mirrors **read-only queries** against state built by the
+embedded native DuckDB oracle. It never translates/exercises DuckDB writes through
+Doris. The oracle validates sqllogictest semantics; the Doris adapter compares live
+rows against the same catalog, with explicit dialect/unsupported-case skips.
+Historical green counts are not current-runtime coverage.
 
-## The contract (what we implement)
+## Current workflow
 
-`dev.brikk.ducklake.corpus.ReplayReadEngine` — engine-side adapter, invoked
-only to **mirror read-only queries against catalog state the embedded DuckDB
-oracle already built**. We never execute DuckDB-dialect writes, never see
-test-env/loops/directives, never parse or match sqllogictest golden text
-(oracle-only identity control). Comparison is live-vs-live rows, canonicalized
-(`null`→NULL, `""`→`(empty)`), order-insensitive in v1.
+Initialize the pinned `ducklake/` corpus submodule. Prepare the
+[matched development stack](COMPOSE.md), PostgreSQL host access and a same-absolute-path
+host/FE/BE data mount. The standard task uses `dorisCorpusDir` (default
+`/tmp/ducklake-corpus`) for its temporary files; match `DORIS_CORPUS_DIR` on the
+container side. Remote-daemon file sharing is an explicit prerequisite, not
+provided by an SSH SQL tunnel.
 
-```kotlin
-interface ReplayReadEngine : AutoCloseable {
-    val name: String
-    fun connect(catalogUri: String, dataPath: String)  // once per corpus file
-    fun accepts(sql: String): Boolean = true            // dialect gate → skip, never fail
-    fun executeQuery(sql: String): List<List<String?>>  // rows of cells; null = SQL NULL
-}
+```sh
+DORIS_BE_PLATFORM=linux/amd64 compose/smoke.sh --up-only
+./gradlew corpusReplayTest
+./gradlew corpusReplayTest -Dducklake.corpus.dirs=delete
 ```
 
-Skip levels: per-file curated skip-list (`CorpusRunner(skipList)`, reasons
-printed in the report) + per-record `accepts()` (engine-skip, never failure).
-Report yields `passed/failed/skipped` per engine — our bring-up metric.
+Starter directories are `general,catalog,time_travel,view`. A full corpus run uses
+`-Dducklake.corpus.dirs=all` but is an explicit long-running campaign, not an
+interactive default or a consequence of documentation cleanup. The ordinary
+`test` and `java17PluginTest` tasks do not run live corpus replay.
 
-## Doris adapter shape (`DorisReplayReadEngine`, lives in this module)
+The existing harness probes local FE SQL at 127.0.0.1:9030 and PostgreSQL at
+localhost:9432 by default. Endpoint property forwarding remains an open finding
+(M15); do not assume arbitrary `-D` options reach a forked test JVM. Missing FE,
+PostgreSQL, corpus or DuckDB extensions can assumption-skip this task today (M14).
+Read XML and actual mirrored counts; zero failures is not nonzero coverage.
 
-Transport: **mysql-protocol JDBC against a live compose FE+BE** — inherently
-heavier than Trino's in-JVM runner, but `connect` is per-file and queries
-batch within it.
+## Adapter invariants
 
-- `connect(catalogUri, dataPath)`:
-  `DROP CATALOG IF EXISTS corpus; CREATE CATALOG corpus PROPERTIES(...)` on
-  the FE with `metadata.url = <catalogUri>` (requires the Postgres form —
-  this is exactly the backend-axis gate; today's oracle attaches a
-  duckdb-local `.db` metadata file our FE cannot read) and
-  `storage.warehouse`/s3 props derived from `dataPath`. DROP/CREATE per file
-  is cheap and gives clean cache state (equivalent to `REFRESH CATALOG`,
-  stronger). The FE+BE cluster itself is brought up ONCE per run, not per
-  file.
-- `accepts(sql)` v1: bare scalar `SELECT`s only — reject non-SELECT, DuckDB
-  extension syntax/functions, and types our read surface degrades
-  (TIME/TIMETZ/INTERVAL → STRING, JSON/UUID renderings). Grow incrementally;
-  the green-count climb is the read-path progress metric.
-- `executeQuery(sql)`: plain JDBC; render each cell per the normalization
-  below, `null` stays Kotlin `null`.
+- Native JDBC initializes the oracle's DuckLake/PostgreSQL extensions. Each engine
+  instance uses UUID-owned catalog/database names and cleans only acknowledged
+  resources. Abandoned prefix-matching databases are never swept at startup.
+- Refresh metadata before mirrored reads after an external writer. Name reuse is
+  not permission to drop a foreign catalog/database.
+- `DorisCorpusDialect`/SQL adaptation deny unsupported forms and rewrite accepted
+  reads. Literal/quoted-name rewrite fidelity and broad error-to-skip classification
+  remain M13/M16, not proof that every accepted query is safe.
+- Normalize real cells, preserve SQL NULL versus literal `NULL`, and use pinned
+  replay rendering for Float/Double. No production replay dependency or fabricated
+  golden values are introduced.
+- Report oracle checks, accepted/attempted/successful mirrors, skips and failures
+  separately. One query skipped before mirroring cannot contribute mirror coverage.
 
-## The real work: value normalization (Doris JDBC → DuckDB canonical)
+Current focused native/quoted/Boolean/float replay acceptance is independently
+strict and measured on Java25/17; see [CATALOG-CANDIDATE.md](CATALOG-CANDIDATE.md).
+It does not repair every broad-corpus M13–M17 finding or qualify a full campaign.
 
-Bounded, pure, testable in isolation (unit tests need no cluster):
-
-| Logical value | Doris mysql-protocol rendering | DuckDB canonical | Action |
-|---|---|---|---|
-| BOOLEAN | `1` / `0` (TINYINT-ish) | `true` / `false` | map via ResultSetMetaData type |
-| DATETIMEV2(6) | trailing zeros vary by scale | micro-trimmed (`GoldenComparator` rules) | trim to DuckDB's trimming |
-| DECIMALV3 | scale-padded (`1.50`) | trailing-zero behavior differs | normalize via BigDecimal |
-| DATE/DATEV2 | `yyyy-MM-dd` | same | pass-through |
-| FLOAT/DOUBLE | Java rendering | DuckDB rendering (esp. `inf`/`nan`) | map specials, format check |
-| VARBINARY/blob | driver-dependent | `\xHH` escapes | encode to DuckDB form |
-| NULL | JDBC null | cell = Kotlin null | pass-through |
-
-Known risk (flagged for co-review, does NOT block freezing the seam):
-decimals + timestamps are where string canonicalization is most likely to go
-brittle across mysql-protocol driver versions. **Position: string
-canonicalization is right for v1; keep `GoldenComparator` internally evolvable
-to typed comparison** (parse both sides to typed values when both parse) —
-adapter interface unchanged either way, so freeze `ReplayReadEngine` after
-Trino contact as planned.
-
-## Prep checklist (do-able before the backend axis lands)
-
-- [x] **Corpus-mode compose profile** — `compose/smoke.sh --up-only`
-  (2026-07-05, validated live): substrate + plugin install + FE/BE health +
-  `enable_local_shuffle_planner` shim, exits at the driver boundary; FE on
-  `127.0.0.1:9030` (root, no password). Our stack already matches the
-  backend-axis shape — Postgres (`trino-ducklake-postgres`) + MinIO
-  (`trino-ducklake-minio`) on a shared network — so the only new requirement
-  is that the RUNNER's oracle attaches to that same Postgres + writes the
-  same MinIO bucket.
-- [x] **`DorisValueNormalizer`** + unit tests —
-  `src/dev/brikk/ducklake/doris/corpus/DorisValueNormalizer.kt` (2026-07-05):
-  targets the oracle's `renderCell` forms (Java `toString` numerics incl.
-  `Infinity`/`NaN`, micro-trimmed timestamps, UTC `+00`, `\xHH` blobs,
-  `toPlainString` decimals, TINYINT(1)→boolean via metadata flag).
-- [x] **`accepts()` v1 predicate** + unit tests —
-  `src/dev/brikk/ducklake/doris/corpus/DorisCorpusDialect.kt` (2026-07-05):
-  SELECT-only (comment-tolerant), deny-tiers for DuckDB syntax (`::`, `[`,
-  `{`, lambdas), catalog/file table-functions, degraded type families
-  (INTERVAL/UNNEST/sampling), word-boundary precise. WITH-CTEs rejected in
-  v1 (Doris supports them — first widening candidate).
-- [x] **Module wiring** (2026-07-06): `testImplementation(project(":ducklake-corpus-replay"))`
-  + mysql-connector-j; test code compiles at JVM 25 (main stays 17 — the FE
-  ABI) via classpath-attribute overrides in build.gradle.kts. Adapter =
-  `test/src/.../corpus/DorisReplayEngine.kt`; harness =
-  `DorisCorpusReplayTest` driven by the dedicated `corpusReplayTest` task
-  (pins `java.io.tmpdir` into the compose bind mount; excluded from plain
-  `test`).
-- [x] **Skip-list seed** (2026-07-06): metadata_parameters (props not
-  threaded), ducklake_settings (backend-type assert), metadata_cache (known
-  BE nullability gap).
-- [ ] **Full-corpus green**: run `-Dducklake.corpus.dirs=all`, triage the
-  remaining failure classes into fixes vs documented skips (in progress).
-
-## What this replaces
-
-Hand-porting read-parity tests from trino-ducklake (paused per
-[`TODO-read.md`](./TODO-read.md)). The five audit files already ported stay —
-they pin FE-metadata semantics (type surfaces, snapshot pinning, identifiers)
-the corpus can't see, since the corpus exercises full SQL through a live BE.
+The original interface sketch, bring-up checklist and old counts are retained in
+[the archived design](archive/DESIGN-corpus-replay-adapter-original.md).

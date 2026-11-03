@@ -98,7 +98,7 @@ and shared SPI/bootstrap bytes are not whole-plugin/transitive-closure proof.
 
 File scans now always use V2; `enable_file_scanner_v2` is a deprecated no-op, not a
 legacy-reader rollback switch. Timestamp/DEFAULT semantics and native-reader changes
-are summarized in [the reviewed delta](REVIEW-DORIS-UPSTREAM-2026-11-02.md).
+are summarized in [the reviewed delta](archive/REVIEW-DORIS-UPSTREAM-2026-11-02.md).
 
 ## Commands, evidence and rollback
 
@@ -144,6 +144,7 @@ the live-tested API27 A, build ID
 ZIP SHA256 `093adf4500c2479c8053bc6f8546f74a56686188def516d6d6df92e6f8c81c60`.
 Full closeout: `$W/output/api27-closeout-results.json`; promotion/old directory
 ledger: `api27-sdk-promotion.json`. Default catalog0.12/JDBC1.5.6.0 and separate
-candidate pins are unchanged; retained stacks are not reloaded/migrated. All changes
-remain uncommitted/unpushed at handoff creation.
+candidate pins are unchanged; retained stacks are not reloaded/migrated. Changes
+were uncommitted at handoff creation and subsequently committed/pushed in `21fdcb0`
+and `19d235f`. Current setup is maintained in [DORIS-RUNTIME.md](DORIS-RUNTIME.md).
 No message, session prompt, adoption request or project note is sent to Duckbridge.

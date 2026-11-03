@@ -18,7 +18,7 @@ delegated. This user instruction supersedes automatic FYI delivery for this task
 ## Frozen inputs and preservation
 
 - Source:37 commits beyond qualified `8e10b235cf030d486b6840cfd64b6218ab515e6d`;
-  see [the source-only review](REVIEW-DORIS-UPSTREAM-2026-11-02.md).
+  see [the source-only review](archive/REVIEW-DORIS-UPSTREAM-2026-11-02.md).
 - Connector API **27.0**, filesystem API **7.0**, JNI **6.0**, BE execution **19**,
   Thrift **0.24.0**, Maven revision `1.2-SNAPSHOT`.
 - Independent pristine source worktree:
@@ -149,10 +149,10 @@ Fresh published-candidate API27 Java25 tests also pass **286/one existing skip**
 Java17 **255/same skip**, including strict catalog/fixture/replay/SLT hashes and
 runtime/package checks. It remains a separate dependency lane, not the default.
 
-Default/candidate and actual runtime/read checks pass as recorded below. Remaining
-gates are the final frozen Python rerun, controlled SDK/default promotion, plain
-default byte verification and final handoff closeout. Neither previous API26 receipts
-nor upstream PR test claims are relabelled as API27.
+Default/candidate and actual runtime/read checks pass as recorded below. The final
+section records the completed Python rerun, controlled SDK/default promotion,
+normal-default byte verification and handoff closeout. Neither previous API26
+receipts nor upstream PR test claims are relabelled as API27.
 
 Both new runtime images and actual runtime qualification pass. The final handoff includes frozen
 source/API/wire versions, build-env and SDK/FE/native/JNI/image hashes, commands,
@@ -200,7 +200,8 @@ The first final130-case Python run executes all cases with frozen sources but hi
 four30-second mock-driver timeouts under concurrent workloads. No timeout, guard or
 assertion is relaxed. It is being rerun with two disjoint workers on the already
 owned disk-backed temporary roots; the failing six-worker result is not final green.
-Global SDK/default distribution promotion remains gated on the completed checks.
+The subsequent passing rerun and gated promotion are recorded below; the failed
+attempt is retained, not relabelled as passing.
 
 ## Final promotion and user handoff
 
@@ -247,6 +248,7 @@ project note, adoption assignment or acknowledgement is sent/claimed. Source
 applicability of its canonical Java-only handler patch is checked read-only;
 pristine native-S3 results do not qualify that patched JDBC/Quack runtime.
 
-Repository changes remain uncommitted/unpushed. This is a scoped API27 re-vendor,
+The completed changes were committed/pushed as `21fdcb0` (default nested-read fix)
+and `19d235f` (API27 re-vendor and requester-only handoff). This is a scoped re-vendor,
 not closure of broader R07, history/mapping/default evolution, inline/CDC, all-JNI,
 production or performance work.

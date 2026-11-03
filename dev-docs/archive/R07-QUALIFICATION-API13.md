@@ -6,7 +6,7 @@ install today's API27 bundle into this retained stack or reinterpret these old
 results as testing a new catalog. The current published `-33` candidate uses
 `-PcatalogReadCorrectnessCandidate=true`, isolated output and the bounded API27
 runner documented in
-[read-correctness qualification](../dev-docs/VALIDATION-CATALOG-READ-CORRECTNESS-2026-11-01.md).
+[current read-correctness qualification](../CATALOG-CANDIDATE.md).
 
 This is **qualification, not deployment or 1.1 enablement**. It does not use the
 normal smoke driver (which includes writes/maintenance), the shared Trino

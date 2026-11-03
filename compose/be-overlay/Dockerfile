@@ -1,7 +1,7 @@
 # BE overlay image for the DuckLake-on-Doris live smoke.
 #
 # Overlays our locally-built master BE (`output/be`, from apache/doris master at
-# the current re-vendor pin — see ../fe-patches/FE-PATCHES.md "Re-vendor log")
+# the qualified pin — see dev-docs/DORIS-RUNTIME.md)
 # onto the stock released BE image, so the compose cluster runs a master BE
 # (needed for master-only behaviour: §8b count-from-manifests, §12b DEFAULT
 # backfill, writes, §13 GC) while inheriting the base image's init scripts / JDK

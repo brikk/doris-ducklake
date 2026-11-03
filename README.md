@@ -1,114 +1,54 @@
-# Apache Doris DuckLake Connector — Feature Support
+# DuckLake connector for Apache Doris
 
-> ⚠️ **Pre-alpha. Do not use in production.** This is an out-of-tree Doris
-> catalog **SPI plugin** for the [DuckLake](https://ducklake.select) open
-> table format (spec v1.0). It targets the `fe-connector` catalog SPI, which
-> **merged into Apache Doris `master`** (`#64304` *decouple external catalogs
-> from FE core into loadable connector plugins*, + the `fe/fe-connector` tree);
-> we target apache/doris `master` (source/SPI pin `4bc7f426828`, plugin API **27.0**), **not** the
-> now-retired brikk fork `branch-catalog-spi`. The SPI is not in any tagged
-> Doris *release* yet, so a stock released Doris build still can't load it —
-> build the FE from master (see [`fe-patches/`](fe-patches/); PATCH-FREE). The
-> connector is **read-focused today** — the write path is nascent (basic
-> INSERT/CTAS/DDL work; DELETE/UPDATE/MERGE do not). If you want a working
-> DuckLake adapter for an OLAP engine today, use
-> [`trino-ducklake`](../trino-ducklake/) instead.
+**Pre-alpha. Do not use in production.** This plugin lets Doris query
+[DuckLake](https://ducklake.select/) tables backed by **PostgreSQL metadata and
+Parquet files**. Basic INSERT, CTAS and schema/table creation are also available.
 
-As checked on 2026-11-02, latest stable is **4.1.5**; the fetched `branch-4.2`
-still lacks `fe/fe-connector`. Master/future 5.x is the plugin target.
-An API-27 plugin requires an API-27 FE and filesystem API 7; the `4bc7f426828`
-re-vendor uses matching FE/BE and the complete JNI-6 distribution. API equality
-alone is not source/wire/runtime qualification.
-Connector and matching FE/BE isolated smoke qualification are green on this pin.
-The BE is an ASAN validation build, not a performance-qualified release build.
-The September API-9 FE + stock-4.1.4 smoke is historical evidence only; it does
-not qualify today's artifacts. See the [re-vendor ledger](fe-patches/FE-PATCHES.md).
+The connector plans scans in the Doris frontend (FE); the backend (BE) reads
+Parquet directly. It does not run DuckDB queries in the read path and cannot read
+DuckDB-native `.db` data files.
 
-Connector for the DuckLake format using **PostgreSQL** as the catalog metadata
-backend (the shared, multi-process shape a Doris FE+BE cluster needs). Tested
-with DuckDB 1.5.6 (JDBC 1.5.6.0) for cross-engine compatibility.
+## Required runtime
 
-**Final-1.1 / R07: guarded experimental file tier, not a rollout.** The default
-dependency remains **0.12.0** and 1.1 reads remain off. The candidate lane uses
-**0.13.0-20261101.082015-33 / JDBC 2.0.0.0**, selected with
-`-PcatalogReadCorrectnessCandidate=true`, and retains the `experimental.final11.reads=true` opt-in
-for bounded PostgreSQL/S3 native-file planning, with optional recent-snapshot
-history (`final11.history-window`, 0 by default, at most 16). Unsupported inline,
-snapshot-filtering, mapping and type cases still reject; all 1.1 writes/DDL/
-maintenance stay disabled. See the [declared scope and evidence](dev-docs/VALIDATION-R07-IMPLEMENTATION-2026-10-24.md)
-and [isolated harness](compose/R07-QUALIFICATION.md). Feature tables below still
-describe the legacy tier, not blanket 1.1 support or production approval.
-The [published read-correctness intake](dev-docs/VALIDATION-CATALOG-READ-CORRECTNESS-2026-11-01.md)
-records its separate parser/replay checks; old API13 campaign results are not
-qualification of the new snapshot on API26.
-The [API27 qualification](dev-docs/VALIDATION-DORIS-API27-2026-11-02.md) records its
-separate runtime checks; catalog0.12.0 remains the default. File scans are now V2-only;
-`enable_file_scanner_v2` is a deprecated no-op, not a legacy-reader fallback switch.
+- **Doris source:** `4bc7f426828e4cedfd2b7ce9b76fe95b14b5b146`, with matching FE and BE.
+- **Connector API:** 27.0; filesystem API 7.0; complete JNI API 6.0 distribution.
+- **Default catalog library:** 0.12.0; DuckDB interoperability fixture: 1.5.6.
+- **Plugin runtime:** Java 17. Building the plugin requires JDK 25.
 
-## Architecture — why this is read-focused, and different from Trino
+Stock Doris releases, including the checked 4.2 release candidate, lack the
+connector SPI required by this plugin. An API number or a changed manifest alone
+does not establish runtime compatibility. The qualified BE is an **ASAN validation
+build**, not a performance-qualified release build. The FE needs no local patch.
 
-Doris and Trino run the DuckLake plugin very differently, and it shapes the
-whole feature surface:
+## Build and install
 
-| | `trino-ducklake` | `doris-ducklake` |
-|---|---|---|
-| Where scans execute | **In-JVM** (Trino ParquetReader, or DuckDB for the `.db` path) | **In the Doris BE** (C++), via its native Parquet reader |
-| Connector's job | Metadata **and** data: plans splits *and* produces pages | **FE-side only**: metadata + scan *planning*; emits Iceberg-shaped thrift ranges, the BE does the reading |
-| Predicate eval | Trino operators, or pushed into DuckDB | Doris BE evaluates during its native scan; `applyFilter` hands BE a filter + prunes files |
-| `trino_parity` extension | Central to the DuckDB path | **Not in the read path at all** |
-| DuckDB-native `.db` files | Read via DuckDB executor | **Unreadable by BE** → Parquet-only |
+Install the matching Doris SDK first; see [runtime setup](dev-docs/DORIS-RUNTIME.md).
+From this repository's root:
 
-**Consequences:** the Doris connector is simpler on execution (no executor /
-Arrow bridge, no function pushdown to translate) but is **bounded by what the
-Doris BE Parquet reader accepts**. Function/expression pushdown and
-DuckDB-native file reads are **out of scope by design** (execution-model
-mismatch), not backlog.
-
-## Build
-
-Requires JDK 17 for the FE-facing plugin ABI, built on the project-wide JDK 25
-toolchain (Kotlin emits 17 bytecode). Managed via [mise](https://mise.jdx.dev/)
-(`jvm/mise.toml`) or [SDKMan](https://sdkman.io/).
-
-```shell
-./gradlew assemble        # builds the plugin zip
+```sh
+./gradlew assemble
 ```
 
-Install the matching Doris SPI/Thrift closure first (see the
-[build/qualification report](dev-docs/VALIDATION-DORIS-API27-2026-11-02.md)).
-For isolated qualification, `-PdorisRepository=/path/to/pinned/repository` selects
-only the `org.apache.doris` artifacts; the default remains `mavenLocal()`.
+The bundle is `build/distributions/doris-ducklake-0.0.1-plugin.zip`, with an adjacent
+`.identity.json` receipt. Keep them together. Unpack the complete bundle into
+`${DORIS_HOME}/plugins/connector/ducklake/` **while FE is stopped**, preserving its
+`lib/` layout, then start FE. Do not replace JARs beneath a running classloader.
+`REFRESH CATALOG` refreshes metadata; it does not reload plugin code.
 
-The plugin zip is at
-`build/distributions/doris-ducklake-<version>-plugin.zip` — a
-flat `lib/` layout containing the connector jar plus the runtime deps the FE
-parent classloader doesn't already supply (Postgres driver, jOOQ, kotlin
-stdlib, …). `fe-connector-spi` and `fe-thrift` are `compileOnly`; the FE
-provides them. The plugin owns its isolated Iceberg SDK copy.
+For the local development cluster, use the verified install/start path:
 
-### FE integration
-
-The FE builds patch-free from the pinned apache/doris master. The former type
-whitelist and engine-padding patches are historical; see
-[`fe-patches/FE-PATCHES.md`](fe-patches/FE-PATCHES.md).
-
-### Running tests
-
-The module tests use Testcontainers (PostgreSQL + a real DuckLake catalog via
-DuckDB's `postgres`/`ducklake` extensions) — no live cluster needed:
-
-```shell
-./gradlew test detekt
+```sh
+DORIS_BE_PLATFORM=linux/amd64 compose/smoke.sh --up-only
 ```
 
-The **corpus replay** test mirrors upstream DuckLake reads through a live
-compose FE+BE — see [Upstream corpus replay](#upstream-corpus-replay).
+This requires the locally built matching images and the sibling PostgreSQL/MinIO
+substrate. See [the development stack guide](dev-docs/COMPOSE.md) for prerequisites,
+loaded-build verification, recovery and teardown.
 
-## Install
+## Connect to a lake
 
-Unzip the plugin into the FE's `plugins/connector/ducklake/` directory
-(the compose overlay does this into a named volume; see below), then restart
-the FE (plugins load at startup). Create a catalog:
+The PostgreSQL database must contain an initialized DuckLake catalog. FE needs
+access to PostgreSQL; BE needs access to its data files. S3/MinIO example:
 
 ```sql
 CREATE CATALOG dl PROPERTIES (
@@ -117,274 +57,97 @@ CREATE CATALOG dl PROPERTIES (
     'metadata.user'     = 'ducklake',
     'metadata.password' = '<password>',
     'storage.warehouse' = 's3://<bucket>/<prefix>/',
-    -- S3 storage credentials (forwarded to the BE Parquet reader):
     's3.endpoint'       = 'http://<host>:9000',
     's3.region'         = 'us-east-1',
     's3.access_key'     = '<key>',
     's3.secret_key'     = '<secret>',
     'use_path_style'    = 'true'
 );
+
+SHOW DATABASES FROM dl;
+SELECT * FROM dl.sales.orders LIMIT 10;
+REFRESH CATALOG dl;  -- refresh after another engine changes the lake
 ```
 
-### Local dev stack (Docker Compose)
+`metadata.url`, `metadata.user` and `storage.warehouse` are required.
+`metadata.password` is optional for databases configured for trust authentication.
+Storage credentials are forwarded to the native reader; do not commit real secrets.
 
-An FE+BE cluster (over the shared Postgres+MinIO substrate the trino stack
-uses) is in [`compose/`](compose/). One-command bring-up + read/write smoke:
-`compose/smoke.sh`; headless bring-up for the corpus/dev loop:
-`compose/smoke.sh --up-only`. See [`compose/README.md`](compose/README.md).
+## What works
 
-## Type System
+- Parquet scans, column projection, file-statistics pruning and bucket pruning.
+- Identity, year/month/day/hour and `bucket(N, column)` partitions. DuckLake
+  bucketing is not Doris `DISTRIBUTED BY` hashing.
+- Latest-snapshot file-based position deletes.
+- Snapshot pinning and scalar time travel by snapshot ID or timestamp, subject
+  to the historical-read restrictions below.
+- Current native STRUCT/LIST/MAP reads within the default parser's naming/type
+  limits; populated values and NULL parents are checked on the qualified runtime.
+- Scalar added-column DEFAULT backfill for the tested types.
+- Basic scalar INSERT/CTAS, CREATE/DROP SCHEMA and CREATE/DROP TABLE, including
+  partitioned writes. Doris-written files are checked through DuckDB read-back.
+- Snapshot expiry, scheduled-file cleanup and managed-orphan cleanup, with the
+  administrative scope restrictions below.
 
-DuckLake catalog type → Doris type. **Read** covers every type below (the BE
-reads the Parquet body). **Write** (CREATE TABLE column types) covers the
-non-degraded core only.
+These are bounded capabilities, not a claim that all combinations or the full
+upstream corpus pass. See [type mappings](dev-docs/TYPES.md) and
+[qualification evidence](dev-docs/VALIDATION-DORIS-API27-2026-11-02.md).
 
-| DuckLake Type | Doris Type | Read | Write | Notes |
-|---------------|------------|:----:|:-----:|-------|
-| `boolean` | BOOLEAN | Yes | Yes | |
-| `int8` (tinyint) | TINYINT | Yes | Yes | BE Iceberg writer crashes on narrow-int writes today — see Known Limitations |
-| `int16` (smallint) | SMALLINT | Yes | Yes | (narrow-int write caveat) |
-| `int32` (integer) | INT | Yes | Yes | |
-| `int64` (bigint) | BIGINT | Yes | Yes | |
-| `uint8` | SMALLINT | Yes | — | Widened on read |
-| `uint16` | INT | Yes | — | Widened on read |
-| `uint32` | BIGINT | Yes | — | Widened on read |
-| `uint64` | DECIMALV3(20,0) | Yes | — | Widened on read |
-| `int128` | DECIMALV3(38,0) | Yes | Yes | Doris LARGEINT ↔ int128 on write |
-| `uint128` | STRING | Yes | — | Degraded — no numeric fit past 38 digits |
-| `float32` | FLOAT | Yes | Yes | |
-| `float64` | DOUBLE | Yes | Yes | |
-| `decimal(p,s)` | DECIMALV3(p,s) | Yes | Yes | Precision up to 38 |
-| `varchar` | STRING | Yes | Yes | |
-| `blob` | VARBINARY | Yes | Yes | |
-| `uuid` | VARBINARY(16) | Yes | — | Degraded — raw bytes, no UUID type |
-| `date` | DATEV2 | Yes | Yes | |
-| `timestamp` | DATETIMEV2(6) | Yes | Yes | Microsecond precision (DuckLake native) |
-| `timestamp_s` | DATETIMEV2(0) | Yes | Yes | Second precision |
-| `timestamp_ms` | DATETIMEV2(3) | Yes | Yes | Millisecond precision |
-| `timestamp_ns` | DATETIMEV2(6) | Yes | — | Degraded — our connector still maps to microseconds; native `TIMESTAMP_NS` support has not been adopted here |
-| `timestamptz` | DATETIMEV2(6) / TIMESTAMPTZ | Yes | — | Degraded (BE-gated) by default — read as naive UTC micros; the 4.1.x BE can't read a UTC-micros parquet column into a zone-aware slot, so zone-aware typing is deferred (correct UTC values). Set `enable.mapping.timestamp_tz=true` to map to zone-aware `TIMESTAMPTZ` on a master/nightly BE (see Configuration) |
-| `time` | STRING | Yes | — | Degraded — Doris has no first-class TIME |
-| `timetz` | STRING | Yes | — | Degraded |
-| `list<T>` | ARRAY(T) | Guarded | — | Current native files; nested legacy mapped files/history refuse |
-| `struct<...>` | STRUCT(...) | Guarded | — | Current native files; default-lane ordinary-name fixture qualified separately below |
-| `map<K,V>` | MAP(K,V) | Guarded | — | Current native files; nested legacy mapped files/history refuse |
-| `json` | STRING | Yes | — | Degraded — stored as string, no JSON functions |
-| `variant` | STRING | Yes | — | Degraded |
-| `interval` | STRING | Yes | — | Degraded |
-| `geometry` / `point` / `linestring` / `polygon` / `multipoint` / `multilinestring` / `multipolygon` / `geometrycollection` | VARBINARY | Yes | — | Degraded — raw bytes, no spatial functions |
+## Important limits
 
-"Degraded" means data is preserved and reads correctly, but type-specific
-operators/functions aren't available through Doris. Write of nested and most
-degraded types is not yet implemented (v1 CREATE TABLE accepts the
-non-degraded scalar core).
+- **Small/inline data:** DuckLake can store small writes and deletes in metadata
+  instead of Parquet. Inline data is rejected by default; inline deletes are
+  unsupported. The `experimental.inlined.reads=true` data path is shared-filesystem,
+  development-only—not a distributed solution.
+- **Historical reads:** do not rely on history involving multi-snapshot delete
+  files; future delete entries can be applied to an older snapshot. Partial-file
+  compaction history and nested history are explicitly refused.
+- **Imported files:** scalar name mapping has limits, including conflicting
+  embedded field IDs and DROP/re-ADD name reuse. Nested mapped files refuse.
+- **Nested types:** the default parser does not support arbitrary quoted field
+  names or nested DECIMAL signatures. Nested evolution/defaults and final-1.1
+  nested scans are not qualified.
+- **Types and writes:** use INT/BIGINT instead of TINYINT/SMALLINT writes; CTAS
+  literals can infer narrow integers. Nanosecond timestamps map to microseconds.
+  Unsigned and other degraded mappings are not a general write guarantee.
+- **Not available:** DELETE/UPDATE/MERGE, INSERT OVERWRITE, ALTER-column DDL,
+  sorted writes, compaction procedures and DuckLake views. General DuckLake 1.1
+  support is not enabled; the developer candidate is separate and default-off.
+- **Correctness gaps remain:** pruning/type conversions, concurrent rewrites and
+  cross-engine write metadata still have open findings. The
+  [active findings register](dev-docs/REVIEW-FINDINGS.md) records their boundaries.
 
-Nested native-file reads use a complete parent-aware field-ID dictionary in both
-build configurations; a scalar-only dictionary could silently fill populated nested
-columns with NULL. See [default catalog0.12 reproduction/fix](dev-docs/VALIDATION-DEFAULT-NESTED-READS-2026-11-01.md).
-This does not promote catalog0.13 or backport its quoted-signature parser: default
-catalog0.12 parser/naming limits remain, and nested defaults/evolution, mapped files,
-history, inline transport and final1.1 nested reads are not blanket-qualified.
+`enable.mapping.timestamp_tz` defaults to `false`: `timestamptz` is exposed as
+UTC-valued, zone-naive `DATETIMEV2(6)`. Setting it to `true` requests zone-aware
+`TIMESTAMPTZ`; this is an opt-in mapping, not blanket timezone qualification.
 
-## Read Operations
+## Maintenance requires lake-wide administrative control
 
-Verified against the upstream DuckLake corpus (live FE+BE mirror vs a DuckDB
-oracle) across catalog, time_travel, types, insert, delete, update, merge,
-partitioning, schema_evolution, stats, alter, view, general, table_changes,
-metadata, and comments dirs.
+Doris exposes these as `ALTER TABLE <table> EXECUTE ...`, but
+**`expire_snapshots` and `cleanup_old_files` operate catalog-wide**, ignoring the
+named table for scope. `remove_orphan_files` defaults to the table directory;
+`scope='schema'` or `'catalog'` widens it.
 
-| Feature | Supported | Notes |
-|---------|:---------:|-------|
-| SELECT / table scans | Yes | Query planning happens FE-side; the BE reads Parquet natively |
-| Projection pushdown | Yes | Column pruning via `applyProjection` |
-| Predicate pushdown (WHERE) | Yes | `applyFilter` hands the BE a filter + prunes whole files via `ducklake_file_column_stats` |
-| Partition pruning | Yes | Identity and temporal partitions |
-| Bucket partition pruning | Yes | Murmur3 hash; equality predicates pruned (ranges aren't — bucketing scrambles ordering) |
-| Partition-bearing scan ranges | Yes | Identity partition values surfaced so the BE stops path-parsing the (non-hive) layout |
-| COUNT(*) pushdown | Yes | Served from `ducklake_data_file.record_count` when exactly safe; refuses (BE counts by reading) on any filter, delete file, inlined state, non-latest snapshot, or partial (compacted) file |
-| Parquet data files | Yes | Via the Doris BE native Parquet reader |
-| Time travel — FOR VERSION AS OF | Yes, scalar tier | By snapshot ID; nested file history explicitly refuses |
-| Time travel — FOR TIMESTAMP AS OF | Yes, scalar tier | Resolves to the snapshot active at-or-before the instant; nested file history refuses |
-| Snapshot pinning (MVCC) | Yes | `beginQuerySnapshot` / `applySnapshot` thread the resolved snapshot onto the scan |
-| Table statistics | Yes | Row count + on-disk size from `ducklake_table_stats` |
-| Schema evolution on read | Yes | Renamed / added columns read correctly; a column added with `DEFAULT` backfills its `initial_default` value for older rows (scalar types; complex/binary skip to NULL), otherwise NULL; across the alter suite |
-| Registered files (`add_files`) | Yes, scalar tier | Externally-registered Parquet read via `ducklake_name_mapping` (case/rename/reorder resolved), including hive-layout directory partitions (`key=value/` path values filled). Nested mapped-file scans refuse. A table mixing hive-layout `add_files` files with natively-partitioned files fails loud rather than mis-filling |
-| Inlined data (small tables) | No (default) | **Hard-blocked by default** (loud error) — DuckLake keeps small writes in `ducklake_inlined_*` catalog rows, not Parquet. An experimental dev-only path (`experimental.inlined.reads=true`) synthesizes a temp Parquet, but it requires FE and BE to share warehouse storage as a local filesystem, so it is NOT production-viable. A distributed-cluster solution (object-store write or an SPI payload channel) is a required follow-up — see dev-docs. |
-| Delete files (merge-on-read) | Yes, latest snapshot | DuckLake OPTIONAL position-delete columns read correctly on matching master FE/BE `96d0ac68e84` (live 100→93 probe). Historical reads over a delete file containing entries from later snapshots remain unsafe (F08) and need filtering or a fail-closed guard. |
-| Time travel over a compaction boundary | Guarded | A read AS OF a snapshot older than a `merge_adjacent_files` compaction needs a per-row hidden-column snapshot filter the BE can't apply — fails loudly instead of over-returning. Latest-snapshot reads unaffected. |
-| Views | No | DuckLake views are not surfaced yet (they skip cleanly) |
-| Function / expression pushdown | No | **Out of scope** — the BE evaluates predicates natively; there's no in-JVM engine to push to |
-| DuckDB-native `.db` data files | No | **Out of scope** — the BE has no DuckDB reader; Parquet-only |
-
-## Write Operations
-
-The write path is **nascent** — basic INSERT/CTAS and metadata DDL work
-end-to-end (Doris writes a `TIcebergTableSink`; the BE writes Parquet and
-reports commit data the connector maps into DuckLake). Row-level DML and the
-richer DDL/maintenance surface are not built.
-
-| Feature | Supported | Notes |
-|---------|:---------:|-------|
-| INSERT INTO | Yes | BE writes Parquet via the Iceberg sink; commit mapped to DuckLake data files. Verified cross-engine (Doris writes, DuckDB reads back). |
-| CREATE TABLE AS SELECT | Yes | Composed DDL + INSERT |
-| CREATE SCHEMA / DROP SCHEMA | Yes | Non-empty schema drop rejected by the catalog |
-| CREATE TABLE | Yes | Non-degraded scalar columns; Iceberg-style `PARTITIONED BY (…)` including `bucket(N, col)` |
-| DROP TABLE | Yes | |
-| Partitioned writes | Yes | Identity/temporal transforms + `bucket(N, col)` (Murmur3, verified equal to DuckLake) |
-| DELETE / UPDATE / MERGE | No | Not built. The P6 SPI admits row-level DML by capability, so this is the main write build-out — see [`dev-docs/TODO-write.md`](dev-docs/TODO-write.md). |
-| INSERT OVERWRITE / static-partition INSERT | No | Not declared |
-| Sorted writes | No | |
-| ALTER TABLE (columns/branches/partition fields) | No | Generic P6 DDL SPI is available; not adopted yet |
-| Maintenance — `expire_snapshots`, `cleanup_old_files`, `remove_orphan_files` | Yes | Run as `ALTER TABLE t EXECUTE <proc>(...)`. See [Procedures](#procedures). |
-| Maintenance — compaction (`rewrite_data_files`) | No | Generic P6 procedure SPI available; not adopted |
-
-## Partitioning
-
-| Transform | Read | Write | Notes |
-|-----------|:----:|:-----:|-------|
-| Identity | Yes | Yes | Partition by column value |
-| `year(col)` | Yes | Yes | Date or timestamp column |
-| `month(col)` | Yes | Yes | Date or timestamp column |
-| `day(col)` | Yes | Yes | Date or timestamp column |
-| `hour(col)` | Yes | Yes | Timestamp column |
-| `bucket(N, col)` | Yes | Yes | Iceberg-compatible Murmur3 hash; equality predicates pruned, ranges not. `DISTRIBUTED BY` (Doris CRC32) is rejected, not mis-mapped. |
-
-## Statistics
-
-| Statistic | Supported | Notes |
-|-----------|:---------:|-------|
-| Table row count | Yes | From `ducklake_table_stats` |
-| On-disk data size | Yes | From `ducklake_table_stats` |
-| Column min/max (file-level, for pruning) | Yes | From `ducklake_file_column_stats`; drives file pruning in `applyFilter` |
-| Bucket-partition pruning | Yes | Murmur3 target-bucket matching for equality/IN predicates |
-
-## Procedures
-
-Maintenance procedures are exposed through Doris's table-procedure grammar,
-`ALTER TABLE <table> EXECUTE <proc>(...)` (Doris has no catalog/schema-scoped
-`EXECUTE`). **Semantic caveat:** DuckLake snapshots are *catalog-wide* versions,
-not per-table, so `expire_snapshots` / `cleanup_old_files` operate **catalog-wide
-and ignore the named table** — the result row says so explicitly rather than
-faking per-table expiry. Compaction (`rewrite_data_files`) is not adopted yet.
-
-| Procedure | Scope | Description |
-|-----------|-------|-------------|
-| `expire_snapshots([retention_threshold], [snapshot_ids], [dry_run])` | Catalog-wide | Remove old DuckLake snapshots and **schedule** the data/delete files only they referenced for later deletion (a metadata-only catalog transaction; no storage I/O). Select by `retention_threshold` (default `7d`, floored by `maintenance.min-retention`) **or** an explicit comma-separated `snapshot_ids` list (mutually exclusive; the id list is not floored). The latest snapshot is never expirable. `dry_run => true` reports what would be expired. |
-| `cleanup_old_files([retention_threshold], [dry_run])` | Catalog-wide | The physical-deletion phase that pairs with `expire_snapshots`: delete the scheduled warehouse blobs older than the grace period (`retention_threshold`, default `7d`, floored by `maintenance.min-retention`), then drop the schedule rows of the files actually deleted (best-effort per file; a failed delete keeps its row for a later retry). Touches storage only. Requires `s3.*` credentials. |
-| `remove_orphan_files([scope], [retention_threshold], [dry_run])` | Tiered | Delete `ducklake-`-prefixed managed residue (`.parquet`/`.puffin`/`.db`) under the target data path that **no** catalog row references (the leftovers of aborted commits / failed CREATEs) and is older than the grace period. Foreign files are never touched. `scope` widens from the named table: `table` (default), `schema` (alias `database`), or `catalog`. Touches storage only. Requires `s3.*` credentials. |
+The connector does **not** enforce authorization matching those wider scopes.
+Do not grant these operations to untrusted table-scoped users. Shared storage
+credentials, concurrent writers and retained readers need administrative coordination.
 
 ```sql
--- Expire snapshots older than 30 days, then reclaim the freed files:
-ALTER TABLE dl.sales.orders EXECUTE expire_snapshots(retention_threshold = '30d');
-ALTER TABLE dl.sales.orders EXECUTE cleanup_old_files(retention_threshold = '7d');
-
--- Or expire specific snapshot ids (not floored by the min-retention floor):
-ALTER TABLE dl.sales.orders EXECUTE expire_snapshots(snapshot_ids = '12,13,14');
-
--- Sweep aborted-commit residue across the whole catalog (dry run first):
-ALTER TABLE dl.sales.orders EXECUTE remove_orphan_files(scope = 'catalog', dry_run = 'true');
+-- Preview only; inspect scope and selected objects before any destructive call.
+ALTER TABLE dl.sales.orders EXECUTE expire_snapshots(
+    retention_threshold = '30d', dry_run = 'true');
+ALTER TABLE dl.sales.orders EXECUTE remove_orphan_files(dry_run = 'true');
 ```
 
-The `maintenance.min-retention` catalog property (default `7d`) floors the
-retention window on all three so a too-small `retention_threshold` can't nuke
-recent time-travel snapshots or files an in-flight (possibly cross-engine)
-writer just produced — an explicit `snapshot_ids` list bypasses the floor.
+`maintenance.min-retention` defaults to `7d` and floors age-based thresholds.
+Explicit `snapshot_ids` bypass that floor. Expiry schedules files; cleanup
+physically deletes them. Orphan cleanup selects only old, unreferenced managed
+residue, not arbitrary Parquet files. A grace period is not a concurrency lock.
+Maintenance currently uses the S3 client and has a narrower credential surface
+than native reads, including a session-token limitation.
 
-## Cross-Engine Compatibility
+## Development
 
-| Direction | Tested | Notes |
-|-----------|:------:|-------|
-| DuckDB writes, Doris reads | Yes | Corpus mirror validates row-for-row against DuckDB |
-| Doris writes, DuckDB reads | Yes | INSERT/CTAS Parquet round-trips (field_id mapping); bucket equivalence verified |
-| Shared PostgreSQL catalog | Yes | Both engines operate on the same metadata |
-| Schema evolution across engines | Yes | Read side, across the alter suite |
-
-### Upstream corpus replay
-
-The connector is verified against **DuckLake's own upstream test corpus** —
-the sqllogictest files the reference C++ implementation ships in
-`duckdb/ducklake` `test/sql/`, pinned as a git submodule in the sibling
-[`ducklake-corpus-replay`](../ducklake-corpus-replay/) module. Each corpus file
-is executed **verbatim** through an embedded DuckDB oracle (no dialect
-translation), building real catalog state on an isolated PostgreSQL database;
-every lake read the corpus performs is then re-executed through a **live Doris
-FE+BE** against the *same* catalog and compared row-for-row against the
-oracle's result. A divergence means Doris read the same DuckLake state
-differently than DuckDB — the class of bug this harness exists to catch (first
-contact found a real one: tables with inlined rows silently returned wrong
-results; another found time-travel-over-compaction over-reads).
-
-Because Doris is FE-metadata + BE-native-read (not in-JVM), the adapter only
-**mirrors read-only queries** against the oracle-built catalog: it never runs
-DuckDB-dialect writes, and a dialect gate (`DorisCorpusDialect`) skips SQL the
-Doris path can't attempt (DuckDB-only syntax, degraded-type-returning
-functions, `FILTER (WHERE)`, infinity temporal literals, catalog/file table
-functions) — those count as documented engine-skips, never failures.
-
-Requires a live cluster (`compose/smoke.sh --up-only`):
-
-```shell
-./gradlew :doris-ducklake:corpusReplayTest                              # starter dirs (~1 min)
-./gradlew :doris-ducklake:corpusReplayTest -Dducklake.corpus.dirs=delete   # one dir
-./gradlew :doris-ducklake:corpusReplayTest -Dducklake.corpus.dirs=all      # full corpus (CI/long)
-```
-
-## Configuration
-
-Catalog properties on `CREATE CATALOG dl PROPERTIES (...)`:
-
-| Property | Required | Description |
-|----------|:--------:|-------------|
-| `type` | Yes | Must be `ducklake` (whitelisted via the FE patch) |
-| `metadata.url` | Yes | JDBC URL of the DuckLake metadata database (`jdbc:postgresql://host:5432/db`) |
-| `metadata.user` | Yes | Metadata database username |
-| `metadata.password` | No | Metadata database password (empty for trust auth) |
-| `storage.warehouse` | Yes | Warehouse root, e.g. `s3://bucket/path` or `file:///local/path` |
-| `s3.endpoint` / `s3.region` / `s3.access_key` / `s3.secret_key` / `s3.session_token` | For S3 | Forwarded to the BE Parquet reader; the connector also emits the canonical `AWS_*` aliases the BE's `S3ObjStorage` expects (`AWS_ENDPOINT`/`AWS_REGION`/`AWS_ACCESS_KEY`/`AWS_SECRET_KEY`/`AWS_TOKEN`). `s3.*` are also what the maintenance procedures' S3 client uses. |
-| `use_path_style` | For S3 | `true` for MinIO / path-style S3 |
-| other `s3.*` / `aws.*` / `AWS_*` / `fs.*` | No | Any additional storage-credential keys are passed through verbatim to the BE reader (e.g. HDFS `fs.*`) |
-| `enable.mapping.timestamp_tz` | No | Default `false` maps `timestamptz` to naive `DATETIMEV2(6)` (correct UTC values, broad BE compatibility). `true` maps to zone-aware `TIMESTAMPTZ` — needs a master/nightly BE (the converter is NOT in any 4.1.x release). Mirrors the iceberg connector's flag. |
-| `maintenance.min-retention` | No | Retention floor (default `7d`) for the maintenance procedures' `retention_threshold`; guards recent time-travel snapshots / in-flight writes. See [Procedures](#procedures). |
-| `experimental.inlined.reads` | No | Dev-only. `true` enables the experimental inlined-data read path — **requires FE and BE to share warehouse storage as a local filesystem**, so it is NOT production-viable. Off by default (a table with live inlined rows fails loud). |
-
-## Not Yet Implemented / Out of Scope
-
-**Read backlog (real gaps):**
-- **Inlined data reads for production** — the experimental
-  `experimental.inlined.reads` path only works with shared FE/BE storage; a
-  distributed solution (object-store temp write + GC, or an SPI payload channel
-  that streams the rows to the BE without shared storage) is required before it
-  can be on by default. See the friction log.
-- **Serving inlined data rows** — turn the loud plan-time guard into an actual
-  read (FE-side synthesis of a Parquet range from `readInlinedData`, or a JNI
-  scanner seam). Also unblocks inline DELETE application.
-- **Historical delete-file snapshot filtering** — latest-snapshot position deletes
-  work, but a historical read must ignore delete positions created after its pin.
-  Doris reads only `file_path`/`pos`; the DuckLake delete snapshot column is not
-  filtered. See F08 in the review.
-- **Time-travel over compaction** — needs a BE hook to apply the hidden
-  `_ducklake_internal_snapshot_id` per-row filter for partial files.
-- **Per-file column mapping** — the scan-node-level schema dictionary
-  (`ducklake_name_mapping`, applied — renamed/reordered columns and `add_files`
-  files read correctly) can't express a *per-file* map, so the narrow case of
-  id-less files reusing a physical name across a DROP+re-ADD field-id boundary
-  is still unsolved (2 corpus files). Needs per-range schema info in the SPI or
-  a BE per-file name→field-id hook.
-- **Views** — DuckLake views not surfaced.
-
-**Write backlog:** DELETE/UPDATE/MERGE (P6 admits them by capability),
-INSERT OVERWRITE, sorted writes, ALTER, compaction (`rewrite_data_files`) — see
-[`dev-docs/TODO-write.md`](dev-docs/TODO-write.md). (Snapshot expiry / file
-cleanup / orphan sweep maintenance procedures are implemented — see
-[Procedures](#procedures).)
-
-**Out of scope by design (execution-model mismatch, not backlog):**
-- Function / expression pushdown — the Doris BE evaluates predicates natively.
-- DuckDB-native `.db` data files — the BE has no DuckDB reader; Doris is
-  Parquet-only. (Additional external file formats — e.g. the experimental
-  Vortex/Lance paths the trino plugin carries — are a possible later decision,
-  not a current goal; they'd need a BE reader or JNI-scanner seam.)
-
-The plan and per-phase working docs live in [`dev-docs/`](dev-docs/) — start
-with [`dev-docs/PLAN.md`](dev-docs/PLAN.md) (phases: read-side Parquet fully →
-write-side Parquet → other formats only if they still make sense for Doris).
+Build/test instructions, candidate-lane details and the open backlog live in
+[dev-docs/](dev-docs/README.md). Superseded plans, completed checklists and dated
+evidence live in [dev-docs/archive/](dev-docs/archive/README.md).

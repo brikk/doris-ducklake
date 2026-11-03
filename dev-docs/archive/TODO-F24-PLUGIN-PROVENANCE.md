@@ -1,5 +1,8 @@
 # F24 — safe plugin replacement and loaded-build identity
 
+> Completed checklist retained for design/acceptance history. Current replacement,
+> recovery and receipt instructions are in [COMPOSE.md](../COMPOSE.md).
+
 ## Status and scope
 
 **F24 complete — 13/13 implemented and verified, including real loaded A/B acceptance (2026-10-30).**

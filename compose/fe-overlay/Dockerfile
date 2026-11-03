@@ -1,6 +1,6 @@
 # FE overlay image for the DuckLake-on-Doris live smoke.
 #
-# Overlays our locally-built master FE (`output/fe`; see ../fe-patches/FE-PATCHES.md)
+# Overlays our locally-built master FE (`output/fe`; see dev-docs/DORIS-RUNTIME.md)
 # onto the stock released FE image, so the compose cluster runs our connector-SPI
 # FE while inheriting the base image's init scripts / JDK / entrypoint.
 #
