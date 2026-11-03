@@ -10,6 +10,10 @@ DuckDB-native `.db` data files.
 
 ## Required runtime
 
+**Targets a future compatible Doris 5.x release. Doris 4.x is unsupported.** Until
+that release is available, the connector requires the exact pinned master FE/BE
+builds listed below.
+
 - **Doris source:** `4bc7f426828e4cedfd2b7ce9b76fe95b14b5b146`, with matching FE and BE.
 - **Connector API:** 27.0; filesystem API 7.0; complete JNI API 6.0 distribution.
 - **Default catalog library:** 0.12.0; DuckDB interoperability fixture: 1.5.6.
