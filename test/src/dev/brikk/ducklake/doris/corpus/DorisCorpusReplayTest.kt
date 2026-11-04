@@ -174,7 +174,15 @@ internal class DorisCorpusReplayTest {
         val discovery = CorpusRunner(corpusRoot, skipList)
         val dirsProp = System.getProperty("ducklake.corpus.dirs", "general,catalog,time_travel,view")
         val files =
-            if (dirsProp == "all") {
+            if (System.getProperty("ducklake.corpus.files") != null) {
+                val selected = Files.readAllLines(Path.of(System.getProperty("ducklake.corpus.files")))
+                require(selected.isNotEmpty() && selected.distinct().size == selected.size) { "Empty/duplicate corpus selection" }
+                selected.map { name -> corpusRoot.resolve(name).normalize().also {
+                    require(!Path.of(name).isAbsolute && it.startsWith(corpusRoot.normalize()) && Files.isRegularFile(it)) {
+                        "Invalid selected corpus path: $name"
+                    }
+                } }
+            } else if (dirsProp == "all") {
                 discovery.discover()
             } else {
                 dirsProp.split(',').flatMap { discovery.discover(it.trim()) }

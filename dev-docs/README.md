@@ -26,6 +26,10 @@ archived commands/results apply only to their stated artifacts.
 
 ## Current evidence
 
+- [Corpus baseline cleanup](VALIDATION-CORPUS-BASELINE-2026-11-04.md): independent
+  native/backend controls for all 159 retained failures, producer-pin comparison
+  and replay scratch isolation. [Upstream status](UPSTREAM-DORIS-2026-11-04.md)
+  records mainline fixes, API29 and 4.2 RC2 progress without changing runtime pins.
 - [Doris-local read safety](VALIDATION-DORIS-READ-SAFETY-2026-11-04.md): historical
   delete/temporal admission, conservative nanosecond pruning and typed replay progress.
 - [Catalog 0.14.0](VALIDATION-catalog-0.14.0.md): stored-format admission,

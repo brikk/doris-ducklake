@@ -16,6 +16,12 @@ from plugin_preflight import file_hash, require
 CATALOG = "0.14.0"
 
 
+def selected_hashes(discovered, selection):
+    require(selection and len(set(selection)) == len(selection), "Empty/duplicate corpus selection")
+    require(all(name in discovered for name in selection), "Selection contains an unknown/unsafe corpus path")
+    return {name: discovered[name] for name in selection}
+
+
 def gradle_init(project, output, properties, task="corpusReplayTest"):
     """Init scripts also run in included builds: guard both hooks by project directory."""
     selected = "rootProject.projectDir == new File(" + json.dumps(str(project)) + ")"
@@ -65,6 +71,8 @@ class FullCorpusAcceptance(Acceptance):
         config["services"]["doris-fe"]["ports"] = [f"127.0.0.1:{port}:9030"]
         self.corpus_tmp = self.root / "corpus"
         self.corpus_tmp.mkdir()
+        self.replay_scratch = self.corpus_tmp / "mirror-scratch"
+        self.replay_scratch.mkdir()
         fixtures = [p for p in (project / "ducklake/data", project / "ducklake/duckdb/data") if p.is_dir()]
         require(project / "ducklake/data" in fixtures, "Missing native Parquet fixtures")
         for name in ("doris-fe", "doris-be"):
@@ -82,6 +90,12 @@ class FullCorpusAcceptance(Acceptance):
         require(not self.corpus_status(), "Corpus checkout is modified; cannot claim its recorded commit")
         self.result["corpus_sha256"] = {str(p.relative_to(corpus)): file_hash(p) for p in sorted(corpus.rglob("*"))
                                        if p.is_file() and p.suffix in (".test", ".test_slow")}
+        selection = getattr(self, "selected_files", None)
+        if selection is not None:
+            self.result["corpus_sha256"] = selected_hashes(self.result["corpus_sha256"], selection)
+            self.result.update(schema="doris-selected-corpus-campaign-v1", selected_files=selection)
+            (self.root / "selection.txt").write_text("\n".join(selection) + "\n")
+        self.result["replay_scratch"] = "owned per-engine/per-target directory outside oracle TEST_DIR/warehouse"
         self.result["source_sha256"] = {str(p.relative_to(project)): file_hash(p)
             for directory in ("src", "read-tiers", "test/src", "test/released", "test/r07")
             for p in (project / directory).rglob("*.kt")}
@@ -125,7 +139,10 @@ class FullCorpusAcceptance(Acceptance):
             "doris.corpus.pg.oracle.hostport": f"host=127.0.0.1 port={pg_port}",
             "doris.corpus.pg.fe.hostport": self.pg + ":5432", "ducklake.corpus.dirs": "all",
             "doris.corpus.report.path": str(self.root / "corpus-report.txt"),
+            "doris.corpus.scratch.root": str(self.replay_scratch),
         }
+        if getattr(self, "selected_files", None) is not None:
+            properties["ducklake.corpus.files"] = str(self.root / "selection.txt")
         init = self.root / "corpus-private.init.gradle"
         init.write_text(gradle_init(project, output, properties))
         init.chmod(0o600)
@@ -175,8 +192,13 @@ class FullCorpusAcceptance(Acceptance):
         require(all(file_hash(project / "ducklake/test/sql" / name) == digest
                     for name, digest in self.result["corpus_sha256"].items()), "Corpus SQL changed during campaign")
         require(not self.corpus_status(), "Corpus checkout changed; preserve for inspection")
+        if getattr(self, "selected_files", None) is not None:
+            require((self.root / "selection.txt").read_text().splitlines() == self.selected_files,
+                    "Explicit corpus selection changed during campaign")
         require(all(file_hash(self.source / name) == digest for name, digest in self.result["copied_tooling_sha256"].items()),
                 "Deployment tooling changed during campaign")
+        require(not any(self.replay_scratch.iterdir()), "Owned replay scratch remains after adapter cleanup")
+        self.result["replay_scratch_cleaned"] = True
         counts = self.result["junit"]
         passed = child.returncode == counts["failures"] == counts["errors"] == 0 and not self.result["timed_out_or_blocked"]
         self.result["status"] = "passed" if passed else "failed"
@@ -209,15 +231,19 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("bundle-a", "bundle-b", "duckdb", "evidence-root"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--file-list", type=Path, help="Explicit bounded selection; not a full-directory campaign")
     args = parser.parse_args()
     args.evidence_root.mkdir(parents=True, exist_ok=True)
     fixture = FullCorpusAcceptance(args.bundle_a, args.bundle_b, args.duckdb, args.evidence_root)
+    if args.file_list is not None:
+        fixture.selected_files = args.file_list.read_text().splitlines()
+        fixture.campaign_label = "Selected-corpus"
     try:
         fixture.run()
     except Exception as error:
         print("Full-corpus campaign error: " + str(error).replace(fixture.password, "<redacted>"), flush=True)
         return 1
-    print("Full-corpus campaign " + fixture.result["status"] + ": " + str(fixture.root), flush=True)
+    print(getattr(fixture, "campaign_label", "Full-corpus") + " campaign " + fixture.result["status"] + ": " + str(fixture.root), flush=True)
     return 0 if fixture.result["status"] == "passed" else 1
 
 

@@ -47,6 +47,13 @@ an upstream merge or an unrelated green suite.
 
 ## Harness and compatibility
 
+- [ ] **Corpus baseline:** review producer-pin corpus adoption separately from a
+  runtime upgrade; repair shared TIME JDBC conversion, quoted ATTACH parsing and
+  `require notmusl` handling; distinguish 1.0 deletion-vector expectations. Thread
+  custom metadata-schema context into the FE replay adapter. Native/backend
+  controls now account for all 159 retained failures; see
+  [baseline evidence](VALIDATION-CORPUS-BASELINE-2026-11-04.md). Do not copy changed
+  goldens into the old pin or count missing/require-halted counterparts as passes.
 - [ ] **M13–M17:** narrow exception-to-skip classification, fail explicit runs with
   missing prerequisites/zero mirrors, forward endpoint settings safely, preserve SQL
   literals/quoted names during rewrites and escape each credential/SQL/libpq context.

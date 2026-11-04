@@ -457,6 +457,7 @@ tasks.test {
     exclude("**/DuckLakeReadCorrectnessLiveTest*")
     exclude("**/DuckLakeDefaultNestedLiveTest*")
     exclude("**/DorisReadSafetyLiveTest*")
+    exclude("**/DorisCorpusBaselineTest*")
     classpath = prependParquetFormat(classpath)
 }
 
@@ -562,5 +563,18 @@ tasks.register<Test>("readSafetyLiveTest") {
     maxHeapSize = "768m"
     systemProperty("ducklake.corpus.root", rootProject.projectDir.resolve("ducklake/test/sql").absolutePath)
     doFirst { check(!readCorrectnessCandidate) { "Read-safety live checks require the released lane" } }
+    outputs.upToDateWhen { false }
+}
+
+tasks.register<Test>("corpusBaselineTest") {
+    description = "Explicit oracle-only corpus diagnostics; never counts as Doris mirror qualification."
+    group = "verification"
+    testClassesDirs = sourceSets.test.get().output.classesDirs
+    classpath = prependParquetFormat(sourceSets.test.get().runtimeClasspath)
+    javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(25)) })
+    useJUnitPlatform()
+    include("**/DorisCorpusBaselineTest*")
+    maxHeapSize = "1536m"
+    doFirst { check(!readCorrectnessCandidate) { "Baseline diagnostics require the released replay lane" } }
     outputs.upToDateWhen { false }
 }

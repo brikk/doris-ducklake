@@ -8,6 +8,7 @@ import java.sql.Types
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import java.net.URI
+import java.nio.file.Path
 import java.util.function.Supplier
 
 import dev.brikk.ducklake.catalog.DucklakeCatalogConfig
@@ -54,6 +55,7 @@ internal class DorisReplayEngine(
     /** JDBC host:port the FE (inside the compose network) reaches the same PG by. */
     private val pgFeHostPort: String =
         System.getProperty("doris.corpus.pg.fe.hostport", "trino-ducklake-postgres:5432"),
+    scratchRoot: Path? = System.getProperty("doris.corpus.scratch.root")?.let(Path::of),
 ) : ReplayReadEngine {
 
     override val name: String = "doris"
@@ -69,6 +71,7 @@ internal class DorisReplayEngine(
     private val runId: String = UUID.randomUUID().toString().replace("-", "")
     private val createdDatabases = mutableListOf<String>()
     private val createdCatalogs = linkedSetOf<String>()
+    private val scratch = DorisReplayScratch(scratchRoot)
 
     private val fe: Connection = DriverManager.getConnection(feJdbcUrl)
     private val pg: Connection = DriverManager.getConnection(pgHostUrl, pgUser, pgPassword)
@@ -107,6 +110,9 @@ internal class DorisReplayEngine(
         }
         // Re-ATTACH can return to an older target without calling the memoized rewriter again.
         val catalog = "corpus_" + db.removePrefix("corpus_doris_")
+        val scratchProperty = scratch.forTarget(db)?.let { path ->
+            ", 'scratch.path'='${path.toString().replace("'", "''")}'"
+        }.orEmpty()
         fe.createStatement().use { st ->
             // DETACH/reattach can reconnect this engine to the same allocated
             // database. Replace only a catalog whose prior CREATE we owned.
@@ -126,7 +132,7 @@ internal class DorisReplayEngine(
                     -- compose cluster shares warehouse storage FE<->BE (the crutch's
                     -- precondition), so we exercise + validate the feature here even
                     -- though it's hard-blocked by default in real deployments.
-                    'experimental.inlined.reads' = 'true'
+                    'experimental.inlined.reads' = 'true'$scratchProperty
                 )
                 """.trimIndent(),
             )
@@ -278,9 +284,13 @@ internal class DorisReplayEngine(
     private fun firstLine(message: String): String = message.lineSequence().first()
 
     override fun close() {
+        var catalogsDropped = true
         for (catalog in createdCatalogs) {
             runCatching { fe.createStatement().use { it.execute("DROP CATALOG IF EXISTS `$catalog`") } }
-                .onFailure { System.err.println("corpus cleanup: DROP CATALOG $catalog failed: ${it.message}") }
+                .onFailure {
+                    catalogsDropped = false
+                    System.err.println("corpus cleanup: DROP CATALOG $catalog failed: ${it.message}")
+                }
         }
         runCatching { fe.close() }
         // FORCE: the FE plugin may hold pooled connections to the corpus DBs.
@@ -291,6 +301,8 @@ internal class DorisReplayEngine(
                 .onFailure { System.err.println("corpus cleanup: DROP DATABASE $db failed: ${it.message}") }
         }
         runCatching { pg.close() }
+        if (catalogsDropped) scratch.close()
+        else System.err.println("corpus cleanup: retaining owned scratch after failed catalog removal")
     }
 }
 

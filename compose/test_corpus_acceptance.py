@@ -1,7 +1,7 @@
 """Cluster-free guards for the isolated full-corpus controller."""
 import unittest
 
-from corpus_acceptance import gradle_init, replay_measurements
+from corpus_acceptance import gradle_init, replay_measurements, selected_hashes
 
 
 def suite(summary, skipped=0, failures=0):
@@ -14,6 +14,14 @@ SUMMARY = ("corpus replay: 475 files\n  ran 400 (records: 100 passed, 2 failed, 
 
 
 class CorpusAcceptanceTest(unittest.TestCase):
+    def test_explicit_selection_cannot_claim_full_discovery_or_escape_it(self):
+        hashes = {"a.test": "a", "b.test": "b"}
+        self.assertEqual(selected_hashes(hashes, ["b.test"]), {"b.test": "b"})
+        self.assertEqual(hashes, {"a.test": "a", "b.test": "b"})
+        for names in ([], ["a.test", "a.test"], ["../a.test"], ["missing.test"]):
+            with self.subTest(names=names), self.assertRaises(ValueError):
+                selected_hashes(hashes, names)
+
     def test_init_scopes_both_hooks_to_consumer_not_included_build(self):
         text = gradle_init("/project", "/project/build/private", {"ducklake.corpus.dirs": "all"})
         self.assertIn('p.projectDir == new File("/project")', text)

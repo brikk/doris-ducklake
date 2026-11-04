@@ -85,6 +85,45 @@ retains all failures, distinguishes 1.1 scope halts from ran-to-end files and ma
 watchdog/quarantine cases non-green. It kills only its own scope and cleans only
 acknowledged disposable infrastructure, checking protected state afterward.
 
+For a bounded regression, `--file-list /absolute/path/to/selection.txt` selects
+exact relative corpus paths, one per line. Empty, duplicate or unknown paths refuse;
+the receipt is a **selected-corpus** campaign, not full-directory coverage.
+Existing exclusions and mirror caps still apply. The isolated controller now sets
+`doris.corpus.scratch.root` to a shared, owned directory **outside every oracle
+TEST_DIR/warehouse**. The adapter allocates separate engine/database children and
+removes only its acknowledged child after catalog removal. It does not change the
+production inline transport or the direct task's default scratch behavior.
+
+## Oracle-only baseline diagnostics
+
+`compose/corpus_baseline.py` runs the explicit `corpusBaselineTest` with **no Doris
+adapter**, on embedded or disposable PostgreSQL metadata. It exports the requested
+Git commit into an immutable evidence snapshot, selects all paths represented by a
+retained failure index, records native extension/JAR/source hashes and every record
+outcome, and leaves the tracked submodule and goldens untouched.
+
+```sh
+python3 compose/corpus_baseline.py \
+  --corpus-checkout ducklake \
+  --corpus-ref c23aca43b6033acfac2b8cc8d80b15ae7fa729b2 \
+  --failure-index build/validation/doris-read-safety/f24-e-h_b33769/failure-index.csv \
+  --axis embedded --evidence-root build/validation/corpus-baseline
+# Repeat serially with --axis postgres; a different --corpus-ref is a separate diagnostic axis.
+```
+
+The task is excluded from ordinary `test`/Java17 tests and cannot assumption-skip.
+A completed **diagnostic** can exit the controller successfully while its JUnit
+assertion and receipt retain native record failures. Missing counterpart files,
+unmet requirements and scope halts are recorded, never counted as passes. Build,
+timeout, quarantine and source-integrity failures cannot become completed evidence.
+This tool does not count any Doris mirrors or weaken corpus assertions.
+
+`compose/corpus_baseline_triage.py` joins original file/line failures to both backend
+controls and optional producer-pin counterparts. It verifies the original corpus
+bytes, runtime and selection, preserves original failure reasons and leaves
+missing/ambiguous SQL counterparts unmapped. See the
+[November 4 baseline investigation](VALIDATION-CORPUS-BASELINE-2026-11-04.md).
+
 Current focused native/quoted/Boolean/float replay acceptance is independently
 strict and measured on Java25/17; see [CATALOG-CANDIDATE.md](CATALOG-CANDIDATE.md).
 It does not repair every broad-corpus M13–M17 finding or qualify a full campaign.

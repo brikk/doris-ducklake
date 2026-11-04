@@ -1,5 +1,10 @@
 # Doris-local read correctness — 2026-11-04
 
+Follow-up [corpus baseline cleanup](VALIDATION-CORPUS-BASELINE-2026-11-04.md)
+independently classifies the 159 retained failures and verifies a test-only scratch
+isolation fix on four original files. The full-run numbers below remain historical
+exact-artifact evidence; they are not retrospectively edited by that follow-up.
+
 The user authorized Doris-side progress without waiting for upstream 5.x feature
 work. Catalog **0.14.0**, SDK/API27, FE/ASAN-BE image pins and feature opt-ins stay
 unchanged. No upstream Doris source/runtime rebuild, commit or push is involved.
