@@ -10,7 +10,7 @@ import java.lang.reflect.Proxy
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 
-/** Compiled only against the exact, checksum-attested candidate; never linked into the 0.12.0 build. */
+/** Compiled only against the exact, checksum-attested experimental reader candidate. */
 internal class DuckLakeFinal11(private val properties: Map<String, String>, private val context: ConnectorContext) : DuckLakeFinal11Support {
     override val enabled = properties[DuckLakeConnectorProperties.ENABLE_FINAL11_READS].toBoolean()
     private val objectsDelegate = lazy { DuckLakeReadObjects(properties, context.httpSecurityHook) }

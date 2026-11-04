@@ -51,10 +51,7 @@ internal class DuckLakeNativeNestedDictionaryTest {
         val data = root.resolve("data")
         DriverManager.getConnection("jdbc:duckdb:").use { connection -> connection.createStatement().use { statement ->
             statement.execute("INSTALL ducklake; LOAD ducklake")
-            val legacy = statement.executeQuery("SELECT version()").use { rows ->
-                check(rows.next())
-                if (rows.getString(1).startsWith("v2.")) ",DUCKLAKE_VERSION '1.0',AUTOMATIC_MIGRATION FALSE" else ""
-            }
+            val legacy = DuckLakeTestCatalogBootstrap.LEGACY_FORMAT_OPTIONS
             statement.execute("ATTACH 'ducklake:$database' AS lake (DATA_PATH '$data'$legacy)")
             statement.execute("CALL lake.set_option('data_inlining_row_limit',0)")
             statement.execute("CREATE TABLE lake.t(id INTEGER,s STRUCT(a INTEGER,label VARCHAR)," +
@@ -65,7 +62,7 @@ internal class DuckLakeNativeNestedDictionaryTest {
             catalogDatabaseUrl = "jdbc:duckdb:$database"
             dataPath = data.toString()
         }).use { catalog ->
-            assertThat(catalog.getSpecVersion()).isIn("0.4", "1.0")
+            assertThat(catalog.getSpecVersion()).isEqualTo("1.0")
             val at = catalog.currentSnapshotId
             val table = catalog.getTable("main", "t", at)!!
             val handle = DuckLakeTableHandle("main", "t", catalog.getSchema("main", at)!!.schemaId, table.tableId, at)

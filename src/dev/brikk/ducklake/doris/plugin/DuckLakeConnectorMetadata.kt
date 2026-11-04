@@ -225,7 +225,11 @@ internal class DuckLakeConnectorMetadata(
         // non-partition columns + IDENTITY/temporal partitions, whose source column
         // carries stats) and BUCKET-partition matching (which stats CAN'T do — each
         // bucket file holds a scattered value range).
-        val statsKept = statsPrune(dlHandle, filter, columns.associate { it.columnName to it.columnId })
+        // TIMESTAMP_NS is exposed as microsecond DATETIMEV2. A microsecond
+        // equality point is not a source-domain nanosecond point (F09); until
+        // source-aware widening is qualified, keep its files and let BE filter.
+        val statsColumns = columns.filterNot { it.columnType.equals("timestamp_ns", ignoreCase = true) }
+        val statsKept = statsPrune(dlHandle, filter, statsColumns.associate { it.columnName to it.columnId })
         val bucketKept = bucketPrune(dlHandle, filter, columns)
 
         val prunedFileIds = intersectNullable(statsKept, bucketKept)
@@ -562,6 +566,9 @@ internal class DuckLakeConnectorMetadata(
         // the top-level column's columnType already encodes the nested shape as
         // a type string the mapper parses.
         val rows = catalog.getTableColumns(handle.tableId, handle.snapshotId)
+        // Schema binding precedes FE constant folding, which could otherwise turn
+        // comparisons against unrepresentable temporal values into silent empty results.
+        DuckLakeTemporalDomain.checkKnownBounds(catalog, handle, rows)
         val top = ArrayList<DucklakeColumn>(rows.size)
         for (col in rows) {
             if (col.parentColumn == null) {

@@ -54,7 +54,7 @@ object DuckLakeAuditFixtureSeeder {
                 statement.execute(
                     "ATTACH '" + escape(attachUri) + "' AS dl (DATA_PATH '" +
                         escape(dataDir.toAbsolutePath().toString()) + "'" +
-                        DuckLakeTestCatalogBootstrap.legacyFormatOptions() + ")",
+                        DuckLakeTestCatalogBootstrap.LEGACY_FORMAT_OPTIONS + ")",
                 )
                 for (sql in statements) {
                     statement.execute(sql)

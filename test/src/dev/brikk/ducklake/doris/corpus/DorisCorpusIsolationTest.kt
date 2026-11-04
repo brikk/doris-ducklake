@@ -79,11 +79,12 @@ internal class DorisCorpusIsolationTest {
         val executor = Executors.newSingleThreadExecutor()
         var firstClosed = false
         try {
-            val firstDb = databaseName(first.metadataRewriter("first"))
+            val firstTarget = first.metadataRewriter("first")
+            val firstDb = databaseName(firstTarget)
             val firstOtherDb = databaseName(first.metadataRewriter("first-other"))
             val secondDb = databaseName(second.metadataRewriter("second"))
             val before = fe.commands.size
-            first.connect(OracleAttachment("unused", directory.toUri().toString(), "lake"))
+            first.connect(OracleAttachment(firstTarget, directory.toUri().toString(), "lake"))
             assertThat(fe.commands.drop(before)).allMatch { it.startsWith("CREATE CATALOG ") }
             connection(secondDb).use { active ->
                 active.createStatement().use { it.execute("CREATE TABLE marker AS SELECT 73 AS value") }
@@ -108,12 +109,13 @@ internal class DorisCorpusIsolationTest {
     @Test
     fun failedCatalogCreationDoesNotAuthorizeDroppingThatCatalog() {
         val engine = engine()
-        val db = databaseName(engine.metadataRewriter("failed-catalog"))
+        val target = engine.metadataRewriter("failed-catalog")
+        val db = databaseName(target)
         val before = fe.commands.size
         fe.rejectCreate.set(true)
         try {
             assertThatThrownBy {
-                engine.connect(OracleAttachment("unused", directory.toUri().toString(), "lake"))
+                engine.connect(OracleAttachment(target, directory.toUri().toString(), "lake"))
             }.isInstanceOf(SQLException::class.java).hasMessageContaining("injected CREATE refusal")
         } finally {
             fe.rejectCreate.set(false)
@@ -127,8 +129,8 @@ internal class DorisCorpusIsolationTest {
     fun reconnectReplacesOnlyTheAlreadyOwnedCatalogAndCleansItOnce() {
         val before = fe.commands.size
         engine().use { engine ->
-            engine.metadataRewriter("reattach")
-            val attachment = OracleAttachment("unused", directory.toUri().toString(), "lake")
+            val target = engine.metadataRewriter("reattach")
+            val attachment = OracleAttachment(target, directory.toUri().toString(), "lake")
             engine.connect(attachment)
             engine.connect(attachment)
         }
@@ -144,8 +146,8 @@ internal class DorisCorpusIsolationTest {
     fun failedRecreationDoesNotRetainOwnershipOfTheDroppedCatalog() {
         val before = fe.commands.size
         engine().use { engine ->
-            engine.metadataRewriter("failed-reattach")
-            val attachment = OracleAttachment("unused", directory.toUri().toString(), "lake")
+            val target = engine.metadataRewriter("failed-reattach")
+            val attachment = OracleAttachment(target, directory.toUri().toString(), "lake")
             engine.connect(attachment)
             fe.rejectCreate.set(true)
             try {
@@ -156,6 +158,35 @@ internal class DorisCorpusIsolationTest {
         }
         assertThat(fe.commands.drop(before).map { it.substringBefore(" CATALOG") })
             .containsExactly("CREATE", "DROP", "CREATE")
+    }
+
+    @Test
+    fun returningToAnOlderLakeUsesItsTargetNotTheLastAllocatedDatabase() {
+        val before = fe.commands.size
+        engine().use { engine ->
+            val first = engine.metadataRewriter("first-lake")
+            val second = engine.metadataRewriter("second-lake")
+            engine.connect(OracleAttachment(first, directory.toUri().toString(), "lake"))
+            engine.connect(OracleAttachment(second, directory.toUri().toString(), "lake"))
+            engine.connect(OracleAttachment(first, directory.toUri().toString(), "lake"))
+            val creates = fe.commands.drop(before).filter { it.startsWith("CREATE CATALOG ") }
+            assertThat(creates).hasSize(3)
+            assertThat(creates[0]).contains("/${databaseName(first)}'")
+            assertThat(creates[1]).contains("/${databaseName(second)}'")
+            assertThat(creates[2]).isEqualTo(creates[0])
+        }
+    }
+
+    @Test
+    fun unknownMetadataTargetsCannotSelectOrDropForeignCatalogs() {
+        val before = fe.commands.size
+        engine().use { engine ->
+            engine.metadataRewriter("owned-lake")
+            assertThatThrownBy {
+                engine.connect(OracleAttachment("postgres:dbname=foreign", directory.toUri().toString(), "lake"))
+            }.hasMessageContaining("acknowledged metadata target owned by this replay engine")
+        }
+        assertThat(fe.commands.drop(before)).isEmpty()
     }
 
     private fun engine(): DorisReplayEngine = DorisReplayEngine(

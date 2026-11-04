@@ -26,6 +26,14 @@ archived commands/results apply only to their stated artifacts.
 
 ## Current evidence
 
+- [Doris-local read safety](VALIDATION-DORIS-READ-SAFETY-2026-11-04.md): historical
+  delete/temporal admission, conservative nanosecond pruning and typed replay progress.
+- [Catalog 0.14.0](VALIDATION-catalog-0.14.0.md): stored-format admission,
+  independent replay scopes, PostgreSQL oracle binding and resource-bounded validation.
+- [Catalog 0.13.1 / full corpus](VALIDATION-catalog-0.13.1-2026-11-03.md): explicit
+  native replay setup format and the resumed full-directory campaign.
+- [Catalog 0.13.0 adoption](VALIDATION-catalog-0.13.0-2026-11-03.md): released
+  dependency/driver cutover, structured parser and commit-outcome regressions.
 - [API27 qualification](VALIDATION-DORIS-API27-2026-11-02.md): tested engine/SDK/bundle
   hashes, JVM/native/live checks, rollback and limits.
 - [Requester-only Duckbridge handoff](HANDOFF-FOR-DUCKBRIDGE-DORIS-4bc7f426-API27.md):

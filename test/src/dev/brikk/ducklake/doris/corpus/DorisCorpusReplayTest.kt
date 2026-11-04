@@ -188,7 +188,7 @@ internal class DorisCorpusReplayTest {
         for (chunk in files.chunked(CHUNK_SIZE)) {
             DorisReplayEngine().use { engine ->
                 val runner =
-                    CorpusRunner(
+                    dorisCorpusRunner(
                         corpusRoot,
                         skipList,
                         engine = engine,
@@ -196,6 +196,12 @@ internal class DorisCorpusReplayTest {
                     )
                 results += runner.run(chunk).files
             }
+            System.getProperty("doris.corpus.report.path")?.let { reportPath ->
+                val path = Path.of(reportPath)
+                Files.createDirectories(path.toAbsolutePath().parent)
+                Files.writeString(path, "Selected files: ${files.size}\n" + CorpusReport(results).summary(maxFailures = Int.MAX_VALUE))
+            }
+            println("CORPUS_PROGRESS ${results.size}/${files.size} selected files processed")
         }
         val report = CorpusReport(results)
         println(report.summary(maxFailures = MAX_FAILURES_SHOWN))

@@ -16,7 +16,8 @@ builds listed below.
 
 - **Doris source:** `4bc7f426828e4cedfd2b7ce9b76fe95b14b5b146`, with matching FE and BE.
 - **Connector API:** 27.0; filesystem API 7.0; complete JNI API 6.0 distribution.
-- **Default catalog library:** 0.12.0; DuckDB interoperability fixture: 1.5.6.
+- **Default catalog library:** 0.14.0; native test JDBC: 2.0.0.1.
+  Live interoperability fixtures also exercise DuckDB 1.5.6 / DuckLake 1.0.
 - **Plugin runtime:** Java 17. Building the plugin requires JDK 25.
 
 Stock Doris releases, including the checked 4.2 release candidate, lack the
@@ -52,7 +53,13 @@ loaded-build verification, recovery and teardown.
 ## Connect to a lake
 
 The PostgreSQL database must contain an initialized DuckLake catalog. FE needs
-access to PostgreSQL; BE needs access to its data files. S3/MinIO example:
+access to PostgreSQL; BE needs access to its data files.
+
+For new lakes created by DuckDB 2.0, explicitly select `DUCKLAKE_VERSION '1.0'`
+and `AUTOMATIC_MIGRATION FALSE` in the native ATTACH options. This connector
+upgrade does not migrate existing lakes or enable DuckLake 1.1 writes.
+
+S3/MinIO example:
 
 ```sql
 CREATE CATALOG dl PROPERTIES (
@@ -85,8 +92,8 @@ Storage credentials are forwarded to the native reader; do not commit real secre
 - Latest-snapshot file-based position deletes.
 - Snapshot pinning and scalar time travel by snapshot ID or timestamp, subject
   to the historical-read restrictions below.
-- Current native STRUCT/LIST/MAP reads within the default parser's naming/type
-  limits; populated values and NULL parents are checked on the qualified runtime.
+- Current native STRUCT/LIST/MAP reads using the shared catalog parser, including
+  quoted field names and nested DECIMAL; empty/case-colliding field names refuse.
 - Scalar added-column DEFAULT backfill for the tested types.
 - Basic scalar INSERT/CTAS, CREATE/DROP SCHEMA and CREATE/DROP TABLE, including
   partitioned writes. Doris-written files are checked through DuckDB read-back.
@@ -95,7 +102,7 @@ Storage credentials are forwarded to the native reader; do not commit real secre
 
 These are bounded capabilities, not a claim that all combinations or the full
 upstream corpus pass. See [type mappings](dev-docs/TYPES.md) and
-[qualification evidence](dev-docs/VALIDATION-DORIS-API27-2026-11-02.md).
+[catalog adoption checks](dev-docs/VALIDATION-catalog-0.14.0.md).
 
 ## Important limits
 
@@ -103,23 +110,31 @@ upstream corpus pass. See [type mappings](dev-docs/TYPES.md) and
   instead of Parquet. Inline data is rejected by default; inline deletes are
   unsupported. The `experimental.inlined.reads=true` data path is shared-filesystem,
   development-only—not a distributed solution.
-- **Historical reads:** do not rely on history involving multi-snapshot delete
-  files; future delete entries can be applied to an older snapshot. Partial-file
-  compaction history and nested history are explicitly refused.
+- **Historical reads:** historical scans with delete files are conservatively
+  refused until per-position snapshot filtering is available. Latest deletes and
+  delete-free scalar history remain available. Partial-file compaction history
+  and nested history also refuse.
 - **Imported files:** scalar name mapping has limits, including conflicting
   embedded field IDs and DROP/re-ADD name reuse. Nested mapped files refuse.
-- **Nested types:** the default parser does not support arbitrary quoted field
-  names or nested DECIMAL signatures. Nested evolution/defaults and final-1.1
-  nested scans are not qualified.
+- **Nested types:** nested evolution/defaults and final-1.1 nested scans are not
+  qualified. Nested mapped files and historical scans remain refused.
 - **Types and writes:** use INT/BIGINT instead of TINYINT/SMALLINT writes; CTAS
   literals can infer narrow integers. Nanosecond timestamps map to microseconds.
   Unsigned and other degraded mappings are not a general write guarantee.
+- **Temporal domain:** known infinities/out-of-range date or timestamp bounds and
+  unsafe bounded inline temporal values refuse before query execution. Unknown
+  file statistics are not proof of representability; see the
+  [read-safety limits](dev-docs/VALIDATION-DORIS-READ-SAFETY-2026-11-04.md).
 - **Not available:** DELETE/UPDATE/MERGE, INSERT OVERWRITE, ALTER-column DDL,
   sorted writes, compaction procedures and DuckLake views. General DuckLake 1.1
   support is not enabled; the developer candidate is separate and default-off.
 - **Correctness gaps remain:** pruning/type conversions, concurrent rewrites and
   cross-engine write metadata still have open findings. The
   [active findings register](dev-docs/REVIEW-FINDINGS.md) records their boundaries.
+
+If a write reports an **unknown COMMIT outcome** or a **post-commit finalization
+failure**, do not blindly retry or delete its output. The write may already be
+published; reconcile catalog registrations using a fresh connection first.
 
 `enable.mapping.timestamp_tz` defaults to `false`: `timestamptz` is exposed as
 UTC-valued, zone-naive `DATETIMEV2(6)`. Setting it to `true` requests zone-aware

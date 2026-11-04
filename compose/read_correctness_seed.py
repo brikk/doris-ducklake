@@ -18,8 +18,9 @@ try:
         (2,NULL,NULL,NULL),
         (3,{'a,b':NULL,'MiXeD':NULL,'x:y':NULL,'q"uote':NULL,'back\\slash':NULL,
             ' spaced ':NULL,'雪':NULL,'<angle>':NULL},[NULL],map(['k'],[NULL]))''')
-    con.execute("CREATE TABLE lake.tpch.replay_values(id INTEGER,b BOOLEAN,f FLOAT,d DOUBLE)")
-    con.execute("INSERT INTO lake.tpch.replay_values VALUES(0,true,0.1,1e16),(1,false,'-0.0'::FLOAT,1e-5),(2,NULL,NULL,NULL)")
+    con.execute("CREATE TABLE lake.tpch.replay_values(id INTEGER,b BOOLEAN,f FLOAT,d DOUBLE,payload BLOB)")
+    con.execute("INSERT INTO lake.tpch.replay_values VALUES(0,true,0.1,1e16,from_hex('0022275C7FFF')),"
+                "(1,false,'-0.0'::FLOAT,1e-5,from_hex('41')),(2,NULL,NULL,NULL,NULL)")
     # Full source identities, not only the formatted composite type projection.
     con.execute(f"ATTACH 'host={os.environ['PG_HOST']} dbname={os.environ['PG_DB']} user=ducklake "
                 f"password={os.environ['PG_PASSWORD']}' AS metadata (TYPE postgres,READ_ONLY)")

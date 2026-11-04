@@ -15,7 +15,7 @@ import java.sql.DriverManager
 import java.sql.Types
 import java.util.Properties
 
-/** Explicit private fixture only, no discovery/fallback to shared or retained services. */
+/** Release/candidate private fixture only; never discover shared or retained services. */
 internal class DuckLakeReadCorrectnessLiveTest {
     private val p = Properties().apply {
         Files.newInputStream(Path.of(requireNotNull(System.getenv("DORIS_READ_CORRECTNESS_FIXTURE")))).use(::load)
@@ -25,6 +25,11 @@ internal class DuckLakeReadCorrectnessLiveTest {
 
     @Test
     fun nestedFileValuesKeepPunctuationNamesContainersAndNullIdentity() {
+        verifyCatalogProjection()
+        verifyNativeValues()
+    }
+
+    private fun verifyCatalogProjection() {
         JdbcDucklakeCatalog(DucklakeCatalogConfig().apply {
             catalogDatabaseUrl = "jdbc:postgresql://127.0.0.1:${p.getProperty("pg.port")}/${p.getProperty("database")}"
             catalogDatabaseUser = "ducklake"; catalogDatabasePassword = p.getProperty("password")
@@ -49,6 +54,9 @@ internal class DuckLakeReadCorrectnessLiveTest {
                 }
             } }
         }
+    }
+
+    private fun verifyNativeValues() {
         fe().use { c -> c.createStatement().use { s ->
             s.executeQuery("SHOW FRONTENDS").use { r -> check(r.next()); assertThat(r.getString("Version")).contains("4bc7f426828") }
             s.executeQuery("SELECT id,s.`a,b`,s.`MiXeD`,s.`x:y`,s.`q\"uote`,s.`back\\slash`,s.` spaced `,s.`雪`,s.`<angle>`," +
@@ -96,8 +104,8 @@ internal class DuckLakeReadCorrectnessLiveTest {
                 "DUCKLAKE_VERSION '1.0',AUTOMATIC_MIGRATION FALSE)")
         val boolean = "query I nosort\nSELECT b FROM lake.tpch.replay_values ORDER BY id\n----\n" +
             "3 values hashing to 184e6f979a6b9d76049c9b0ff19e1068\n\n"
-        val floating = "query RR nosort\nSELECT f,d FROM lake.tpch.replay_values ORDER BY id\n----\n" +
-            "0.1\t1e+16\n-0.0\t1e-05\nNULL\tNULL\n\n"
+        val floating = "query RRT nosort\nSELECT f,d,payload FROM lake.tpch.replay_values ORDER BY id\n----\n" +
+            "0.1\t1e+16\t\\x00\\x22\\x27\\x5C\\x7F\\xFF\n-0.0\t1e-05\tA\nNULL\tNULL\tNULL\n\n"
         val text = setup + boolean + floating
         val result = ReplayDriver(engine).replay(SltParser.parse("authored-read-correctness.test", text))
         assertThat(result.fileSkipReason).isNull()

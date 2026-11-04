@@ -67,6 +67,13 @@ internal object DuckLakeInlinedParquetWriter {
      * [columns] must be top-level scalar columns. Returns the row count.
      */
     fun write(target: java.nio.file.Path, columns: List<DucklakeColumn>, rows: List<List<Any?>>): Long {
+        // Validate before opening/overwriting a shared scratch file or converting
+        // an infinite timestamp to epoch micros (where Long arithmetic would wrap).
+        for (row in rows) {
+            columns.forEachIndexed { index, column ->
+                validateTemporalValue(column, row[index])
+            }
+        }
         val schema = buildMessageType(columns)
         val conf = Configuration()
         GroupWriteSupport.setSchema(schema, conf)
@@ -80,6 +87,20 @@ internal object DuckLakeInlinedParquetWriter {
             }
         }
         return rows.size.toLong()
+    }
+
+    private fun validateTemporalValue(column: DucklakeColumn, value: Any?) {
+        if (value == null) return
+        DuckLakeTemporalDomain.requireRepresentable(column.columnType, value, column.columnName)
+        // Check the actual encoded instant as well: timezone normalization can
+        // cross the year boundary even when the source's printed year is valid.
+        val encoded = when (column.columnType.lowercase(Locale.ROOT)) {
+            "date" -> toEpochDay(value)
+            "timestamp", "timestamp_s", "timestamp_ms", "timestamp_ns" -> toEpochMicros(value)
+            "timestamptz" -> toEpochMicrosTz(value)
+            else -> return
+        }
+        DuckLakeTemporalDomain.requireRepresentable(column.columnType, encoded, column.columnName)
     }
 
     private fun parquetWriter(

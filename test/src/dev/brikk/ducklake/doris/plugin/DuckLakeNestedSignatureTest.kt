@@ -13,6 +13,7 @@ import org.apache.doris.thrift.TFileScanRangeParams
 import org.apache.doris.thrift.TPrimitiveType
 import org.apache.doris.thrift.schema.external.TField
 
+/** Release regression: consume the published catalog's structured nested signatures. */
 internal class DuckLakeNestedSignatureTest {
     @TempDir lateinit var root: Path
 
@@ -81,7 +82,9 @@ internal class DuckLakeNestedSignatureTest {
             DuckLakeSchemaDictionary.apply(wire, encoded)
             val fields = wire.historySchemaInfo.single().rootField.fields.flatMap { flatten(it.fieldPtr) }
             val raw = c.getAllColumnsWithParentage(table.tableId, snapshot)
-            assertThat(fields.sortedBy { it.first }).isEqualTo(raw.sortedBy { it.columnId }.map { it.columnId.toInt() to it.columnName.lowercase(java.util.Locale.ROOT) })
+            assertThat(fields.sortedBy { it.first }).isEqualTo(raw.sortedBy { it.columnId }.map {
+                it.columnId.toInt() to it.columnName.lowercase(java.util.Locale.ROOT)
+            })
             assertThatThrownBy { encodeReadSchemaDictionary(c, handle, handles, emptyList(), true) }
                 .hasMessageContaining("nested legacy-file mappings are not qualified")
             assertThatThrownBy { encodeReadSchemaDictionary(c, handle.copy(snapshotId = snapshot - 1), handles, emptyList(), false) }

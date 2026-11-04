@@ -9,8 +9,10 @@ an upstream merge or an unrelated green suite.
 
 - [ ] **F07:** carry one coherent physical metadata view across filter collection,
   range planning and inline flush/compaction; per-call read sessions are insufficient.
-- [ ] **F08:** filter historical delete entries by pinned snapshot or reject unsafe
-  history, including files whose nullable partial-max metadata hides later entries.
+- [ ] **F08:** implement qualified per-position historical delete filtering. The
+  current local mitigation refuses historical scans with delete files, even with
+  NULL advisory bounds; real latest/delete-free-history controls pass. Do not
+  remove this conservative gate without [equivalent read-safety proof](VALIDATION-DORIS-READ-SAFETY-2026-11-04.md).
 - [ ] **F05/F06/F09/F26:** source-type-aware unsigned bucket hashing, Unicode-scalar
   bounds, conservative lossy timestamp pruning and FE cast-preservation contracts.
 - [ ] **F10/M02:** preserve microsecond timestamp resolution and parse SQL local
@@ -20,10 +22,17 @@ an upstream merge or an unrelated green suite.
   qualify imported or historical nested scans. Keep their refusals.
 - [ ] **F13/F14:** validate every file's path-backed columns in mixed Hive/native/
   imported layouts; preserve empty values and classify all NULL spellings correctly.
-- [ ] **M01/M03/N17:** default parser nested DECIMAL/quoted-name limits and value-aware
-  defaults. The candidate parser is separate, not a default-lane fix.
+- [ ] **M03/N17:** value-aware defaults and broader nested identity/evolution.
+  Catalog 0.13 adoption replaces the default parser with the shared quote/DECIMAL-aware
+  parser; that does not qualify nested evolution, history, mappings or defaults.
 - [ ] **N12/N15/N16:** field-ID bounds, snapshot reapplication after pushdown, and
   actual int128 boundary reads; do not treat descriptor tests as value proof.
+- [ ] **0.14 validation:** extend temporal representability to unknown file bounds,
+  expression defaults and broader domains. Known bad file/inline values now refuse
+  before false predicate results; do not widen the bounded qualification blindly.
+  Typed simple current-table MAP replay and JSON-looking VARCHAR controls now pass;
+  complex computed/join/history outputs and unsupported container types remain
+  unqualified. [Current safety scope](VALIDATION-DORIS-READ-SAFETY-2026-11-04.md).
 
 ## Inline and candidate lifecycle
 

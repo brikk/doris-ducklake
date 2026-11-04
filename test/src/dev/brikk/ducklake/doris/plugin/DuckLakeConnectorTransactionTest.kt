@@ -1,7 +1,10 @@
 package dev.brikk.ducklake.doris.plugin
 
 import dev.brikk.ducklake.catalog.ColumnRangePredicate
+import dev.brikk.ducklake.catalog.DucklakeCatalog
 import dev.brikk.ducklake.catalog.DucklakeCatalogConfig
+import dev.brikk.ducklake.catalog.DucklakeCommitOutcomeUnknownException
+import dev.brikk.ducklake.catalog.DucklakePostCommitException
 import dev.brikk.ducklake.catalog.JdbcDucklakeCatalog
 import dev.brikk.ducklake.catalog.TestingDucklakePostgreSqlCatalogServer
 import org.apache.doris.thrift.TIcebergColumnStats
@@ -9,11 +12,17 @@ import org.apache.doris.thrift.TIcebergCommitData
 import org.apache.thrift.TSerializer
 import org.apache.thrift.protocol.TBinaryProtocol
 import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.file.Files
+import java.lang.reflect.InvocationTargetException
+import java.lang.reflect.Proxy
+import java.sql.SQLException
+import java.sql.DriverManager
 
 /**
  * Exercises [DuckLakeConnectorTransaction]'s commit path end-to-end against the
@@ -193,6 +202,65 @@ internal class DuckLakeConnectorTransactionTest {
             assertThat(transaction.getUpdateCnt()).isZero()
             transaction.commit() // nothing accumulated → no-op
             assertThat(catalog.currentSnapshotId).isEqualTo(snap0)
+        }
+    }
+
+    @Test
+    fun unknownCommitOutcomeRetainsPublishedOutputAndClassification() {
+        preservesCommittedOutput { snapshot ->
+            DucklakeCommitOutcomeUnknownException("INSERT", snapshot, SQLException("lost COMMIT reply", "08006"))
+        }
+    }
+
+    @Test
+    fun acknowledgedCommitFinalizationFailureRetainsPublishedOutputAndClassification() {
+        preservesCommittedOutput { _ -> DucklakePostCommitException("INSERT", SQLException("connection close failed")) }
+    }
+
+    private fun preservesCommittedOutput(failure: (Long) -> RuntimeException) {
+        withCatalog { catalog ->
+            val before = catalog.currentSnapshotId
+            // Do not add unknown-stat files to orders: its independent pruning
+            // regression deliberately assumes all existing files exclude id=1500.
+            val tableId = requireNotNull(catalog.getTable("sales", "returns_inline", before)).tableId
+            val output = Files.createTempFile(isolated.dataDir(), "commit-outcome-", ".parquet")
+            // A real native-produced Parquet, not an empty path or catalog-only fake.
+            DriverManager.getConnection("jdbc:duckdb:").use { connection ->
+                connection.createStatement().use { statement ->
+                    Files.delete(output)
+                    statement.execute("COPY (SELECT 9876 AS id, 1.25 AS total) TO '${output.toString().replace("'", "''")}' (FORMAT PARQUET)")
+                }
+            }
+            val bytes = Files.readAllBytes(output)
+            val problem = failure(before + 1)
+            var publications = 0
+            val failing = Proxy.newProxyInstance(javaClass.classLoader, arrayOf(DucklakeCatalog::class.java)) { _, method, args ->
+                val result = try {
+                    method.invoke(catalog, *(args ?: emptyArray()))
+                } catch (wrapped: InvocationTargetException) {
+                    throw wrapped.targetException
+                }
+                if (method.name == "commitInsert") {
+                    publications++
+                    throw problem // Inject after the real PostgreSQL publication.
+                }
+                result
+            } as DucklakeCatalog
+            val transaction = DuckLakeConnectorTransaction(5L, failing)
+            transaction.bindTarget(tableId, before)
+            transaction.addCommitData(serialize(TIcebergCommitData().apply {
+                filePath = output.toString(); rowCount = 1; fileSize = bytes.size.toLong()
+            }))
+            assertThatThrownBy { transaction.commit() }.isSameAs(problem)
+            assertThat(publications).isEqualTo(1)
+            val committed = catalog.currentSnapshotId
+            assertThat(committed).isEqualTo(before + 1)
+            transaction.rollback()
+            transaction.close()
+            assertThat(catalog.currentSnapshotId).isEqualTo(committed)
+            assertThat(Files.readAllBytes(output)).isEqualTo(bytes)
+            assertThat(catalog.getDataFiles(tableId, committed).map { it.path })
+                .contains(output.toString())
         }
     }
 

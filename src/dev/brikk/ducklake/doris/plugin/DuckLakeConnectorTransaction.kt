@@ -81,14 +81,16 @@ internal class DuckLakeConnectorTransaction(
             }
         }
         if (fragments.isNotEmpty()) {
+            // Preserve unknown/post-COMMIT exceptions unchanged. Do not retry this
+            // publication or delete its output: the catalog may already own it.
             catalog.commitInsert(bound.tableId, fragments)
         }
     }
 
     override fun rollback() {
-        // DuckLake has no pre-commit catalog state to undo. Any files BE already
-        // wrote are simply never registered in a snapshot (orphaned, swept by GC),
-        // so rollback only drops the fragments we accumulated.
+        // This is not a backend rollback: COMMIT may have applied even if commit()
+        // threw (unknown outcome or acknowledged post-commit finalization failure).
+        // Drop only in-memory fragments; never unlink files or undo registrations.
         synchronized(this) { commitData.clear() }
     }
 

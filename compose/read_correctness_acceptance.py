@@ -141,7 +141,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("bundle-a", "bundle-b", "duckdb", "evidence-root"):
         parser.add_argument("--" + name, type=Path, required=True)
-    parser.add_argument("--released", action="store_true", help="Run catalog0.12 default-lane nested probes, not the candidate")
+    parser.add_argument("--released", action="store_true", help="Run catalog0.13 release nested/replay probes, not the candidate")
     args = parser.parse_args()
     kind = DefaultNestedAcceptance if args.released else ReadCorrectnessAcceptance
     fixture = kind(args.bundle_a, args.bundle_b, args.duckdb, args.evidence_root)
@@ -150,23 +150,21 @@ def main():
     except Exception as error:
         print("Read-correctness acceptance failed:", str(error).replace(fixture.password, "<redacted>"))
         return 1
-    print("PASS bounded API27 " + ("default nested" if args.released else "candidate native-file/replay") + " acceptance:", fixture.root)
+    print("PASS bounded API27 " + ("released native-file/replay" if args.released else "candidate native-file/replay") + " acceptance:", fixture.root)
     return 0
 
 
 class DefaultNestedAcceptance(ReadCorrectnessAcceptance):
     candidate = False
     phase_name = "released-full-supported"
-    seed_script = "default_nested_seed.py"
     output_directory = "default-nested-qualification"
-    live_tasks = ("defaultNestedLiveTest", "defaultNestedLiveJava17Test")
-    live_test_count = 1
-    live_marker = "DEFAULT NESTED native reads passed"
 
     def prepare(self):
-        require("lib/ducklake-catalog-0.12.0.jar" in self.artifacts["A"]["files"], "Not a default catalog0.12 bundle")
+        for key in ("A", "B"):
+            catalogs = {name for name in self.artifacts[key]["files"] if name.startswith("lib/ducklake-catalog-")}
+            require(catalogs == {"lib/ducklake-catalog-0.14.0.jar"}, "Not a default catalog0.14.0 bundle")
         super().prepare()
-        self.result["lane"] = "released-catalog-0.12.0"
+        self.result["lane"] = "released-catalog-0.14.0"
 
 
 if __name__ == "__main__":

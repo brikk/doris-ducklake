@@ -15,7 +15,9 @@ Install the exact [Doris SDK](DORIS-RUNTIME.md), or scope its repository explici
 ./gradlew check assemble -PdorisRepository=/absolute/path/to/pinned-sdk
 ```
 
-Default catalog/fixtures/replay/SLT use released 0.12.0 and test JDBC 1.5.6.0.
+Default catalog/fixtures/replay/SLT use released 0.14.0 and test JDBC 2.0.0.1.
+DuckDB 2.0 test bootstraps explicitly select DuckLake 1.0 and disable automatic
+migration; adopting the library does not enable 1.1 writes or promote its reader.
 `test` runs the ordinary Java-25 suite; `java17PluginTest` selects plugin tests on
 Java 17 and excludes newer-JVM corpus tooling. `check` includes static analysis,
 runtime/package checks and build-logic tests. Inspect test execution/XML instead
@@ -36,13 +38,16 @@ For a cold rerun after missing generated classes or a suspect incremental cache:
 This changes execution strategy, not assertions, timeouts or expected outcomes.
 Use owned disk-backed temporary directories and lower concurrency under pressure;
 do not stop other sessions' Gradle daemons or relax tests to get green.
+When building multiple output-directory lanes concurrently, give each its own
+`--project-cache-dir` as well; shared task history can clean another lane's outputs.
 
 ## Source map
 
-- `src/`: shared connector lifecycle, metadata, scan/commit planning and field-ID encoding.
-- `read-tiers/released/`: default 0.12 type mapper/reader configuration.
-- `read-tiers/r07/`: separately selected published-candidate parser/reader configuration.
-- `test/src/`: ordinary plugin tests, replay adapter and default native live probe.
+- `src/`: shared connector lifecycle, metadata, structured type mapper, scan/commit planning and field-ID encoding.
+- `read-tiers/released/`: default release reader refusal gate.
+- `read-tiers/r07/`: separately selected published-candidate experimental reader configuration.
+- `test/src/`: ordinary plugin tests, replay adapter, nested/replay regressions and release native live probes.
+- `test/released/`: 1.0 replay setup/execution/mirror scopes, PostgreSQL oracle bindings and release contract regressions.
 - `test/r07/`: extra candidate tests and bounded live probes.
 - `build-logic/`: packaging identity/manifest and shared build conventions.
 - `compose/`: deployment/provenance/correctness supervisor, fixture controllers and tests.
@@ -85,4 +90,5 @@ the full corpus. Source tracing and upstream PR tests are not local live proof.
 Only promote exact qualified bytes after checking both lanes, refusal controls,
 rollback and preservation of shared/retained state. Keep release performance,
 all-JNI workloads, Duckbridge JDBC/Quack and production/fleet claims separate.
-Current results are in [API27 validation](VALIDATION-DORIS-API27-2026-11-02.md).
+Runtime qualification is in [API27 validation](VALIDATION-DORIS-API27-2026-11-02.md);
+the current bundle's checks are in [catalog 0.14.0 adoption](VALIDATION-catalog-0.14.0.md).

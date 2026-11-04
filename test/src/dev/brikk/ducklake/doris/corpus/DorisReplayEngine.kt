@@ -7,7 +7,12 @@ import java.sql.SQLException
 import java.sql.Types
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
+import java.net.URI
+import java.util.function.Supplier
 
+import dev.brikk.ducklake.catalog.DucklakeCatalogConfig
+import dev.brikk.ducklake.catalog.InlinedTypeNode
+import dev.brikk.ducklake.catalog.JdbcDucklakeCatalog
 import dev.brikk.ducklake.corpus.OracleAttachment
 import dev.brikk.ducklake.corpus.ReplayEngineSkip
 import dev.brikk.ducklake.corpus.ReplayReadEngine
@@ -70,7 +75,8 @@ internal class DorisReplayEngine(
 
     private var currentCatalog: String? = null
     private var currentAlias: String? = null
-    private var lastDatabase: String? = null
+    private var currentAttachment: OracleAttachment? = null
+    private val databasesByTarget = mutableMapOf<String, String>()
 
     /**
      * The corpus driver's metadata-rewrite hook: fresh PG database per
@@ -82,21 +88,25 @@ internal class DorisReplayEngine(
         // owned. Never adopt/drop an existing database on a naming collision.
         pg.createStatement().use { it.execute("CREATE DATABASE \"$db\"") }
         createdDatabases += db
-        lastDatabase = db
-        "postgres:dbname=$db $pgOracleHostPort user=$pgUser password=$pgPassword"
+        val target = "postgres:dbname=$db $pgOracleHostPort user=$pgUser password=$pgPassword"
+        databasesByTarget[target] = db
+        target
     }
 
     override fun connect(attachment: OracleAttachment) {
-        val db = lastDatabase ?: error("metadataRewriter did not run before connect()")
         currentCatalog = null
         currentAlias = null
+        currentAttachment = null
+        val db = databasesByTarget[attachment.metadataUri]
+            ?: error("connect() requires an acknowledged metadata target owned by this replay engine")
         if (attachment.dataPath.isBlank()) {
             // No DATA_PATH on the attach: DuckLake derived a default from a
             // local metadata path that has no engine-side equivalent. Stay
             // disconnected — accepts() rejects everything for this file.
             return
         }
-        val catalog = "corpus_${runId}_" + counter.get()
+        // Re-ATTACH can return to an older target without calling the memoized rewriter again.
+        val catalog = "corpus_" + db.removePrefix("corpus_doris_")
         fe.createStatement().use { st ->
             // DETACH/reattach can reconnect this engine to the same allocated
             // database. Replace only a catalog whose prior CREATE we owned.
@@ -126,6 +136,7 @@ internal class DorisReplayEngine(
         createdCatalogs += catalog
         currentCatalog = catalog
         currentAlias = attachment.catalogAlias
+        currentAttachment = attachment
     }
 
     /** Cache the last gate decision so accepts() + executeQuery() transpile once. */
@@ -177,7 +188,7 @@ internal class DorisReplayEngine(
                 // it, first contact showed schemas created after CREATE
                 // CATALOG missing and drop/recreate cycles serving stale rows.
                 st.execute("REFRESH CATALOG $catalog")
-                st.executeQuery(s).use { rs -> readRows(rs) }
+                st.executeQuery(s).use { rs -> readRows(rs, run.dorisSql) }
             }
         } catch (e: SQLException) {
             throw classify(e)
@@ -216,7 +227,7 @@ internal class DorisReplayEngine(
         }
     }
 
-    private fun readRows(rs: ResultSet): List<List<String?>> {
+    private fun readRows(rs: ResultSet, sql: String): List<List<String?>> {
         val md = rs.metaData
         val cols = md.columnCount
         // Doris BOOLEAN is TINYINT(1) on the wire; the driver exposes it as
@@ -226,12 +237,42 @@ internal class DorisReplayEngine(
             md.getColumnType(i) == Types.BIT || md.getColumnType(i) == Types.BOOLEAN
         }
         val rows = mutableListOf<List<String?>>()
+        var inspectedTypes = false
+        var types: List<InlinedTypeNode?>? = null
         while (rs.next()) {
-            rows += (1..cols).map { i ->
-                normalizeReplayCell(rs.getObject(i), logicalBoolean[i - 1])
+            val values = (1..cols).map(rs::getObject)
+            // Text shape merely avoids unnecessary metadata reads. It NEVER establishes a type.
+            if (!inspectedTypes && values.any { it is String && it.trimStart().firstOrNull() in listOf('{', '[') }) {
+                inspectedTypes = true
+                val resolved = projectionTypes(sql)
+                require(resolved == null || resolved.size == cols) { "Replay projection metadata width changed" }
+                types = resolved
             }
+            rows += values.mapIndexed { index, value -> normalizeReplayCell(value, logicalBoolean[index], types?.get(index)) }
         }
         return rows
+    }
+
+    private fun projectionTypes(sql: String): List<InlinedTypeNode?>? {
+        val attachment = currentAttachment ?: return null
+        val database = databasesByTarget.getValue(attachment.metadataUri)
+        val base = URI(pgHostUrl.removePrefix("jdbc:"))
+        require(base.scheme == "postgresql" && base.rawAuthority != null) { "Replay type inspection requires a PostgreSQL network URL" }
+        val url = "jdbc:${base.scheme}://${base.rawAuthority}/$database" + (base.rawQuery?.let { "?$it" } ?: "")
+        return DorisReplayProjection.types(sql, attachment.catalogAlias) { schema, table ->
+            JdbcDucklakeCatalog(DucklakeCatalogConfig().apply {
+                catalogDatabaseUrl = url
+                catalogDatabaseUser = pgUser
+                catalogDatabasePassword = pgPassword
+                dataPath = attachment.dataPath
+                maxCatalogConnections = 1
+            }).use { catalog ->
+                catalog.readSession(Supplier {
+                    val snapshot = catalog.currentSnapshotId
+                    catalog.getTable(schema, table, snapshot)?.let { catalog.getTableColumns(it.tableId, snapshot) }
+                })
+            }
+        }
     }
 
     private fun firstLine(message: String): String = message.lineSequence().first()
@@ -253,7 +294,11 @@ internal class DorisReplayEngine(
     }
 }
 
-/** Replay's pinned native floating renderer, while retaining Doris Boolean/blob/temporal rules. */
+/** Replay's pinned native float/blob renderer, retaining Doris Boolean/temporal rules. */
 internal fun normalizeReplayCell(value: Any?, logicalBoolean: Boolean = false): String? =
-    if (value is Float || value is Double) GoldenComparator.renderCell(value)
+    if (value is Float || value is Double || value is ByteArray) GoldenComparator.renderCell(value)
     else DorisValueNormalizer.normalize(value, logicalBoolean)
+
+internal fun normalizeReplayCell(value: Any?, logicalBoolean: Boolean, type: InlinedTypeNode?): String? =
+    if (type != null && DorisNestedCellRenderer.canRender(type)) DorisNestedCellRenderer.render(value, type)
+    else normalizeReplayCell(value, logicalBoolean)

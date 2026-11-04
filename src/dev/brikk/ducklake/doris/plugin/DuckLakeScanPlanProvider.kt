@@ -142,6 +142,7 @@ internal class DuckLakeScanPlanProvider(
         val tableDataPath = pathResolver.resolveTableDataPath(schema, table)
         val dataFiles = catalog.getDataFiles(dlHandle.tableId, dlHandle.snapshotId)
         failOnUnqualifiedFinal11Files(dlHandle, dataFiles)
+        failOnHistoricalDeleteFiles(dlHandle, dataFiles)
 
         // Correctness gate (corpus stats/count_star_optimization_time_travel):
         // a partial (cross-snapshot compacted) data file physically holds rows
@@ -241,6 +242,19 @@ internal class DuckLakeScanPlanProvider(
                     "disable inlining (CALL <lake>.set_option('data_inlining_row_limit', '0')) and rewrite.",
             )
         }
+    }
+
+    private fun failOnHistoricalDeleteFiles(handle: DuckLakeTableHandle, files: List<DucklakeDataFile>) {
+        if (catalog is DuckLakeQualifiedReadCatalog || files.none { it.deleteFilePath != null }) return
+        if (handle.snapshotId == catalog.currentSnapshotId) return
+        // NULL partial_max is not proof that a delete file contains one snapshot.
+        // The ordinary Iceberg reader cannot filter its embedded deletion snapshot IDs.
+        // Refuse before COUNT/LIMIT/file pruning can bypass this safety boundary.
+        throw DorisConnectorException(
+            "Historical reads with delete files require per-position snapshot filtering; " +
+                "the Doris reader cannot establish deletion visibility at snapshot ${handle.snapshotId}. " +
+                "This read is refused rather than applying later deletions. Latest-snapshot reads remain available.",
+        )
     }
 
     /**

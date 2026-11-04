@@ -11,7 +11,7 @@ import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
 import java.sql.DriverManager
 
-/** Exercises the resolved published replay JAR, not a copied producer implementation. */
+/** Exercises the resolved release/candidate replay JAR, not a copied producer implementation. */
 internal class DuckLakeReplayConformanceTest {
     @Test
     fun typedBooleanHashesPreserveVarcharAndRawRowsAcrossEverySortMode() {
@@ -33,8 +33,22 @@ internal class DuckLakeReplayConformanceTest {
         val result = ReplayDriver().replay(SltParser.parse("authored-boolean.test", file))
         assertThat(result.failed).isEmpty()
         assertThat(result.passed).isEqualTo(1)
-        val wrong = ReplayDriver().replay(SltParser.parse("wrong-boolean.test", file.replace("b026324c6904b2a9cb4b88d6d61c81d1", "74d9a83219cabaab06a69fd318873f33")))
+        val wrong = ReplayDriver().replay(SltParser.parse("wrong-boolean.test",
+            file.replace("b026324c6904b2a9cb4b88d6d61c81d1", "74d9a83219cabaab06a69fd318873f33")))
         assertThat(wrong.failed).hasSize(1)
+    }
+
+    @Test
+    fun blobRendererMatchesNativeForEveryByteIncludingQuotesAndBackslashes() {
+        DriverManager.getConnection("jdbc:duckdb:").use { connection -> connection.createStatement().use { statement ->
+            for (bytes in listOf(byteArrayOf(), byteArrayOf(0, 34, 39, 92, 127, -1), ByteArray(256) { it.toByte() })) {
+                val hex = bytes.joinToString("") { "%02X".format(it.toInt() and 255) }
+                statement.executeQuery("SELECT CAST(from_hex('$hex') AS VARCHAR)").use { rows ->
+                    check(rows.next())
+                    assertThat(normalizeReplayCell(bytes)).describedAs("Native BLOB $hex").isEqualTo(rows.getString(1))
+                }
+            }
+        } }
     }
 
     @Test

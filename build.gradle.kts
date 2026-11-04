@@ -21,7 +21,7 @@ detekt {
     buildUponDefaultConfig = true
     config.setFrom(rootProject.file("config/detekt/detekt.yml"))
     baseline = file("detekt-baseline.xml")
-    source.setFrom("src", "test/src",
+    source.setFrom("src", "test/src", "test/released",
         if (providers.gradleProperty("catalogReadCorrectnessCandidate").orNull == "true") "read-tiers/r07" else "read-tiers/released")
 }
 
@@ -77,7 +77,7 @@ repositories {
 
 val dorisVersion = "1.2-SNAPSHOT"
 
-// Explicit candidate only. The released 0.12.0 lane and default output remain unchanged.
+// Historical experimental reader candidate, separate from the released 0.14.0 default.
 // Do not use maven.repo.local: Doris's exclusive FE/SPI repository above must stay intact.
 val readCorrectnessCandidate = providers.gradleProperty("catalogReadCorrectnessCandidate").orNull == "true"
 check(!providers.gradleProperty("r07CatalogRepository").isPresent) {
@@ -86,12 +86,12 @@ check(!providers.gradleProperty("r07CatalogRepository").isPresent) {
 val r07Version = "0.13.0-20261101.082015-33"
 val candidateModules = setOf("ducklake-catalog", "slt-format", "ducklake-test-corpus-replay")
 kotlin.sourceSets.main { kotlin.srcDir(if (readCorrectnessCandidate) "read-tiers/r07" else "read-tiers/released") }
+kotlin.sourceSets.test { kotlin.srcDir(if (readCorrectnessCandidate) "test/r07" else "test/released") }
 if (readCorrectnessCandidate) {
     // Honor an already isolated acceptance init-script output, never replace the default ZIP.
     if (layout.buildDirectory.get().asFile == layout.projectDirectory.dir("build").asFile) {
         layout.buildDirectory.set(layout.projectDirectory.dir("build/catalog-read-correctness-33"))
     }
-    kotlin.sourceSets.test { kotlin.srcDir("test/r07") }
     repositories.exclusiveContent {
         forRepository {
             repositories.maven {
@@ -456,6 +456,7 @@ tasks.test {
     exclude("**/DuckLakeR07LongPartitionNativeTest*")
     exclude("**/DuckLakeReadCorrectnessLiveTest*")
     exclude("**/DuckLakeDefaultNestedLiveTest*")
+    exclude("**/DorisReadSafetyLiveTest*")
     classpath = prependParquetFormat(classpath)
 }
 
@@ -474,7 +475,7 @@ tasks.register<Test>("java17PluginTest") {
 
 for ((taskName, jvm) in listOf("defaultNestedLiveTest" to 25, "defaultNestedLiveJava17Test" to 17)) {
     tasks.register<Test>(taskName) {
-        description = "Current native mixed scalar/nested reads on explicitly owned default API27/catalog0.12 infrastructure."
+        description = "Current native mixed scalar/nested reads on explicitly owned default API27/catalog0.14 infrastructure."
         group = "verification"
         testClassesDirs = sourceSets.test.get().output.classesDirs
         classpath = prependParquetFormat(sourceSets.test.get().runtimeClasspath)
@@ -486,19 +487,19 @@ for ((taskName, jvm) in listOf("defaultNestedLiveTest" to 25, "defaultNestedLive
     }
 }
 
-if (readCorrectnessCandidate) {
-    for ((taskName, jvm) in listOf("readCorrectnessLiveTest" to 25, "readCorrectnessLiveJava17Test" to 17)) {
-        tasks.register<Test>(taskName) {
-            description = "Bounded N03/H15/N19 probes on explicitly owned API27 infrastructure; no full corpus."
-            group = "verification"
-            testClassesDirs = sourceSets.test.get().output.classesDirs
-            classpath = prependParquetFormat(sourceSets.test.get().runtimeClasspath)
-            javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(jvm)) })
-            useJUnitPlatform()
-            include("**/DuckLakeReadCorrectnessLiveTest*")
-            outputs.upToDateWhen { false }
-        }
+for ((taskName, jvm) in listOf("readCorrectnessLiveTest" to 25, "readCorrectnessLiveJava17Test" to 17)) {
+    tasks.register<Test>(taskName) {
+        description = "Bounded N03/H15/N19 probes on explicitly owned API27 infrastructure; no full corpus."
+        group = "verification"
+        testClassesDirs = sourceSets.test.get().output.classesDirs
+        classpath = prependParquetFormat(sourceSets.test.get().runtimeClasspath)
+        javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(jvm)) })
+        useJUnitPlatform()
+        include("**/DuckLakeReadCorrectnessLiveTest*")
+        outputs.upToDateWhen { false }
     }
+}
+if (readCorrectnessCandidate) {
     tasks.register<Test>("r07ReadQualificationTest") {
         description = "Targeted native R07 consumer probes; no corpus campaign or deployment."
         group = "verification"
@@ -548,4 +549,18 @@ val corpusReplayTest by tasks.registering(Test::class) {
     // "-Dducklake.corpus.dirs=all" for the full corpus.
     System.getProperty("ducklake.corpus.dirs")?.let { systemProperty("ducklake.corpus.dirs", it) }
     outputs.upToDateWhen { false } // always re-run against the live cluster
+}
+
+tasks.register<Test>("readSafetyLiveTest") {
+    description = "Owned FE/BE regression checks for historical-delete/temporal refusals and typed MAP replay."
+    group = "verification"
+    testClassesDirs = sourceSets.test.get().output.classesDirs
+    classpath = prependParquetFormat(sourceSets.test.get().runtimeClasspath)
+    javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(25)) })
+    useJUnitPlatform()
+    include("**/DorisReadSafetyLiveTest*")
+    maxHeapSize = "768m"
+    systemProperty("ducklake.corpus.root", rootProject.projectDir.resolve("ducklake/test/sql").absolutePath)
+    doFirst { check(!readCorrectnessCandidate) { "Read-safety live checks require the released lane" } }
+    outputs.upToDateWhen { false }
 }

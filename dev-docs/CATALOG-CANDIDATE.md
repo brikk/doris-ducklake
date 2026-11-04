@@ -1,7 +1,8 @@
 # Published catalog candidate and bounded read probes
 
-Default builds use released catalog/fixtures/replay/SLT **0.12.0** and native test
-JDBC **1.5.6.0**. The opt-in candidate uses strict published coordinates
+Default builds use released catalog/fixtures/replay/SLT **0.14.0** and native test
+JDBC **2.0.0.1**, including the shared structured parser and replay regressions.
+The historical opt-in experimental reader candidate still uses strict published coordinates
 **0.13.0-20261101.082015-33**, including catalog test fixtures, replay and SLT, with
 JDBC **2.0.0.0**. Normal Gradle resolution and the four producer JAR hashes are
 checked; do not substitute local JARs, a mutable snapshot or mixed publications.
@@ -19,12 +20,12 @@ property deliberately refuses. Doris SDK selection remains the separate scoped
 
 ## What this lane means
 
-The candidate uses the public structured type parser, preserving quoted nested
+Both lanes use the public structured type parser, preserving quoted nested
 field names/order/DECIMAL signatures, with explicit empty/case-collision refusals.
 Both lanes share the complete parent-aware native descriptor encoder. Current
 native STRUCT/LIST/MAP values and NULL/literal-NULL distinctions are checked
 independently; nested mapped files, nested history and final-1.1 nested scans refuse.
-The default mapper's quoted-name/nested-DECIMAL limits are not silently backported.
+Release adoption shares this parser without promoting the experimental 1.1 reader.
 
 Final-1.1 admission remains **off by default**. The candidate property alone does
 not enable it: `experimental.final11.reads=true` is the separate bounded
@@ -56,14 +57,14 @@ F24_ACCEPTANCE_BUILD_DIR="$PWD/build/candidate-B" \
 ```
 
 ```sh
-# Released lane: ordinary populated nested values and NULL parents on both JVMs.
+# Released lane: quoted nested values, NULL parents and measured replay on both JVMs.
 python3 compose/read_correctness_acceptance.py --released \
   --bundle-a build/distributions/doris-ducklake-0.0.1-plugin.zip \
   --bundle-b build/f24-acceptance-B/distributions/doris-ducklake-0.0.1-plugin.zip \
   --duckdb /absolute/path/to/duckdb-1.5.6 \
   --evidence-root /tmp/opencode/default-read-acceptance
 
-# Candidate lane: quoted nested fields and measured Boolean/float replay coverage.
+# Candidate lane: quoted nested fields and measured Boolean/float/BLOB replay coverage.
 python3 compose/read_correctness_acceptance.py \
   --bundle-a build/catalog-read-correctness-33/distributions/doris-ducklake-0.0.1-plugin.zip \
   --bundle-b build/candidate-B/distributions/doris-ducklake-0.0.1-plugin.zip \

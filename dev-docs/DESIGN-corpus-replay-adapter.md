@@ -8,6 +8,17 @@ Historical green counts are not current-runtime coverage.
 
 ## Current workflow
 
+Catalog **0.14.0** supplies independent replay lanes. The released Doris factory
+selects `DUCKLAKE_1_0` for setup, execution and mirroring. Explicit 1.1 attachments
+halt the 1.0 file before its feature SQL and are reported as format-scope halts,
+not passed files. Explicit ATTACH versions and SET/RESET retain their native
+semantics; existing newer catalogs fail a downgrade.
+The oracle SQL binder structurally rebinds only known rewritten PostgreSQL
+metadata catalogs from native `main` to `public`, preserving logical schemas,
+custom metadata schemas and SQL literal values. No corpus/golden files are edited.
+This fixes the [0.13.0 bootstrap blocker](VALIDATION-catalog-0.13.0-2026-11-03.md#full-corpus-follow-up-bootstrap-format-blocker).
+The historical candidate keeps its original replay API and is not this campaign lane.
+
 Initialize the pinned `ducklake/` corpus submodule. Prepare the
 [matched development stack](COMPOSE.md), PostgreSQL host access and a same-absolute-path
 host/FE/BE data mount. The standard task uses `dorisCorpusDir` (default
@@ -43,10 +54,36 @@ Read XML and actual mirrored counts; zero failures is not nonzero coverage.
   reads. Literal/quoted-name rewrite fidelity and broad error-to-skip classification
   remain M13/M16, not proof that every accepted query is safe.
 - Normalize real cells, preserve SQL NULL versus literal `NULL`, and use pinned
-  replay rendering for Float/Double. No production replay dependency or fabricated
+  replay rendering for Float/Double/BLOB. No production replay dependency or fabricated
   golden values are introduced.
 - Report oracle checks, accepted/attempted/successful mirrors, skips and failures
   separately. One query skipped before mirroring cannot contribute mirror coverage.
+
+## Isolated, resource-bounded full-directory campaign
+
+`compose/corpus_acceptance.py` uses the existing ownership/loaded-provider controller
+with fresh UUID resources, loopback endpoints and same-path read-only repository
+fixtures. It requires verified A/resource-only B bundles with catalog 0.14.0.
+Evidence belongs in a persistent directory such as `build/validation/catalog-0.14.0/`.
+The Gradle/oracle process tree is a private user-systemd scope limited to 6 GiB,
+no swap and 300% CPU; Gradle has one worker and no retained daemon. Do not run other
+campaigns beside it. FE/BE retain their established container limits.
+
+```sh
+python3 compose/corpus_acceptance.py \
+  --bundle-a build/distributions/doris-ducklake-0.0.1-plugin.zip \
+  --bundle-b build/catalog-0.14.0-acceptance-B/distributions/doris-ducklake-0.0.1-plugin.zip \
+  --duckdb /absolute/path/to/duckdb-1.5.6 \
+  --evidence-root build/validation/catalog-0.14.0
+```
+
+The native oracle is JDBC 2.0.0.1; the CLI argument is the unchanged deployment
+preflight prerequisite. All discovered files are selected, but existing curated
+exclusions and the shared harness's 40-mirrors-per-file cap remain explicit.
+The controller refuses skipped/missing JUnit execution and zero successful mirrors,
+retains all failures, distinguishes 1.1 scope halts from ran-to-end files and marks
+watchdog/quarantine cases non-green. It kills only its own scope and cleans only
+acknowledged disposable infrastructure, checking protected state afterward.
 
 Current focused native/quoted/Boolean/float replay acceptance is independently
 strict and measured on Java25/17; see [CATALOG-CANDIDATE.md](CATALOG-CANDIDATE.md).

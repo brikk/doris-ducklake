@@ -4,7 +4,7 @@ import dev.brikk.ducklake.catalog.DucklakeTypeSignature
 import dev.brikk.ducklake.catalog.InlinedTypeNode
 import org.apache.doris.connector.spi.ConnectorType
 
-/** Published candidate only: parse the catalog grammar without normalizing source field names. */
+/** Parse the shared catalog grammar without normalizing source field names. */
 internal object DuckLakeTypeMapping {
     private const val MICROS_SCALE = 6
     private const val VARBINARY_DEFAULT_LEN = 65535
@@ -32,7 +32,7 @@ internal object DuckLakeTypeMapping {
         else -> scalar(node.type, enableTimestampTz)
     }
 
-    // Same scalar behavior and explicit degradations as the released mapper; no new type opt-ins.
+    // Preserve the existing scalar behavior and explicit degradations; no new type opt-ins.
     private fun scalar(type: String, enableTimestampTz: Boolean): ConnectorType {
         if (type == "timestamptz") return ConnectorType.of(if (enableTimestampTz) "TIMESTAMPTZ" else "DATETIMEV2", MICROS_SCALE, 0)
         scalarTypes[type]?.let { return it }

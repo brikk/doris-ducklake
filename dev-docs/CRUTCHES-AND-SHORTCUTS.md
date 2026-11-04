@@ -1,6 +1,6 @@
 # Safety invariants and qualification limits
 
-Current default: catalog 0.12.0 on the exact [API27 runtime](DORIS-RUNTIME.md).
+Current default: catalog 0.14.0 on the exact [API27 runtime](DORIS-RUNTIME.md).
 The [published candidate](CATALOG-CANDIDATE.md) is separate and default-off.
 This inventory records contracts to preserve, not a production-clean verdict.
 
@@ -24,8 +24,8 @@ This inventory records contracts to preserve, not a production-clean verdict.
   shared local filesystem access. It is not a distributed transport. Concurrency,
   namespace, timestamps and cleanup have remaining findings (M09/M10).
 - Inline DELETEs refuse. Partial data-file history requiring a hidden snapshot
-  filter refuses. Historical delete visibility is a **separate unsafe gap (F08)**,
-  not repaired by the partial-data guard.
+  filter refuses. Historical scans with delete files now also refuse (F08), including
+  NULL advisory bounds; actual per-position snapshot filtering remains unavailable.
 - COUNT/LIMIT metadata shortcuts only apply under their narrow eligibility gates;
   filters, deletes, inline/partial state or nonlatest history require normal scans.
 - Imported embedded field IDs are not universally authoritative (F11). A conflict-aware

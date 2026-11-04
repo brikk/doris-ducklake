@@ -14,8 +14,8 @@ or live defect campaign is claimed by this documentation cleanup.
 | F05 | Unsigned bucket pruning must use the source type's hash encoding or decline pruning. |
 | F06 | Membership bounds and prefix successors must use Unicode-scalar ordering, not UTF-16 code-unit assumptions. |
 | F07 | One logical snapshot does not fence physical flush/compaction. Carry/revalidate one coherent physical view across planning. |
-| F08 | Historical reads must filter future position-delete entries or reject unsafe history, even with null partial-max metadata. |
-| F09 | Lossy timestamp mappings require conservative source-domain pruning or no pruning. |
+| F08 | **Mitigated by refusal:** ordinary historical scans with delete files now fail closed, including NULL advisory bounds. Latest deletes and delete-free history pass real FE/BE controls; correct per-position historical filtering remains unimplemented. [Read-safety proof](VALIDATION-DORIS-READ-SAFETY-2026-11-04.md). |
+| F09 | **Partial:** TIMESTAMP_NS statistics pruning is disabled while retaining the BE predicate. Lossy mapping semantics and other source-domain/cast preservation cases still need qualification. [Read-safety proof](VALIDATION-DORIS-READ-SAFETY-2026-11-04.md). |
 | F10 | Time-travel timestamp parsing must retain microsecond precision instead of round-tripping through epoch milliseconds. |
 | F11 | Registered imported-file mappings must be authoritative over conflicting embedded field IDs; reject unsupported shapes. |
 | F12 | **Partial:** complete native nested dictionaries and ordinary NULL-parent reads are fixed/qualified. Imported/mapped, historical, rename/re-add/default/evolution and final-1.1 nested behavior remain unqualified/refused. |
@@ -37,7 +37,6 @@ close F11 or expand nested support beyond the tested shapes.
 
 | ID | Remaining follow-up |
 |---|---|
-| M01 | Default type parser mishandles nested DECIMAL commas. Candidate shared-parser behavior is separate. |
 | M02 | Parse ordinary SQL time-travel timestamps using session zone, retaining offsets and precision (F10). |
 | M03 | Value-aware default expressions, including non-finite floats; type-only admission is insufficient. |
 | M04 | Persist CREATE defaults atomically or reject unsupported declarations. |
@@ -54,6 +53,10 @@ close F11 or expand nested support beyond the tested shapes.
 | M15 | Safe forwarding of forked-JVM endpoints/credentials and one consistent shared-path configuration. |
 | M16 | SQL rewrite must preserve literals/comments and quoted/Unicode names. |
 | M17 | Use context-correct SQL literal/identifier/libpq escaping and avoid secret logging. |
+
+M01's nested-DECIMAL parser defect is addressed by the shared-parser cutover in
+[catalog 0.13 adoption](VALIDATION-catalog-0.13.0-2026-11-03.md); broader nested
+value/evolution/default boundaries remain N17/F12/M03.
 
 M18's JVM split and M19's exact-artifact/loaded-runtime gates are implemented for
 the qualified lanes; see [DEVELOPMENT.md](DEVELOPMENT.md) and the API27 evidence.
@@ -80,7 +83,7 @@ cleanup; historical commands remain explicitly archived.
 | N14 | CREATE syntax must match persisted comments/properties/types/partition semantics and supported INSERT. |
 | N15 | Define behavior when an already-pruned/projected handle is repinned; clear/recompute if reachable. |
 | N16 | Actual int128 boundary values, not just DECIMAL(38,0) descriptor assertions. |
-| N17 | **Partial:** candidate parses quoted nested names; default parser and broader nested identity/evolution remain bounded. |
+| N17 | **Partial:** catalog 0.13 adoption uses the shared quoted-name/DECIMAL parser in both lanes; broader nested identity/evolution remain bounded. |
 | N18 | Distinguishing multi-file and exact retained/new-ID regressions; revalidate each weak fixture separately. |
 | N19 | Default inline/delete refusals need independent tests; parked future-feature tests do not prove them. |
 | N20 | Assembled ZIP through an FE-like isolated classloader, service/API/host identity and runtime closure. |
