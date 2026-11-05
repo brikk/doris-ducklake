@@ -6,7 +6,12 @@ replay and SLT use the shared 0.15.1 version pin from Maven Central. JDBC 2.0.0.
 Doris API27 SDK/images, corpus pin, stored-format 1.0 admission and feature flags
 remain unchanged.
 
-## Exactly what was rerun
+Producer release commit: `255c7b5e890a69547e10b23a14cf2c123c19ab9b`, tag
+`v0.15.1`. Doris adoption was committed and pushed as
+`0a31a7116ad786ff0d28db2a7b9ef948a2db488b` before the owner's subsequent request
+to repeat the other already-selected maintenance checks.
+
+## Initial failing-case-only follow-up
 
 Only the previous failure:
 
@@ -14,8 +19,8 @@ Only the previous failure:
 DuckLakeExpiryMaintenanceTest.cleanupFailureLeavesExpiryAndFirstPageCommittedAndResumesThroughTheNewApi
 ```
 
-It is selected once in `test` (Java25) and once in `java17PluginTest`. No other test
-class, full suite, corpus, copy probe, live SQL or FE/BE deployment is rerun. Gradle
+It was selected once in `test` (Java25) and once in `java17PluginTest`. At this
+stage no other test class, full suite, corpus, copy probe, live SQL or FE/BE deployment was rerun. Gradle
 implicitly compiles the changed dependency and packages the normal distribution;
 `qualificationDependencies` records the actual resolved coordinates.
 
@@ -47,7 +52,7 @@ The producer's `docs/releases/RELEASE-0.15.1.md` identifies this exact counter f
 page counters are added to the total only after a page commits. It does not claim
 the old release lost files; recovery already worked.
 
-## Results
+## Initial results
 
 **PASS: 1/1 on Java25 and 1/1 on Java17; zero failures, errors or skips.** The
 unchanged regression now records on both JVMs:
@@ -59,8 +64,8 @@ EXPIRY_PROGRESS reported=1000 committed=1000 resumed=2 latest=4
 Compilation and assembly succeeded. All four normal resolved JAR hashes match the
 verified Central downloads, and the default ZIP contains the exact 0.15.1 catalog
 JAR. Tested sources remained unchanged during execution. The private scope is
-unloaded and no containers remain running. There were no other test invocations,
-full suites, corpus runs or FE/BE deployments in the 0.15.1 follow-up.
+unloaded and no containers remained running. There were no other test invocations,
+full suites, corpus runs or FE/BE deployments in this initial follow-up.
 
 ```text
 build_id doris-ducklake-v1-185b4b98356a428ff835e914bf0be14f49118d6a38725eee3c93f5f980d987fd
@@ -75,3 +80,42 @@ Prior evidence is retained distinctly: 0.15.0 had **41 passes / 1 failure on eac
 JVM**, with the hard-budget, copy/default-bridge, other maintenance and smoke checks
 passing. The earlier snapshot had its own full-suite trial. Those are not counted
 as fresh 0.15.1 tests. No full-corpus result is changed by this adoption.
+
+## Owner-requested 42-case confirmation
+
+After adoption, the owner explicitly requested the failed case **plus the same
+other targeted expiry/maintenance cases** on formal 0.15.1. This is a separate,
+bounded follow-up, not a repeated full CI matrix. It selects exactly:
+
+- `DuckLakeProcedureOpsTest`
+- `DuckLakeCleanupOldFilesTest`
+- `DuckLakeExpiryMaintenanceTest`
+- `DuckLakeExpiryStorageTest`
+- `DorisBaselineContractTest`
+- `DuckLakeConnectorCapabilitiesTest`
+
+Both usual JVM lanes are selected, along with `compileKotlin` and
+`compileTestKotlin`; no full `check`, full suite, corpus, packaging or FE/BE
+deployment is invoked. The existing default distribution is protected from
+changes. The four supplied Central hashes were rechecked against normal resolved
+artifacts before execution. Results and source/artifact preservation receipts are
+retained separately in `build/validation/catalog-0.15.1/targeted-confirmation/`.
+
+**PASS: 42/42 on Java25 and 42/42 on Java17; zero failures, errors or skips.**
+Both sets include the original regression with the corrected marker:
+
+```text
+EXPIRY_PROGRESS reported=1000 committed=1000 resumed=2 latest=4
+```
+
+The same run also passes the hard-budget/progress, table/history protection,
+constructor/copy/default-bridge compatibility, duplicate/missing-file deletion,
+procedure contracts and quick API27/startup-capability tests. Compilation succeeds.
+No test or production source changed: the tested adoption remains
+`0a31a7116ad786ff0d28db2a7b9ef948a2db488b`. The normal ZIP and full identity receipt
+are unchanged; both normal JVM selections resolved the supplied Central bytes.
+
+The private scope is unloaded and no containers remain running. `summary.json`,
+`scope.json`, `targeted.log`, source fingerprints and the six JUnit XMLs per JVM
+are retained in the separate `targeted-confirmation/` directory above. No full
+suite, corpus, packaging or FE/BE deployment was run in this confirmation.

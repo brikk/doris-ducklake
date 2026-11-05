@@ -27,7 +27,8 @@ archived commands/results apply only to their stated artifacts.
 ## Current evidence
 
 - [Catalog 0.15.1 adoption](VALIDATION-catalog-0.15.1.md): released default pin;
-  only the failing expiry-count regression rerun, no full re-verification or FE/BE deployment.
+  the failing expiry-count regression and the later owner-requested **42/42 targeted
+  checks on each JVM** pass, with no full re-verification or FE/BE deployment.
   [0.15.0 targeted checks](VALIDATION-catalog-0.15.0.md) retain the count defect found before adoption.
   The [historical snapshot trial](TRIAL-catalog-0.15.0-20261104.182540-2.md) retains
   its independent full-suite results and the pre-release copy-ABI finding.
