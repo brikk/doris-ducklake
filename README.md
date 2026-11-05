@@ -16,7 +16,7 @@ builds listed below.
 
 - **Doris source:** `4bc7f426828e4cedfd2b7ce9b76fe95b14b5b146`, with matching FE and BE.
 - **Connector API:** 27.0; filesystem API 7.0; complete JNI API 6.0 distribution.
-- **Default catalog library:** 0.14.0; native test JDBC: 2.0.0.1.
+- **Default catalog library:** 0.15.1; native test JDBC: 2.0.0.1.
   Live interoperability fixtures also exercise DuckDB 1.5.6 / DuckLake 1.0.
 - **Plugin runtime:** Java 17. Building the plugin requires JDK 25.
 
@@ -102,7 +102,7 @@ Storage credentials are forwarded to the native reader; do not commit real secre
 
 These are bounded capabilities, not a claim that all combinations or the full
 upstream corpus pass. See [type mappings](dev-docs/TYPES.md) and
-[catalog adoption checks](dev-docs/VALIDATION-catalog-0.14.0.md).
+[catalog adoption checks](dev-docs/VALIDATION-catalog-0.15.1.md).
 
 ## Important limits
 
@@ -164,6 +164,12 @@ physically deletes them. Orphan cleanup selects only old, unreferenced managed
 residue, not arbitrary Parquet files. A grace period is not a concurrency lock.
 Maintenance currently uses the S3 client and has a narrower credential surface
 than native reads, including a session-token limitation.
+
+Catalog 0.15.x expiry commits snapshot deletion before paged metadata cleanup. If
+cleanup then fails, the procedure explicitly reports **expiry committed**: do not
+retry the expiry. Resume with the catalog API `cleanUpExpiredObjects`; this SDK
+operation is not yet exposed as a Doris SQL procedure. `cleanup_old_files` only
+deletes already-scheduled objects and does not resume metadata cleanup.
 
 ## Development
 

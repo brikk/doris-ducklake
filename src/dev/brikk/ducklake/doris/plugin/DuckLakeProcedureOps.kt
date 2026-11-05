@@ -25,7 +25,7 @@ import org.apache.doris.connector.spi.pushdown.ConnectorPredicate
  * [DuckLakeConnector.getProcedureOps]. Exposes the maintenance procedures
  * `ALTER TABLE <t> EXECUTE <proc>(...)`:
  *  - `expire_snapshots` — metadata-only: end-snapshots old versions and SCHEDULES their now-dead
- *    files for later deletion (a catalog transaction; no storage I/O).
+ *    files for later deletion (committed expiry followed by resumable cleanup pages; no storage I/O).
  *  - `cleanup_old_files` — the second phase: physically deletes the blobs `expire_snapshots`
  *    scheduled, once older than a grace period, via the connector's own S3 client
  *    ([WarehouseBlobStore]); then drops their schedule rows.
@@ -177,7 +177,7 @@ internal class DuckLakeProcedureOps(
             return result(dryRun = dryRun, expiredCount = 0, scheduledFileCount = -1, ids = expirable)
         }
         val result: ExpireSnapshotsResult = try {
-            catalog.expireSnapshots(expirable.toSet())
+            expireDuckLakeSnapshots(catalog, expirable.toSet())
         } catch (e: TransactionConflictException) {
             throw DorisConnectorException(
                 "expire_snapshots conflicted with a concurrent catalog commit; retry: ${e.message}", e,

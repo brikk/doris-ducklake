@@ -15,7 +15,7 @@ Install the exact [Doris SDK](DORIS-RUNTIME.md), or scope its repository explici
 ./gradlew check assemble -PdorisRepository=/absolute/path/to/pinned-sdk
 ```
 
-Default catalog/fixtures/replay/SLT use released 0.14.0 and test JDBC 2.0.0.1.
+Default catalog/fixtures/replay/SLT use released 0.15.1 and test JDBC 2.0.0.1.
 DuckDB 2.0 test bootstraps explicitly select DuckLake 1.0 and disable automatic
 migration; adopting the library does not enable 1.1 writes or promote its reader.
 `test` runs the ordinary Java-25 suite; `java17PluginTest` selects plugin tests on
@@ -91,4 +91,5 @@ Only promote exact qualified bytes after checking both lanes, refusal controls,
 rollback and preservation of shared/retained state. Keep release performance,
 all-JNI workloads, Duckbridge JDBC/Quack and production/fleet claims separate.
 Runtime qualification is in [API27 validation](VALIDATION-DORIS-API27-2026-11-02.md);
-the current bundle's checks are in [catalog 0.14.0 adoption](VALIDATION-catalog-0.14.0.md).
+the current bundle's targeted checks are in [catalog 0.15.1 adoption](VALIDATION-catalog-0.15.1.md);
+the earlier snapshot trial retains its separate full-suite evidence.

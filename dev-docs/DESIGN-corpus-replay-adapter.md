@@ -8,7 +8,7 @@ Historical green counts are not current-runtime coverage.
 
 ## Current workflow
 
-Catalog **0.14.0** supplies independent replay lanes. The released Doris factory
+Catalog **0.15.1** retains 0.14.0's independent replay lanes. The released Doris factory
 selects `DUCKLAKE_1_0` for setup, execution and mirroring. Explicit 1.1 attachments
 halt the 1.0 file before its feature SQL and are reported as format-scope halts,
 not passed files. Explicit ATTACH versions and SET/RESET retain their native
@@ -63,7 +63,7 @@ Read XML and actual mirrored counts; zero failures is not nonzero coverage.
 
 `compose/corpus_acceptance.py` uses the existing ownership/loaded-provider controller
 with fresh UUID resources, loopback endpoints and same-path read-only repository
-fixtures. It requires verified A/resource-only B bundles with catalog 0.14.0.
+fixtures. It requires verified A/resource-only B bundles with catalog 0.15.1.
 Evidence belongs in a persistent directory such as `build/validation/catalog-0.14.0/`.
 The Gradle/oracle process tree is a private user-systemd scope limited to 6 GiB,
 no swap and 300% CPU; Gradle has one worker and no retained daemon. Do not run other

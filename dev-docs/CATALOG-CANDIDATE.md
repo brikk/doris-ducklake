@@ -1,6 +1,6 @@
 # Published catalog candidate and bounded read probes
 
-Default builds use released catalog/fixtures/replay/SLT **0.14.0** and native test
+Default builds use released catalog/fixtures/replay/SLT **0.15.1** and native test
 JDBC **2.0.0.1**, including the shared structured parser and replay regressions.
 The historical opt-in experimental reader candidate still uses strict published coordinates
 **0.13.0-20261101.082015-33**, including catalog test fixtures, replay and SLT, with
