@@ -3,8 +3,9 @@ package dev.brikk.ducklake.doris.plugin
 import dev.brikk.ducklake.catalog.DucklakeTypeSignature
 import dev.brikk.ducklake.catalog.InlinedTypeNode
 import org.apache.doris.connector.spi.ConnectorType
+import java.util.Locale
 
-/** Parse the shared catalog grammar without normalizing source field names. */
+/** DuckLake type string → Doris [ConnectorType]. Nested types are parsed with the catalog grammar; field names are kept as-is. */
 internal object DuckLakeTypeMapping {
     private const val MICROS_SCALE = 6
     private const val VARBINARY_DEFAULT_LEN = 65535
@@ -13,7 +14,7 @@ internal object DuckLakeTypeMapping {
 
     fun fromDucklakeType(ducklakeType: String?, enableTimestampTz: Boolean = false): ConnectorType {
         requireNotNull(ducklakeType) { "ducklakeType is null" }
-        // Historical scalar alias, not a composite grammar: retain the existing spatial mapping.
+        // A scalar alias that the composite grammar would misparse.
         if (ducklakeType.trim().equals("linestring z", ignoreCase = true)) return scalar("linestring_z", enableTimestampTz)
         return convert(DucklakeTypeSignature.parse(ducklakeType), enableTimestampTz)
     }
@@ -23,8 +24,8 @@ internal object DuckLakeTypeMapping {
         "map" -> ConnectorType.mapOf(convert(node.children[0], enableTimestampTz), convert(node.children[1], enableTimestampTz))
         "struct" -> {
             val names = node.children.map { it.name }
-            // Doris StructType is case-insensitive. Refuse collisions instead of dropping/renaming fields.
-            require(names.none { it.isEmpty() } && names.map { it.lowercase(java.util.Locale.ROOT) }.distinct().size == names.size) {
+            // Doris struct fields are case-insensitive.
+            require(names.none { it.isEmpty() } && names.map { it.lowercase(Locale.ROOT) }.distinct().size == names.size) {
                 "Doris STRUCT requires nonempty, case-insensitively unique field names: $names"
             }
             ConnectorType.structOf(names, node.children.map { convert(it, enableTimestampTz) })
@@ -32,7 +33,6 @@ internal object DuckLakeTypeMapping {
         else -> scalar(node.type, enableTimestampTz)
     }
 
-    // Preserve the existing scalar behavior and explicit degradations; no new type opt-ins.
     private fun scalar(type: String, enableTimestampTz: Boolean): ConnectorType {
         if (type == "timestamptz") return ConnectorType.of(if (enableTimestampTz) "TIMESTAMPTZ" else "DATETIMEV2", MICROS_SCALE, 0)
         scalarTypes[type]?.let { return it }

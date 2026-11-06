@@ -3,48 +3,23 @@ package dev.brikk.ducklake.doris.plugin
 import java.time.Instant
 
 /**
- * Pure orphan-file selection for `remove_orphan_files` — the data-loss-critical decision, isolated
- * here so it is exhaustively unit-testable without any storage or catalog.
+ * The orphan selection for `remove_orphan_files`, kept pure so it can be tested exhaustively.
  *
- * An orphan is a listed warehouse object that (a) is **recognizably DuckLake-written residue**
- * ([isDucklakeManagedResidue]), (b) is NOT one of the catalog's known referenced paths, (c) is NOT a
- * member of a known dataset *directory* (a DuckLake dataset registers a directory whose member
- * objects must survive even though only the directory has a catalog row), and (d) is older than the
- * cutoff — the grace period that protects files an in-flight (possibly cross-engine) writer produced
- * but hasn't yet committed. ALL conditions must hold; when in doubt a file is KEPT, never deleted.
+ * A listed object is an orphan only if all hold: its basename is `ducklake-*` with a managed
+ * extension (the gate that keeps a user's own `data.parquet` or `_SUCCESS` safe), it is not a known
+ * referenced path, it is not inside a known dataset directory, and it is older than the cutoff.
+ * When in doubt a file is kept.
  *
- * ## The residue gate (a) — cross-engine contract with the Trino plugin
- * Modeled on the shared `remove_orphan_files` contract (Trino `DucklakeRemoveOrphanFilesProcedure`,
- * dev-docs DESIGN-maintenance §8.1): a file is deletable only if its **basename starts with the
- * `ducklake-` prefix that every DuckLake writer uses** (this connector + DuckDB) AND ends with a
- * managed extension. This is broader than upstream DuckDB's `.parquet`/`.puffin` glob (upstream
- * added `.puffin` in DuckLake 1.5.5, ducklake main `1e2e74ee`; before that it was `.parquet`-only —
- * we also reclaim `.db` residue) but NARROWER than a raw unreferenced-file diff — foreign files a user
- * parked under the warehouse (`_SUCCESS`, `foo.txt`, `.crc`, their own non-`ducklake-` `data.parquet`)
- * are NEVER deleted. The `ducklake-` prefix is the key safety gate.
- *
- * Doris manages `{.parquet, .puffin, .db}`: `.parquet` (data), `.puffin` (deletion vectors), `.db`
- * (DuckDB-format data) — the cross-engine core. It deliberately OMITS the Trino plugin's `.vortex`
- * and the `.lance` dataset-directory shape (Trino-only formats not present in a Doris deployment).
+ * Managed extensions are `.parquet`, `.puffin` (deletion vectors) and `.db` (DuckDB-format data);
+ * the Trino plugin's `.vortex` and `.lance` are not present in a Doris deployment.
  */
 internal object OrphanFiles {
 
-    /** Filename prefix every DuckLake data/delete-file writer uses (this connector, Trino, DuckDB). */
     private const val DUCKLAKE_FILE_PREFIX = "ducklake-"
 
-    /**
-     * Single-file DuckLake data/delete formats Doris recognizes as reclaimable residue. Cross-engine
-     * core only — no `.vortex`/`.lance` (Trino-plugin formats). `.parquet` (data + parquet deletes),
-     * `.puffin` (deletion-vector deletes), `.db` (DuckDB-format data).
-     */
     private val MANAGED_FILE_EXTENSIONS = listOf(".parquet", ".puffin", ".db")
 
-    /**
-     * The subset of [listed] safe to delete as orphaned, given the catalog's [knownPaths] (absolute
-     * URIs) and the age [cutoff]. Compare accepted S3 aliases by one scheme-independent identity
-     * on BOTH sides, retaining exact bucket/key bytes and a directory-boundary guard. Never apply
-     * URL decoding or filesystem normalization. Return the original listed URI for deletion.
-     */
+    /** Known and listed URIs are compared by scheme-independent identity; the original listed URI is returned. */
     fun find(listed: List<BlobEntry>, knownPaths: Set<String>, cutoff: Instant): List<String> {
         val knownIdentities = knownPaths.mapTo(HashSet(), S3WarehouseBlobStore::objectIdentity)
         val knownDirPrefixes = knownIdentities.map(S3WarehouseBlobStore::dirUri)
@@ -59,13 +34,6 @@ internal object OrphanFiles {
             .map { it.uri }
     }
 
-    /**
-     * Whether [uri] is a file this connector (or any DuckLake engine) could have written as data or
-     * delete-file residue — the only files `remove_orphan_files` may delete. The basename must start
-     * with the `ducklake-` prefix AND end with a [managed extension][MANAGED_FILE_EXTENSIONS]. This
-     * covers both delete-file namings (`ducklake-delete-<uuid>.<ext>` here, `ducklake-<uuid>-delete.<ext>`
-     * DuckDB) since both start with the prefix. Anything else returns false and is left untouched.
-     */
     fun isDucklakeManagedResidue(uri: String): Boolean {
         val basename = uri.substringAfterLast('/')
         return basename.startsWith(DUCKLAKE_FILE_PREFIX) &&

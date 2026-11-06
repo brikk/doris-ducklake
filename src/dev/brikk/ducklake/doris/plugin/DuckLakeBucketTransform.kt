@@ -3,23 +3,13 @@ package dev.brikk.ducklake.doris.plugin
 import java.time.LocalDate
 
 /**
- * DuckLake / Iceberg BUCKET partition transform: `(murmur3_32(value) & Int.MAX) % arity`.
- *
- * DuckLake's writer assigns each row to bucket `(murmur3_32(col) & 2147483647) % N`
- * via its registered Iceberg-compatible `murmur3_32` scalar (see
- * `vendor/ducklake/src/storage/ducklake_partition_data.cpp`). To prune a
- * bucket-partitioned table for `col = literal`, the connector must compute the
- * **identical** bucket here, so the hash + per-type encoding must match exactly.
- * Verified against DuckLake's own reference values (`bucket(4)`: alice→1, bob→2,
- * charlie→3) in `DuckLakeBucketTransformTest`.
- *
- * Encodings follow the Iceberg spec: ints/longs/dates as 8-byte little-endian
- * longs, strings as UTF-8. Unsupported literal types return `null` so the caller
- * keeps all files (pruning is best-effort — the BE re-checks every row).
+ * The Iceberg bucket transform DuckLake's writer uses: `(murmur3_32(value) & Int.MAX) % arity`.
+ * Bucket pruning only works if this computes the identical bucket, so hash and per-type encoding
+ * must match the spec exactly (ints/longs/dates as 8-byte little-endian, strings as UTF-8).
+ * Unsupported literal types return null and the caller keeps all files.
  */
 internal object DuckLakeBucketTransform {
 
-    /** The bucket [value] hashes to under `bucket(arity, …)`, or null if the type isn't bucketable here. */
     fun bucket(value: Any?, arity: Int): Int? {
         require(arity > 0) { "bucket arity must be positive, got $arity" }
         val bytes = encode(value) ?: return null
@@ -33,7 +23,7 @@ internal object DuckLakeBucketTransform {
         is Byte -> longLe(value.toLong())
         is LocalDate -> longLe(value.toEpochDay())
         is String -> value.toByteArray(Charsets.UTF_8)
-        else -> null // double/decimal/etc. — not bucket-prunable here; keep all files
+        else -> null
     }
 
     private fun longLe(v: Long): ByteArray {
@@ -44,7 +34,7 @@ internal object DuckLakeBucketTransform {
         return b
     }
 
-    // Murmur3 x86 32-bit, seed 0 — matches Guava Hashing.murmur3_32_fixed() / Iceberg.
+    // Murmur3 x86 32-bit, seed 0 (Guava's murmur3_32_fixed).
     private fun murmur3(data: ByteArray): Int {
         val c1 = 0xcc9e2d51.toInt()
         val c2 = 0x1b873593
@@ -64,7 +54,6 @@ internal object DuckLakeBucketTransform {
             h1 = Integer.rotateLeft(h1, 13)
             h1 = h1 * 5 + 0xe6546b64.toInt()
         }
-        // tail
         val tail = nblocks shl 2
         var k1 = 0
         val rem = len and 3
@@ -77,7 +66,6 @@ internal object DuckLakeBucketTransform {
             k1 *= c2
             h1 = h1 xor k1
         }
-        // finalization
         h1 = h1 xor len
         h1 = h1 xor (h1 ushr 16)
         h1 *= 0x85ebca6b.toInt()

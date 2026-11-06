@@ -3,3 +3,4 @@ build/
 
 # Kotlin daemon session files (build-cache/kotlin-compiler-*.salive)
 .kotlin/
+__pycache__/

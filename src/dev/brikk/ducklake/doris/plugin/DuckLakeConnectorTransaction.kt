@@ -9,23 +9,9 @@ import org.apache.thrift.TException
 import org.apache.thrift.protocol.TBinaryProtocol
 
 /**
- * Connector transaction that turns BE write-result fragments into a DuckLake
- * snapshot commit. Mirrors `MaxComputeConnectorTransaction` (the P4 live template):
- * the engine opens it via `ConnectorMetadata.beginTransaction`, the write plan
- * binds the target table onto it, BE feeds per-file fragments back through
- * [addCommitData], and [commit] writes them to the DuckLake catalog.
- *
- * We decode `TIcebergCommitData` because the connector emits a `TIcebergTableSink`
- * (so BE computes per-field-id column stats from the Parquet footer); these ride
- * the existing `iceberg_commit_datas` report-status channel, routed generically to
- * [addCommitData] by P4's `CommitDataSerializer`. Each fragment maps to a
- * `DucklakeWriteFragment` via [DuckLakeIcebergCommitMapper].
- *
- * **Live** — INSERT is admitted via `supportedWriteOperations()` (P6 write
- * unification: the write-plan-provider's default `{INSERT}`); unpartitioned
- * INSERT is validated end-to-end on a real FE+BE (compose smoke, W2). The commit
- * path is also exercised directly by tests (synthetic fragments → real catalog
- * commit), which is the independent headless oracle for the mapping.
+ * Turns BE write-result fragments into one DuckLake snapshot commit. The engine opens it via
+ * `beginTransaction`, the write plan binds the target, the BE feeds `TIcebergCommitData` fragments
+ * through [addCommitData], and [commit] records them in the catalog.
  */
 internal class DuckLakeConnectorTransaction(
     private val transactionId: Long,
@@ -44,12 +30,6 @@ internal class DuckLakeConnectorTransaction(
     @Volatile
     private var target: Target? = null
 
-    /**
-     * Bind the resolved target table + its data dir (+ the active DuckLake partition
-     * id, if the table is partitioned); called by [DuckLakeWritePlanProvider.planWrite].
-     * The data dir relativizes the BE's absolute file paths at commit time, and the
-     * partition id is stamped on each committed file's fragment.
-     */
     fun bindTarget(tableId: Long, snapshotId: Long, tableDataDir: String? = null, partitionId: Long? = null) {
         target = Target(tableId, snapshotId, tableDataDir, partitionId)
     }
@@ -81,20 +61,15 @@ internal class DuckLakeConnectorTransaction(
             }
         }
         if (fragments.isNotEmpty()) {
-            // Preserve unknown/post-COMMIT exceptions unchanged. Do not retry this
-            // publication or delete its output: the catalog may already own it.
+            // Not retried and the files are never deleted on failure: the catalog may already own them.
             catalog.commitInsert(bound.tableId, fragments)
         }
     }
 
+    /** Drops only in-memory fragments: the commit may have applied even if `commit()` threw. */
     override fun rollback() {
-        // This is not a backend rollback: COMMIT may have applied even if commit()
-        // threw (unknown outcome or acknowledged post-commit finalization failure).
-        // Drop only in-memory fragments; never unlink files or undo registrations.
         synchronized(this) { commitData.clear() }
     }
 
-    override fun close() {
-        // No resources held.
-    }
+    override fun close() = Unit
 }

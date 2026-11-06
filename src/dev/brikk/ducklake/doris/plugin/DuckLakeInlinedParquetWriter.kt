@@ -7,6 +7,7 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
+import java.nio.file.Path
 import java.util.Locale
 
 import dev.brikk.ducklake.catalog.DucklakeColumn
@@ -28,47 +29,24 @@ import org.apache.parquet.schema.Type
 import org.apache.parquet.schema.Types
 
 /**
- * Synthesizes a temporary Parquet file from DuckLake **inlined** rows (rows the
- * catalog keeps in `ducklake_inlined_data_*` tables, not in data files) so the
- * Doris BE — which only reads files — can scan them like any other data file.
+ * Writes DuckLake inlined rows (rows the catalog keeps in `ducklake_inlined_data_*`, not in data
+ * files) to a temp Parquet file the BE can scan like any other data file.
  *
- * **COMPOSE/DEV ONLY — NOT production-viable.** The BE opens this file by path,
- * so it only works when the FE and BE share a filesystem at the same path (a
- * compose bind mount). In a distributed FE/BE cluster the BE can't see a file
- * the FE wrote locally. The real fix is a shared-storage or SPI payload channel
- * — see the friction log entry "No way to hand a small FE-built payload to the
- * BE without shared storage" and `TODO-read.md` (PRODUCTION SOLUTION REQUIRED).
- * The caller (`DuckLakeScanPlanProvider`) gates this to local-fs warehouses.
+ * Dev/compose only: the BE opens the file by path, so FE and BE must share a filesystem. The caller
+ * gates this to local-filesystem warehouses and an explicit opt-in.
  *
- * The file carries `field_id` in its Parquet metadata (`== column_id`, the
- * DuckLake invariant) via the low-level `Types...id(...)` builder, so the BE's
- * field-id column matching resolves it exactly like a real DuckLake file
- * (and doesn't demand a `name_mapping`, which the 4.1.0 BE requires for an
- * id-less file). Written with the parquet example `SimpleGroup` writer, which
- * is FE-supplied at runtime (`output/fe/lib`) and avoids Hadoop's
- * `UserGroupInformation` (broken on JDK 25) by using [LocalOutputFile].
- *
- * **Stage 1 scope: SCALAR columns only, local filesystem.** Nested
- * (list/struct/map) inlined columns are out of scope (the caller keeps the
- * guard for them). Value conversion mirrors trino's
- * `DucklakeInlinedValueConverter` scalar cases: jOOQ returns either a typed
- * value or a DuckDB text form depending on backend/type, so each converter
- * accepts both.
+ * Each column gets `field_id == column_id` so the BE's field-id matching resolves it like a real
+ * DuckLake file. Scalar columns only; values arrive from jOOQ either typed or as DuckDB text
+ * depending on backend and type, so every converter accepts both.
  */
 internal object DuckLakeInlinedParquetWriter {
 
     private const val MICROS_PER_SECOND = 1_000_000L
     private const val NANOS_PER_MICRO = 1_000L
 
-    /**
-     * Write [rows] (as returned by `DucklakeCatalog.readInlinedData`, in
-     * [columns] order — already snapshot-filtered by the catalog) to the local
-     * filesystem [target] as Parquet with per-column `field_id == column_id`.
-     * [columns] must be top-level scalar columns. Returns the row count.
-     */
-    fun write(target: java.nio.file.Path, columns: List<DucklakeColumn>, rows: List<List<Any?>>): Long {
-        // Validate before opening/overwriting a shared scratch file or converting
-        // an infinite timestamp to epoch micros (where Long arithmetic would wrap).
+    /** [rows] in [columns] order, as returned by `DucklakeCatalog.readInlinedData`. Returns the row count. */
+    fun write(target: Path, columns: List<DucklakeColumn>, rows: List<List<Any?>>): Long {
+        // Before the scratch file is overwritten, and before an infinite timestamp wraps Long arithmetic.
         for (row in rows) {
             columns.forEachIndexed { index, column ->
                 validateTemporalValue(column, row[index])
@@ -92,8 +70,7 @@ internal object DuckLakeInlinedParquetWriter {
     private fun validateTemporalValue(column: DucklakeColumn, value: Any?) {
         if (value == null) return
         DuckLakeTemporalDomain.requireRepresentable(column.columnType, value, column.columnName)
-        // Check the actual encoded instant as well: timezone normalization can
-        // cross the year boundary even when the source's printed year is valid.
+        // Zone normalization can cross a year boundary even when the printed year is valid.
         val encoded = when (column.columnType.lowercase(Locale.ROOT)) {
             "date" -> toEpochDay(value)
             "timestamp", "timestamp_s", "timestamp_ms", "timestamp_ns" -> toEpochMicros(value)
@@ -104,7 +81,7 @@ internal object DuckLakeInlinedParquetWriter {
     }
 
     private fun parquetWriter(
-        target: java.nio.file.Path,
+        target: Path,
         schema: MessageType,
         conf: Configuration,
     ): ParquetWriter<Group> =
@@ -115,8 +92,6 @@ internal object DuckLakeInlinedParquetWriter {
             .withWriteMode(ParquetFileWriter.Mode.OVERWRITE)
             .build()
 
-    // ---- parquet MessageType with field_id == column_id ----
-
     private fun buildMessageType(columns: List<DucklakeColumn>): MessageType {
         val fields = columns.map { col -> parquetField(col) }
         return MessageType("ducklake_inlined", fields)
@@ -125,7 +100,6 @@ internal object DuckLakeInlinedParquetWriter {
     private fun parquetField(col: DucklakeColumn): Type {
         val t = col.columnType.trim().lowercase(Locale.ROOT)
         val id = col.columnId.toInt()
-        // All inlined columns are OPTIONAL (DuckLake stores nulls inline).
         DECIMAL.matchEntire(t)?.let { m ->
             val precision = m.groupValues[1].toInt()
             val scale = m.groupValues[2].toInt()
@@ -141,11 +115,8 @@ internal object DuckLakeInlinedParquetWriter {
             "float64" -> Types.optional(PrimitiveTypeName.DOUBLE)
             "date" -> Types.optional(PrimitiveTypeName.INT32)
                 .`as`(LogicalTypeAnnotation.dateType())
-            // DuckLake temporals are micros (ns clamps to micros on read).
-            // timestamptz is written NAIVE (isAdjustedToUtc=false) to match the
-            // DATETIMEV2 read mapping: the stored micros are already UTC, and the
-            // BE reads DateTimeV2<=>DateTimeV2 (an isAdjustedToUtc file would trip
-            // the "DateTimeV2 => TimeStampTz" BE gap). See DuckLakeTypeMapping.
+            // timestamptz is written zone-naive to match the DATETIMEV2 read mapping: the micros
+            // are already UTC, and an isAdjustedToUtc file would hit the BE's DateTimeV2→TimeStampTz gap.
             "timestamp", "timestamp_s", "timestamp_ms", "timestamp_ns", "timestamptz" ->
                 Types.optional(PrimitiveTypeName.INT64)
                     .`as`(LogicalTypeAnnotation.timestampType(false, LogicalTypeAnnotation.TimeUnit.MICROS))
@@ -159,11 +130,9 @@ internal object DuckLakeInlinedParquetWriter {
         return builder.id(id).named(col.columnName)
     }
 
-    // ---- value append (jOOQ value | DuckDB text form) ----
-
     private fun appendValue(group: Group, index: Int, ducklakeType: String, value: Any?) {
         if (value == null) {
-            return // absent = null for an OPTIONAL column
+            return
         }
         val t = ducklakeType.trim().lowercase(Locale.ROOT)
         DECIMAL.matchEntire(t)?.let { m ->
@@ -240,8 +209,6 @@ internal object DuckLakeInlinedParquetWriter {
         return decimal.unscaledValue().toByteArray()
     }
 
-    // ---- helpers ----
-
     private fun instantToMicros(instant: Instant): Long =
         instant.epochSecond * MICROS_PER_SECOND + instant.nano / NANOS_PER_MICRO
 
@@ -269,11 +236,7 @@ internal object DuckLakeInlinedParquetWriter {
         else -> value.toString()
     }
 
-    /**
-     * Decode DuckDB's `Blob::ToString` text form: printable ASCII verbatim
-     * (except escapes), everything else `\xNN`. Mirrors trino's
-     * `DucklakeInlinedValueConverter.decodeBlobText`.
-     */
+    /** DuckDB's `Blob::ToString` form: printable ASCII verbatim, everything else `\xNN`. */
     private fun decodeBlobText(text: String): ByteArray {
         val out = ArrayList<Byte>(text.length)
         var i = 0
@@ -289,7 +252,6 @@ internal object DuckLakeInlinedParquetWriter {
         return out.toByteArray()
     }
 
-    /** True when a `\xNN` escape starts at [i]. */
     private fun isHexEscapeAt(text: String, i: Int): Boolean {
         if (i + 3 >= text.length) {
             return false

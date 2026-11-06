@@ -15,56 +15,27 @@ import org.apache.thrift.TSerializer
 import org.apache.thrift.protocol.TBinaryProtocol
 
 /**
- * Builds the native-reader **schema dictionary** (`current_schema_id` +
- * `history_schema_info`) that makes the Doris BE match file↔table columns
- * **by field id** across schema evolution (renamed / reordered columns),
- * instead of falling back to NAME matching — which silently reads NULL for a
- * renamed column. Faithful DuckLake analogue of the iceberg connector's
- * `IcebergSchemaUtils` (`fe-connector-iceberg`); see the friction log and
- * `TODO-read.md` (`GAP_NAME_MAPPING`).
+ * The schema dictionary (`current_schema_id` + `history_schema_info`) that makes the BE match file
+ * and table columns by field id instead of by name. Name matching silently reads NULL for a renamed
+ * column; DuckLake writes `field_id == column_id` into every file, so id matching just works.
  *
- * **Why this works for DuckLake unchanged from iceberg:** DuckLake writes
- * `field_id` into its Parquet file metadata (verified: `parquet_schema(...)`
- * shows `field_id = column_id`), and DuckLake's `column_id` IS the stable
- * field id. So the BE's `iceberg_reader.cpp` field-id path
- * (`by_parquet_field_id`) matches the file's embedded ids to this dictionary's
- * ids by equality. Like iceberg, we emit exactly ONE schema entry
- * (`current_schema_id = -1`) keyed off the requested columns.
+ * Files registered through `ducklake_add_data_files` may lack embedded ids and use different column
+ * names; their `ducklake_name_mapping` rows (`target_field_id → source_name`) are carried as each
+ * field's `name_mapping` so the BE can fall back to binding by name for those files.
  *
- * **`name_mapping` (the `add_files` / legacy-file fallback):** files
- * registered via `ducklake_add_data_files` (or otherwise written with
- * different column names / no embedded ids) carry a per-file
- * `ducklake_data_file.mapping_id` → `ducklake_name_mapping` row that maps
- * `target_field_id → source_name`. Carrying those alternate names on each
- * [TField.name_mapping] lets the BE's `by_parquet_field_id_with_name_mapping`
- * fallback bind a file column by name when it has no embedded field id.
- *
- * This is the scalar-only builder used by [encodeReadSchemaDictionary]. Never
- * send its partial result alone for a scan requesting nested columns: the API26
- * BE treats a supplied dictionary as the complete field set and fills omitted
- * roots with NULL, not a per-column name fallback. The shared wrapper appends
- * complete parent-aware native STRUCT/LIST/MAP trees, or refuses unqualified
- * nested history/mappings. A container field without its full subtree is also
- * invalid and can crash the native reader; do not fabricate partial trees.
+ * Scalar columns only. The BE treats a supplied dictionary as the complete field set and fills
+ * omitted roots with NULL, and a container field without its full subtree can crash the native
+ * reader, so [encodeReadSchemaDictionary] appends complete nested trees on top of this.
  */
 internal object DuckLakeSchemaDictionary {
 
-    // -1 == "latest"/current schema sentinel, mirroring iceberg's single-entry dict.
     private const val CURRENT_SCHEMA_ID: Long = -1L
 
-    /**
-     * Encode the base64 schema dictionary for the requested [columns], carrying
-     * the union of the [nameMaps]' alternate source-names per field id. The
-     * dictionary's top-level [TField] names are the lowercased Doris slot names
-     * (BE's `StructNode` looks children up by that lowercase name). Returns
-     * `null` when there are no columns to describe (count-only scans etc.).
-     */
+    /** Null when there are no scalar columns to describe (count-only scans). */
     fun encode(
         columns: List<DuckLakeColumnHandle>,
         nameMaps: Collection<Map<Long, String>>,
     ): String? {
-        // Scalar columns only — see class doc (nested TField without a subfield
-        // tree SIGABRTs the BE's by_parquet_field_id recursion).
         val scalarColumns = columns.filter { isScalar(it.columnType.typeName) }
         if (scalarColumns.isEmpty()) {
             return null
@@ -79,21 +50,14 @@ internal object DuckLakeSchemaDictionary {
             .setSchemaId(CURRENT_SCHEMA_ID)
             .setRootField(root)
         val serializer = TSerializer(TBinaryProtocol.Factory())
-        // Carry the dict on a throwaway TFileScanRangeParams (the same struct
-        // the BE reads current_schema_id / history_schema_info off), mirroring
-        // IcebergSchemaUtils' transport shape.
+        // Same carrier struct the BE reads the fields off, as IcebergSchemaUtils does.
         val carrier = TFileScanRangeParams()
             .setCurrentSchemaId(CURRENT_SCHEMA_ID)
         carrier.addToHistorySchemaInfo(schema)
         return Base64.getEncoder().encodeToString(serializer.serialize(carrier))
     }
 
-    /**
-     * Decode [encoded] and copy `current_schema_id` + `history_schema_info`
-     * onto the real scan [params]. Fails loud on a decode error — the prop is
-     * produced by [encode], so a failure is a real bug, and silently dropping
-     * it would re-introduce silent wrong-rows on renamed-column reads.
-     */
+    /** A decode failure propagates: dropping the dictionary would bring back wrong rows on renamed columns. */
     fun apply(params: TFileScanRangeParams, encoded: String?) {
         if (encoded.isNullOrEmpty()) {
             return
@@ -109,22 +73,13 @@ internal object DuckLakeSchemaDictionary {
     }
 
     /**
-     * Per-field-id `name_mapping` alternate source-names for the id-less-file
-     * fallback, **conflict-filtered**. Each [nameMaps] entry is one file's
-     * `mapping_id` row: `target_field_id → source_name`. Because the dictionary
-     * is table-level (one for all files in the scan) while each file carries
-     * its own mapping, a physical name that maps to DIFFERENT field ids across
-     * files (e.g. `col2` → field-id 2 in old files, → field-id 4 in a re-added
-     * column) is AMBIGUOUS: attaching it to the newer field id would make the
-     * BE bind an old file's physical `col2` onto the new column (silent wrong
-     * rows — the `add_files.test` DROP+re-ADD case). Such a name is dropped
-     * from the alternates entirely; the field then binds only by embedded
-     * field id or by its exact table name, which is correct (old rows read
-     * NULL for the new column). A name that maps to exactly ONE field id
-     * across all files is safe and kept.
+     * The dictionary is table-level while each file carries its own mapping, so a source name that
+     * maps to different field ids across files (a column dropped and re-added under the same name)
+     * is ambiguous: attached to the new id it would bind an old file's column onto the new one.
+     * Such names are dropped entirely; the field then binds by embedded id or exact table name,
+     * and old rows correctly read NULL for the new column.
      */
     private fun safeAlternateNames(nameMaps: Collection<Map<Long, String>>): Map<Long, List<String>> {
-        // source-name (lowercased) -> the set of distinct field ids it maps to.
         val fieldIdsByName = HashMap<String, MutableSet<Long>>()
         for (map in nameMaps) {
             for ((fieldId, sourceName) in map) {
@@ -148,14 +103,7 @@ internal object DuckLakeSchemaDictionary {
 
     private fun fieldPtr(field: TField): TFieldPtr = TFieldPtr().setFieldPtr(field)
 
-    /**
-     * A scalar top-level [TField]: field id (DuckLake `column_id`), the
-     * lowercased Doris slot name, and any `name_mapping` alternate names for
-     * the id-less-file fallback. `type.type` is a nested-vs-scalar
-     * discriminator only — the BE never inspects the specific scalar tag on
-     * the field-id path — so a STRING placeholder suffices (only scalars reach
-     * here; see [encode]).
-     */
+    /** The BE only uses `type.type` as a nested-vs-scalar discriminator on the field-id path, so STRING suffices. */
     private fun buildField(col: DuckLakeColumnHandle, alternateNames: List<String>?): TField {
         val field = TField()
             .setId(col.columnId.toInt())

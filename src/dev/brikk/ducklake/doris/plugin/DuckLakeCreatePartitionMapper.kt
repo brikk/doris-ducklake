@@ -8,47 +8,22 @@ import org.apache.doris.connector.spi.ddl.ConnectorPartitionField
 import org.apache.doris.connector.spi.ddl.ConnectorPartitionSpec
 
 /**
- * Maps a Doris `CREATE TABLE`'s partition / bucket clauses onto DuckLake
- * [PartitionFieldSpec]s — the write-side inverse of [DuckLakeIcebergPartitionSpec]
- * (which is read/sink-side: DuckLake → Iceberg). The catalog assigns each spec a
- * `partition_key_index` by list order, so the returned order is meaningful.
+ * Maps a `CREATE TABLE`'s partition and bucket clauses to DuckLake [PartitionFieldSpec]s. The catalog
+ * assigns `partition_key_index` by list order, so the returned order matters. DuckLake only has the
+ * Iceberg transform family, so anything else is rejected rather than dropped.
  *
- * Conservative-throw, like [DuckLakeCreateTableMapper]: DuckLake only has the
- * Iceberg transform family (identity / year / month / day / hour / bucket), so
- * anything else is rejected rather than silently dropped or mis-mapped.
+ * [ConnectorPartitionSpec] is mapped by each field's transform regardless of its `style`: Doris's
+ * grammar forces an external partitioned table to be written `PARTITION BY LIST (transform(col)) ()`,
+ * so the real transform lives in the fields and the style keyword carries nothing.
  *
- * **Two distinct SPI inputs, and why they're treated differently:**
- * - [ConnectorPartitionSpec] carries the Iceberg-style partition clause. The FE
- *   ([CreateTableInfoToConnectorRequestConverter]) lowercases the transform function
- *   name, so `bucket(16, c)` arrives as `transform="bucket", transformArgs=[16]`,
- *   `year(d)` as `"year"`, a plain column as `"identity"`. This is the path that
- *   produces a *real* DuckLake bucket — DuckLake's bucket is Iceberg murmur3, proven
- *   BE-equivalent by the W2c live smoke.
- *   We map by each field's transform **regardless of [ConnectorPartitionSpec.style]**:
- *   Doris's grammar forces an external/iceberg partitioned CREATE TABLE to be written
- *   `PARTITION BY [LIST|RANGE] (transform(col), …) ()`, so these specs arrive tagged
- *   `Style.LIST` (or `RANGE`) with the real transform living in each field — not
- *   `Style.TRANSFORM` (confirmed live 2026-06-10; see `ducklake-doris-friction.md`).
- *   The converter drops the (empty) value lists, so the style keyword carries no extra
- *   meaning here; per-field validation in [toFieldSpec] is the conservative guard.
- * - [ConnectorBucketSpec] carries Doris's `DISTRIBUTED BY` clause. The FE only ever
- *   stamps its algorithm `"doris_default"` (CRC32) or `"doris_random"` — **neither is
- *   murmur3**. Treating Doris hash-distribution as DuckLake bucketing would silently
- *   bucket files by the wrong hash, so we reject any non-murmur3 algorithm and point
- *   the user at `PARTITIONED BY (bucket(N, col))` instead. (We still accept an
- *   explicit murmur3 / iceberg_bucket algorithm should a future FE pass one.)
+ * [ConnectorBucketSpec] (`DISTRIBUTED BY`) is rejected unless its algorithm is murmur3: Doris's
+ * `doris_default` is CRC32, and treating it as DuckLake bucketing would bucket files by the wrong hash.
  */
 internal object DuckLakeCreatePartitionMapper {
 
-    /** Bucket algorithms that ARE DuckLake's (Iceberg murmur3) bucketing. */
     private val MURMUR3_BUCKET_ALGORITHMS = setOf("murmur3", "iceberg_bucket")
 
-    /**
-     * The combined partition fields for a CREATE TABLE, or `null` if the table is
-     * unpartitioned (so the caller passes `null` straight to `catalog.createTable`).
-     * `PARTITIONED BY` fields come first (in clause order), then any accepted
-     * `DISTRIBUTED BY` bucket columns.
-     */
+    /** `PARTITION BY` fields first, then accepted `DISTRIBUTED BY` columns; null for an unpartitioned table. */
     fun toPartitionFields(
         partitionSpec: ConnectorPartitionSpec?,
         bucketSpec: ConnectorBucketSpec?,
@@ -63,9 +38,6 @@ internal object DuckLakeCreatePartitionMapper {
         return fields.ifEmpty { null }
     }
 
-    // Map by each field's transform regardless of spec.style — see the class KDoc:
-    // live Doris tags iceberg-style partitioning as LIST/RANGE, with the transform in
-    // each field. toFieldSpec rejects any per-field transform DuckLake can't represent.
     private fun fromPartitionSpec(spec: ConnectorPartitionSpec): List<PartitionFieldSpec> =
         spec.fields.map { toFieldSpec(it) }
 

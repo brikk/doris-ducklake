@@ -3,21 +3,12 @@ package dev.brikk.ducklake.doris.plugin
 import org.apache.doris.connector.spi.ConnectorType
 
 /**
- * Maps a Doris [ConnectorType] (a CREATE TABLE column type) to the DuckLake catalog
- * type string stored in `ducklake_column.column_type`. The write-side inverse of
- * [DuckLakeTypeMapping] (which maps DuckLake → Doris for reads); the two round-trip on
- * the non-degraded core (`toDucklakeType(fromDucklakeType(t)) == t`).
- *
- * Conservative by design: only scalar types with an unambiguous DuckLake form map.
- * Everything else — nested array/map/struct, HLL / BITMAP / QUANTILE_STATE / AGG_STATE,
- * JSON / VARIANT, IPV4 / IPV6, … — **throws**. A wrong type silently corrupts the table
- * definition, so we never guess (same philosophy as [DuckLakeIcebergSchema]); unsupported
- * types are a clean DDL error, not a mis-typed column.
+ * Doris CREATE TABLE column type → DuckLake `column_type` string; the inverse of [DuckLakeTypeMapping]
+ * on the non-degraded core. Only unambiguous scalars map; nested, HLL/BITMAP/AGG_STATE, JSON/VARIANT
+ * and IPV4/IPV6 throw, because a guessed type would silently corrupt the table definition.
  */
 internal object DuckLakeCreateTableMapper {
 
-    // The 1:1 scalar mappings (Doris type name → DuckLake type). Parametric types
-    // (decimal, datetime) are handled separately since they read precision/scale.
     private val SCALAR = mapOf(
         "BOOLEAN" to "boolean",
         "TINYINT" to "int8",
@@ -38,9 +29,7 @@ internal object DuckLakeCreateTableMapper {
         SCALAR[name]?.let { return it }
         return when (name) {
             "DECIMAL", "DECIMALV2", "DECIMALV3" -> "decimal(${type.precision},${type.scale})"
-            // DuckLakeTypeMapping carries the DATETIMEV2 fractional-second resolution in the
-            // PRECISION slot (`of("DATETIMEV2", micros=6, 0)`), so we read precision, not scale
-            // (s=0, ms=3, micros=6 native, ns=9). This keeps read/write symmetric.
+            // DuckLakeTypeMapping carries the fractional-second resolution in the precision slot.
             "DATETIME", "DATETIMEV2" -> datetimeType(type.precision)
             else -> throw IllegalArgumentException(
                 "unsupported Doris type for DuckLake CREATE TABLE v1: ${type.typeName} ($name)",
@@ -52,6 +41,6 @@ internal object DuckLakeCreateTableMapper {
         0 -> "timestamp_s"
         3 -> "timestamp_ms"
         9 -> "timestamp_ns"
-        else -> "timestamp" // micros (precision 6) — DuckLake's native resolution
+        else -> "timestamp"
     }
 }

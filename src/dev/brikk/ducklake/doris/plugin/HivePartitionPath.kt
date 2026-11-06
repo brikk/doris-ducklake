@@ -4,25 +4,14 @@ import java.io.ByteArrayOutputStream
 import java.util.Locale
 
 /**
- * Parses hive-style `key=value/` partition segments out of a data-file path,
- * for the `add_files(..., hive_partitioning => true)` layout where partition
- * columns live in the PATH and are physically absent from the parquet body
- * (unlike native DuckLake writes, which carry them in the body).
- *
- * Mirrors the trino side's `DucklakeSplitManager.parseHivePartitionsFromPath` /
- * `hiveUrlDecode` / `__HIVE_DEFAULT_PARTITION__` handling byte-for-byte so both
- * engines resolve the same value from the same path.
+ * Parses `key=value/` segments out of a data-file path, for the `add_files(..., hive_partitioning => true)`
+ * layout where partition columns live in the path and are absent from the parquet body.
  */
 internal object HivePartitionPath {
 
-    /** DuckDB/hive sentinel for a NULL partition value. */
     const val HIVE_DEFAULT_PARTITION: String = "__HIVE_DEFAULT_PARTITION__"
 
-    /**
-     * `key`(lowercased) `-> raw value` for every `key=value` directory segment
-     * of [path]. The basename is stripped first so a stray `=` in the filename
-     * is never split on. Values are returned raw (URL-decode with [urlDecode]).
-     */
+    /** Lowercased key → raw value. The basename is skipped so a stray `=` in a filename is never split. */
     fun parse(path: String): Map<String, String> {
         val normalized = path.replace('\\', '/')
         val lastSlash = normalized.lastIndexOf('/')
@@ -37,12 +26,7 @@ internal object HivePartitionPath {
         return out
     }
 
-    /**
-     * Hive/DuckDB URL-decode: `%XX` byte escapes decode as UTF-8 (space is
-     * `%20`, `=` is `%3D`, etc.). A literal `+` is left as-is (hive does not use
-     * `+` for space, unlike `java.net.URLDecoder`); malformed escapes pass
-     * through verbatim.
-     */
+    /** `%XX` escapes decode as UTF-8; unlike `java.net.URLDecoder`, `+` stays literal; malformed escapes pass through. */
     fun urlDecode(value: String): String {
         if (value.indexOf('%') < 0) {
             return value

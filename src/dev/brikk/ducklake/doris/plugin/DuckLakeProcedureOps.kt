@@ -20,39 +20,24 @@ import org.apache.doris.connector.spi.procedure.ProcedureExecutionMode
 import org.apache.doris.connector.spi.pushdown.ConnectorPredicate
 
 /**
- * Table-procedure surface of the DuckLake connector — the procedure-side analogue of
- * [DuckLakeScanPlanProvider] / [DuckLakeWritePlanProvider], returned from
- * [DuckLakeConnector.getProcedureOps]. Exposes the maintenance procedures
- * `ALTER TABLE <t> EXECUTE <proc>(...)`:
- *  - `expire_snapshots` — metadata-only: end-snapshots old versions and SCHEDULES their now-dead
- *    files for later deletion (committed expiry followed by resumable cleanup pages; no storage I/O).
- *  - `cleanup_old_files` — the second phase: physically deletes the blobs `expire_snapshots`
- *    scheduled, once older than a grace period, via the connector's own S3 client
- *    ([WarehouseBlobStore]); then drops their schedule rows.
- *  - `remove_orphan_files` — deletes DuckLake-managed residue (`ducklake-`-prefixed `.parquet`/
- *    `.puffin`/`.db` objects; see [OrphanFiles]) under the warehouse that NO catalog row
- *    references (residue of aborted commits) and are older than a grace period. Catalog-wide
- *    (models upstream `ducklake_delete_orphaned_files`, which sweeps `.parquet`/`.puffin` as of
- *    DuckLake 1.5.5): scans the requested table/schema/catalog scope and diffs against
- *    `listAllReferencedFiles` (including dropped-table and scheduled-file ownership).
+ * Maintenance procedures exposed as `ALTER TABLE <t> EXECUTE <proc>(...)`:
+ *  - `expire_snapshots`: metadata only. Ends old snapshots and schedules their now-dead files for
+ *    later deletion.
+ *  - `cleanup_old_files`: physically deletes the blobs `expire_snapshots` scheduled, once older than
+ *    a grace period, then drops their schedule rows.
+ *  - `remove_orphan_files`: deletes DuckLake-managed residue (`ducklake-`-prefixed `.parquet` /
+ *    `.puffin` / `.db`, see [OrphanFiles]) under the warehouse that no catalog row references and
+ *    that is older than a grace period.
  *
- * ## Why one ops class per connector (not one per procedure)
- * Doris routes every `ALTER TABLE EXECUTE` for a connector through this one
- * [ConnectorProcedureOps] and dispatches on [procedureName] inside [execute] (unlike Trino's
- * one-`Provider<Procedure>`-per-procedure model). So the argument contract, validation, and
- * result shaping all live here rather than in a per-procedure class.
+ * Doris routes every `ALTER TABLE EXECUTE` for a connector through this one class and dispatches on
+ * the procedure name, so argument parsing, validation and result shaping all live here.
  *
- * ## Catalog-wide vs. table-scoped (the important semantic mismatch — read this)
- * DuckLake snapshots are **catalog-wide** versions, not per-table ones (Trino models the same
- * catalog with a catalog-scoped `system.expire_snapshots`, no table argument). But Doris only
- * offers the *table-scoped* `ALTER TABLE <t> EXECUTE proc(...)` syntax and hands us a
- * [ConnectorTableHandle]. We resolve this honestly rather than faking per-table expiry (which
- * does not exist in DuckLake and would be silently wrong): the procedure runs **catalog-wide**,
- * ignoring which table the operator named for *selection* purposes, and the returned result row
- * says so explicitly (`scope = "catalog-wide (ignores the named table)"`) so nobody is surprised
- * that `ALTER TABLE a EXECUTE expire_snapshots` also affected snapshots involving table `b`. The
- * table handle may be null (in case Doris ever allows a catalog-scoped invocation); we work either
- * way.
+ * ## Catalog-wide vs. table-scoped
+ * DuckLake snapshots are catalog-wide versions, not per-table ones, but Doris only offers the
+ * table-scoped `ALTER TABLE <t> EXECUTE` syntax. Faking per-table expiry would be silently wrong, so
+ * `expire_snapshots` runs catalog-wide, ignores which table was named, and says so in its result row
+ * (`scope = "catalog-wide (ignores the named table)"`). `remove_orphan_files` is the one procedure
+ * where the named table matters: its `scope` argument widens outward from that table.
  */
 internal class DuckLakeProcedureOps(
     private val catalog: DucklakeCatalog,
@@ -60,11 +45,9 @@ internal class DuckLakeProcedureOps(
     blobStoreProvider: (() -> WarehouseBlobStore)? = null,
 ) : ConnectorProcedureOps {
 
-    // Retention floor shared by expire_snapshots (protect recent time-travel snapshots) and
-    // cleanup_old_files (grace period protecting in-flight, possibly cross-engine, readers of a
-    // scheduled file). From catalog prop `maintenance.min-retention` (mirroring Trino's
-    // `ducklake.maintenance.min-retention`); absent/blank → conservative 7d. Parsed once at
-    // construction so a misconfigured catalog fails fast, not per call.
+    // Floor for every procedure's retention_threshold: protects recent time-travel snapshots and
+    // files an in-flight (possibly cross-engine) reader or writer may still touch. Parsed at
+    // construction so a misconfigured catalog fails fast.
     private val minRetentionMillis: Long =
         parseDuration(
             properties[DuckLakeConnectorProperties.MAINTENANCE_MIN_RETENTION]
@@ -73,23 +56,17 @@ internal class DuckLakeProcedureOps(
             DuckLakeConnectorProperties.MAINTENANCE_MIN_RETENTION,
         )
 
-    // The warehouse root that relative scheduled-file paths resolve against (the catalog data_path,
-    // NOT a per-table dir — per the DucklakeScheduledFile contract). Falls back to the configured
-    // storage.warehouse property. Lazy: only cleanup_old_files needs it, so expire_snapshots never
-    // calls getDataPath() (keeps read-only / expire-only paths from touching it).
+    // Scheduled-file paths are relative to the catalog data_path, not a table dir.
     private val warehouseRoot: String? by lazy {
         catalog.getDataPath() ?: properties[DuckLakeConnectorProperties.STORAGE_WAREHOUSE]
     }
 
-    // Lazily built so a read-only catalog / expire_snapshots never constructs an S3 client, and a
-    // missing-credential failure surfaces only when cleanup_old_files actually runs. Tests inject a
-    // provider returning a fake [WarehouseBlobStore]; prod defaults to the S3/MinIO client.
+    // Lazy so expire_snapshots never builds an S3 client and a missing credential only fails the
+    // procedures that need storage.
     private val blobStore: WarehouseBlobStore by lazy {
         (blobStoreProvider ?: { S3WarehouseBlobStore.fromProperties(properties) })()
     }
 
-    // Resolves table / schema / root data paths for remove_orphan_files scope tiers. Lazy — only
-    // that procedure needs it.
     private val pathResolver: DuckLakePathResolver by lazy {
         DuckLakePathResolver(catalog, properties[DuckLakeConnectorProperties.STORAGE_WAREHOUSE])
     }
@@ -97,10 +74,7 @@ internal class DuckLakeProcedureOps(
     override fun getSupportedProcedures(): List<String> =
         listOf(EXPIRE_SNAPSHOTS, CLEANUP_OLD_FILES, REMOVE_ORPHAN_FILES)
 
-    /**
-     * Both procedures are metadata + FE-side storage ops (never a distributed data rewrite), so they
-     * run as a single synchronous in-FE call. `planRewrite` is left as the interface default (throws).
-     */
+    /** All three are metadata + FE-side storage ops, never a distributed rewrite. */
     override fun getExecutionMode(procedureName: String): ProcedureExecutionMode =
         ProcedureExecutionMode.SINGLE_CALL
 
@@ -118,8 +92,7 @@ internal class DuckLakeProcedureOps(
                 "DuckLake connector does not support procedure '$procedureName'; " +
                     "supported: ${getSupportedProcedures()}",
             )
-        // A WHERE / PARTITION clause is meaningless for these GC procedures; reject it loud rather
-        // than silently ignoring an operator's intent to scope the operation.
+        // Rejected rather than ignored: an operator who wrote WHERE expects it to scope something.
         if (whereCondition != null) {
             throw DorisConnectorException("$proc does not accept a WHERE condition")
         }
@@ -135,12 +108,9 @@ internal class DuckLakeProcedureOps(
     }
 
     /**
-     * Core body of `expire_snapshots`. Selection is mutually exclusive: an explicit
-     * `snapshot_ids` list (passed to the catalog as the `versions` set, which intersects it with
-     * the non-latest snapshots there), OR everything older than `retention_threshold` (floored by
-     * [minRetentionMillis]). The latest snapshot is NEVER expirable (the catalog enforces that).
-     * `dry_run = true` reports what WOULD be expired and calls only the read-only
-     * [DucklakeCatalog.listExpirableSnapshots] — never [DucklakeCatalog.expireSnapshots].
+     * Selection is either an explicit `snapshot_ids` list or everything older than
+     * `retention_threshold` (floored by [minRetentionMillis]). The catalog never expires the latest
+     * snapshot. A dry run only calls the read-only [DucklakeCatalog.listExpirableSnapshots].
      */
     @Suppress("ThrowsCount")
     private fun expireSnapshots(properties: Map<String, String>): ConnectorProcedureResult {
@@ -191,11 +161,7 @@ internal class DuckLakeProcedureOps(
         )
     }
 
-    /**
-     * Build the one-row result table. `scheduled_file_count` is reported as the string `"n/a"`
-     * for a dry run (nothing was scheduled), otherwise the count the catalog scheduled for later
-     * physical deletion (reclaimed by a separate age-gated cleanup, not by this call).
-     */
+    /** `scheduled_file_count` is `"n/a"` on a dry run, since nothing was scheduled. */
     private fun result(
         dryRun: Boolean,
         expiredCount: Int,
@@ -213,16 +179,8 @@ internal class DuckLakeProcedureOps(
     }
 
     /**
-     * Core body of `cleanup_old_files` — the physical-deletion phase that pairs with
-     * `expire_snapshots`'s scheduling phase. Deletes the warehouse blobs in
-     * `ducklake_files_scheduled_for_deletion` older than the grace period (`retention_threshold`,
-     * floored by [minRetentionMillis] to protect in-flight, possibly cross-engine, readers), then
-     * drops the schedule rows of the files actually deleted (a file that fails to delete keeps its
-     * row for a later retry). `dry_run = true` reports what WOULD be deleted and touches no storage.
-     *
-     * Delete is best-effort per file (see [WarehouseBlobStore.delete]); we only
-     * [DucklakeCatalog.removeScheduledFileRows] for the successes, so a partial run makes real
-     * progress and is safely resumable.
+     * Deletes are best-effort per file and only the successes have their schedule rows removed, so a
+     * partial run makes progress and is safely resumable.
      */
     @Suppress("ThrowsCount")
     private fun cleanupOldFiles(properties: Map<String, String>): ConnectorProcedureResult {
@@ -243,8 +201,7 @@ internal class DuckLakeProcedureOps(
             return fileGcResult(dryRun, retention, deleted = 0, wouldDelete = scheduled.size, failed = 0)
         }
 
-        // Map each resolved absolute URI back to its data_file_id so we can drop exactly the rows we
-        // deleted. Multiple ids can't share a URI in practice, but last-writer-wins is fine here.
+        // URI → data_file_id so exactly the deleted rows are dropped.
         val idByUri = LinkedHashMap<String, Long>(scheduled.size)
         for (f in scheduled) {
             idByUri[resolveScheduledUri(f.path, f.pathIsRelative)] = f.dataFileId
@@ -265,27 +222,14 @@ internal class DuckLakeProcedureOps(
     }
 
     /**
-     * Core body of `remove_orphan_files` — deletes DuckLake residue under the in-scope directory that
-     * NO catalog row references (aborted-commit / failed-CREATE leftovers) and is older than the
-     * grace period (`retention_threshold`, floored by [minRetentionMillis] to protect files an
-     * in-flight, possibly cross-engine, writer produced but hasn't committed). Storage-only: touches
-     * no catalog state (orphans have no rows). `dry_run = true` reports without deleting.
+     * `scope` widens from the named table: `table` (default) scans its data dir, `schema` (alias
+     * `database`) scans the schema dir, `catalog` scans the warehouse root. Scanning the directory
+     * rather than per-table is what reaches failed-CREATE residue that has no catalog row.
      *
-     * **Tiered scope from the named table's viewpoint** (Doris routes procedures only through
-     * `ALTER TABLE <t> EXECUTE`, which always names a table — there is no ALTER CATALOG/DATABASE
-     * EXECUTE). The `scope` arg widens outward from that table:
-     *  - `table` (default) → just the named table's data dir.
-     *  - `schema` (alias `database`) → every table in the named table's schema; scan the schema dir.
-     *  - `catalog` → every table in every schema; scan the warehouse root.
-     * This delivers the same semantics as the Trino plugin's optional-arg tiers (dev-docs
-     * DESIGN-maintenance §8.2/§8.3), adapted to Doris's grammar.
-     *
-     * The known set comes from [DucklakeCatalog.listAllReferencedFiles], including files owned by
-     * dropped-but-unexpired tables. Table files resolve against their owning table path; scheduled
-     * files resolve against the catalog root (never a table path). This prevents time-travel data
-     * loss and premature deletion of scheduled files. Scanning the schema/root DIRECTORY (not
-     * per-table) still reaches failed-CREATE residue with no catalog row to name. Only
-     * `ducklake-`-prefixed managed residue is ever deleted ([OrphanFiles]); foreign files survive.
+     * The known set is catalog-wide ([DucklakeCatalog.listAllReferencedFiles]) and includes files of
+     * dropped-but-unexpired tables and scheduled files, so neither time-travel data nor a pending
+     * cleanup can be deleted here. Table files resolve against their table path; scheduled files
+     * against the catalog root.
      */
     @Suppress("ThrowsCount")
     private fun removeOrphanFiles(table: ConnectorTableHandle?, properties: Map<String, String>): ConnectorProcedureResult {
@@ -347,11 +291,6 @@ internal class DuckLakeProcedureOps(
         )
     }
 
-    /**
-     * Resolve the in-scope (schema, table) targets and directory root(s) to scan from the named
-     * table's viewpoint widened by [scope]. The targets identify scope roots; the known set itself
-     * is catalog-wide so it also protects dropped-but-unexpired table files.
-     */
     private fun resolveOrphanScope(
         scope: OrphanScope,
         handle: DuckLakeTableHandle,
@@ -386,11 +325,6 @@ internal class DuckLakeProcedureOps(
         }
     }
 
-    /**
-     * Resolve a scheduled file's stored path to an absolute storage URI. Relative paths join the
-     * catalog data_path ROOT ([warehouseRoot]); absolute paths pass through. Fails loud if a
-     * relative path has no known root (we can't safely guess where to delete).
-     */
     private fun resolveScheduledUri(path: String, isRelative: Boolean): String {
         if (!isRelative) {
             return path
@@ -403,8 +337,7 @@ internal class DuckLakeProcedureOps(
         return if (root.endsWith("/")) root + path else "$root/$path"
     }
 
-    /** One-row result shared by cleanup_old_files + remove_orphan_files. On a dry run,
-     * `deleted_file_count` reports what WOULD be deleted. */
+    /** On a dry run `deleted_file_count` reports what would be deleted. */
     private fun fileGcResult(
         dryRun: Boolean,
         retention: String,
@@ -421,7 +354,6 @@ internal class DuckLakeProcedureOps(
         return ConnectorProcedureResult(FILE_GC_RESULT_SCHEMA, listOf(row))
     }
 
-    /** Parse a comma-separated `snapshot_ids` list; every element must be a bigint. */
     private fun parseSnapshotIds(raw: String): Set<Long> {
         val ids = raw.split(',')
             .map { it.trim() }
@@ -437,10 +369,9 @@ internal class DuckLakeProcedureOps(
         return ids.toSet()
     }
 
-    /** remove_orphan_files scope, widening from the named table. */
     private enum class OrphanScope { TABLE, SCHEMA, CATALOG }
 
-    /** Case-insensitive view over the raw `properties` map (Doris may lowercase argument keys). */
+    /** Doris may lowercase argument keys. */
     private class CaseInsensitiveArgs(properties: Map<String, String>) {
         private val byLowerKey: Map<String, String> =
             properties.entries.associate { (k, v) -> k.lowercase(Locale.ROOT) to v }
@@ -453,7 +384,6 @@ internal class DuckLakeProcedureOps(
         internal const val CLEANUP_OLD_FILES = "cleanup_old_files"
         internal const val REMOVE_ORPHAN_FILES = "remove_orphan_files"
 
-        // Case-insensitive dispatch: lowercased procedure name → canonical name.
         private val SUPPORTED_BY_LOWER: Map<String, String> =
             listOf(EXPIRE_SNAPSHOTS, CLEANUP_OLD_FILES, REMOVE_ORPHAN_FILES).associateBy { it }
 
@@ -471,14 +401,6 @@ internal class DuckLakeProcedureOps(
         private const val MINUTES_PER_HOUR = 60L
         private const val HOURS_PER_DAY = 24L
 
-        /**
-         * Result schema (all values are Strings in the row):
-         *  - `dry_run` — whether this was a dry run (`true`/`false`)
-         *  - `scope` — the catalog-wide-vs-table disclaimer (see class KDoc)
-         *  - `expired_snapshot_count` — snapshots expired (dry run: how many WOULD be)
-         *  - `scheduled_file_count` — files scheduled for later deletion (dry run: `n/a`)
-         *  - `snapshot_ids` — the affected snapshot ids, comma-separated
-         */
         private val RESULT_SCHEMA: List<ConnectorColumn> = listOf(
             column("dry_run", ConnectorType.of("BOOLEAN")),
             column("scope", ConnectorType.of("STRING")),
@@ -487,13 +409,6 @@ internal class DuckLakeProcedureOps(
             column("snapshot_ids", ConnectorType.of("STRING")),
         )
 
-        /**
-         * Result schema shared by cleanup_old_files + remove_orphan_files (all values Strings):
-         *  - `dry_run` — whether this was a dry run
-         *  - `retention_threshold` — the effective grace period used
-         *  - `deleted_file_count` — blobs deleted (dry run: how many WOULD be)
-         *  - `failed_file_count` — blobs that couldn't be deleted (left for a later retry)
-         */
         private val FILE_GC_RESULT_SCHEMA: List<ConnectorColumn> = listOf(
             column("dry_run", ConnectorType.of("BOOLEAN")),
             column("retention_threshold", ConnectorType.of("STRING")),
@@ -504,14 +419,7 @@ internal class DuckLakeProcedureOps(
         private fun column(name: String, type: ConnectorType): ConnectorColumn =
             ConnectorColumn(name, type, "", true, null)
 
-        /**
-         * Parse a `<number><unit>` duration (airlift-`Duration` grammar subset) into milliseconds.
-         * Supported units: `s` (seconds), `m` (minutes), `h` (hours), `d` (days), **lowercase only**
-         * — e.g. `7d`, `24h`, `30m`, `60s`. Optional whitespace between number and unit. Rejects a
-         * missing unit, an unknown or uppercase unit, a multi-letter unit (`7dd`, `7 days`), a
-         * non-numeric/negative/decimal magnitude, or overflow with a [DorisConnectorException]
-         * (loud over silently-wrong). `argName` names the offending argument in the error message.
-         */
+        /** `<number><unit>` with a lowercase unit of `s`, `m`, `h` or `d`; anything else is rejected. */
         @Suppress("ThrowsCount")
         internal fun parseDuration(value: String, argName: String): Long {
             val trimmed = value.trim()
@@ -536,12 +444,10 @@ internal class DuckLakeProcedureOps(
             }
         }
 
-        // <number> then optional spaces then letters. Anchored via matchEntire, so trailing junk
-        // ("7 days") can't match at all; a multi-letter or uppercase unit ("7dd", "7D") DOES match
-        // the regex but is then rejected by the exhaustive `when` on the unit — either way it throws.
+        // Multi-letter or uppercase units match here and are rejected by the `when` above.
         private val DURATION_PATTERN = Regex("""(\d+)\s*([a-zA-Z]+)""")
 
-        /** Parse a boolean argument case-insensitively; blank/absent = false. Rejects other tokens. */
+        /** Blank or absent is false; anything other than true/false is rejected. */
         internal fun parseBoolean(value: String?, argName: String): Boolean {
             val v = value?.trim()?.lowercase(Locale.ROOT)
             return when {

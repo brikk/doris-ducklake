@@ -3,12 +3,7 @@ package dev.brikk.ducklake.doris.plugin
 import org.apache.doris.connector.spi.ConnectorType
 import org.apache.doris.connector.spi.handle.ConnectorColumnHandle
 
-/**
- * Opaque DuckLake column handle. [columnId] is the stable DuckLake
- * identifier — it survives column rename and tracks Parquet field-id
- * resolution; [ordinalPosition] is the column's index in the table
- * schema (used by the planner for projection ordering).
- */
+/** [columnId] is DuckLake's stable id (survives renames, equals the Parquet field id). */
 @JvmRecord
 internal data class DuckLakeColumnHandle(
     val columnId: Long,

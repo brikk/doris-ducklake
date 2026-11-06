@@ -17,27 +17,13 @@ import org.apache.iceberg.PartitionSpecParser
 import org.apache.iceberg.SchemaParser
 
 /**
- * Builds the BE write sink for a DuckLake INSERT. Mirrors Doris's native
- * `IcebergTableSink` (`fe/.../planner/IcebergTableSink.java`): we emit a
- * **`TIcebergTableSink`** so the BE's Iceberg file-writer writes Parquet *and*
- * reports per-field-id column stats in `TIcebergCommitData` (the Hive sink
- * doesn't). The connector then commits those via [DuckLakeConnectorTransaction].
+ * Builds the BE sink for a DuckLake INSERT. A `TIcebergTableSink` is used because the BE's Iceberg
+ * writer reports per-field-id column stats in `TIcebergCommitData`, which the Hive sink doesn't;
+ * [DuckLakeConnectorTransaction] commits those. `schema_json` comes from the DuckLake columns with
+ * `field_id == column_id`, and a partitioned table also carries the active spec as an Iceberg spec.
  *
- * `schema_json` is built from DuckLake columns ([DuckLakeIcebergSchema], with
- * `field_id == column_id`) rather than an iceberg `Table` (we have none). The
- * target table is bound onto the current transaction here, so its `commit()`
- * knows where to write — same seam as `MaxComputeWritePlanProvider`.
- *
- * Partitioned tables additionally carry `partition_specs_json` + `partition_spec_id`
- * (built from the table's active DuckLake partition spec by [DuckLakeIcebergPartitionSpec],
- * same as native `IcebergTableSink`); unpartitioned tables leave both unset. The
- * DuckLake partition id is bound onto the transaction so `commit()` can stamp it on
- * each file's fragment.
- *
- * **End-to-end validation is the compose smoke** (real FE+BE), not a headless
- * test: `output_path`/`hadoop_config`/`file_type` formats are BE-defined and have
- * no headless oracle, and the BE's bucket-transform equivalence to DuckLake is only
- * provable live. (Partial-column INSERT still uses the full table schema.)
+ * `output_path`, `hadoop_config` and `file_type` have no headless oracle; the compose smoke against a
+ * real BE is the validation.
  */
 internal class DuckLakeWritePlanProvider(
     private val catalog: DucklakeCatalog,
@@ -51,20 +37,14 @@ internal class DuckLakeWritePlanProvider(
     override fun planWrite(session: ConnectorSession, handle: ConnectorWriteHandle): ConnectorSinkPlan {
         val tableHandle = handle.tableHandle.asDuckLakeHandle<DuckLakeTableHandle>()
         val outputPath = resolveOutputPath(tableHandle)
-        // At most one partition spec is active at a snapshot (the catalog filters by
-        // `activeAt`); null for unpartitioned tables.
+        // At most one spec is active at a snapshot.
         val partitionSpec = catalog.getPartitionSpecs(tableHandle.tableId, tableHandle.snapshotId).firstOrNull()
         bindTransaction(session, tableHandle, outputPath, partitionSpec?.partitionId)
         val sink = buildSink(tableHandle, outputPath, handle.isOverwrite, partitionSpec)
         return ConnectorSinkPlan(TDataSink(TDataSinkType.ICEBERG_TABLE_SINK).setIcebergTableSink(sink))
     }
 
-    /**
-     * Bind the resolved target + its data dir (+ the DuckLake partition id, if any)
-     * onto the transaction the engine opened via `beginTransaction`. The data dir
-     * relativizes the BE's absolute file paths, and the partition id is stamped on
-     * each committed file's fragment.
-     */
+    /** The data dir relativizes the BE's absolute paths at commit; the partition id is stamped on each fragment. */
     private fun bindTransaction(
         session: ConnectorSession,
         handle: DuckLakeTableHandle,
@@ -92,24 +72,15 @@ internal class DuckLakeWritePlanProvider(
             setTbName(handle.table)
             setSchemaJson(SchemaParser.toJson(schema))
             setFileFormat(TFileFormatType.FORMAT_PARQUET)
-            // Without a compression type the BE rejects the write ("Unsupported
-            // compress type UNKNOWN with parquet"). ZSTD is standard + DuckLake-readable.
+            // The BE rejects a sink without a compression type.
             setCompressionType(TFileCompressType.ZSTD)
             setOutputPath(outputPath)
             setOriginalOutputPath(outputPath)
             setFileType(fileTypeFor(outputPath))
             setHadoopConfig(storageConfig())
             setOverwrite(overwrite)
-            // #65782 (branch-catalog-spi 2026-07-22): the BE now collects per-column
-            // Parquet stats ONLY when the sink sets this flag; it defaults false, so
-            // an unset sink writes files with no/degenerate column stats. DuckLake
-            // ALWAYS wants them — it persists file column stats in
-            // `ducklake_file_column_stats` (our read-path stats/count pruning + the
-            // BE's pushed-down `COUNT(col)` = rowcount − null_count both read them).
-            // Without this, `SELECT COUNT(<nullable col>)` wrongly returns 0. The
-            // native iceberg sink gates this on the table's iceberg metrics policy;
-            // DuckLake has no such policy and collects stats unconditionally, so we
-            // set it true always.
+            // Defaults to false, and without stats `SELECT COUNT(<nullable col>)` returns 0: the BE serves
+            // COUNT(col) as rowcount − null_count from `ducklake_file_column_stats`.
             setCollectColumnStats(true)
             if (partitionSpec != null) {
                 val nameById = columns.associate { it.columnId to it.columnName }
@@ -128,7 +99,7 @@ internal class DuckLakeWritePlanProvider(
         return pathResolver.resolveTableDataPath(schema, table)
     }
 
-    /** Storage credentials the BE writer needs — raw FE keys + BE-canonical `AWS_*` aliases (read-path parity). */
+    /** Same keys and `AWS_*` aliases the read path emits. */
     private fun storageConfig(): Map<String, String> {
         val config = LinkedHashMap<String, String>()
         for ((key, value) in properties) {
