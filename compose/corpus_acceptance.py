@@ -13,7 +13,7 @@ from plugin_acceptance import Acceptance, write_json
 from plugin_preflight import file_hash, require
 
 
-CATALOG = "0.16.0"
+CATALOG = "0.17.0"
 
 
 def selected_hashes(discovered, selection):

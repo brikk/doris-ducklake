@@ -1,17 +1,18 @@
 # Metadata pools and PgBouncer
 
-## Status: released catalog 0.16.0
+## Status: released catalog 0.17.0
 
-The normal dependency is **0.16.0 from Maven Central**, including the PostgreSQL
-`readSession` isolation fix. Its JAR bytes match the completed owner-local trial.
+The normal dependency is **0.17.0 from Maven Central**, retaining the PostgreSQL
+`readSession` isolation fix adopted in 0.16.0. The earlier 0.16.0 JAR bytes match the completed owner-local trial.
 In older catalogs such as 0.15.1, session-level isolation changes can land on a
 different backend behind transaction pooling, silently read at READ COMMITTED and
 leak settings to other clients; the JDBC prepared-statement workaround alone does
 not fix that bug.
 
 The five properties/defaults below retain the configuration work from `de1cfbd`.
-The formal adoption verifies hashes and compile/package checks without rerunning
-the byte-identical trial's tests or deploying FE/BE. This is not a broader
+The formal 0.16 adoption verified hashes and compile/package checks without rerunning
+the byte-identical trial's tests or deploying FE/BE. Later 0.17 quick checks are
+recorded separately in its adoption report. This is not a broader
 production/fleet or concurrent-file-rewrite qualification.
 
 ## Catalog properties
@@ -65,7 +66,7 @@ The released connector preserves the JDBC URL byte-for-byte, including existing
 parameters/percent escapes. It does not strip or automatically insert driver
 settings. Use `?` before the first parameter and `&` for subsequent ones.
 
-Example for released **0.16.0**, assuming a proxy
+Example for released **0.17.0**, assuming a proxy
 `server_lifetime` of 1,800 seconds (30 minutes):
 
 ```sql

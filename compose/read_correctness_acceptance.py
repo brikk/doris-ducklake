@@ -162,9 +162,9 @@ class DefaultNestedAcceptance(ReadCorrectnessAcceptance):
     def prepare(self):
         for key in ("A", "B"):
             catalogs = {name for name in self.artifacts[key]["files"] if name.startswith("lib/ducklake-catalog-")}
-            require(catalogs == {"lib/ducklake-catalog-0.16.0.jar"}, "Not a default catalog0.16.0 bundle")
+            require(catalogs == {"lib/ducklake-catalog-0.17.0.jar"}, "Not a default catalog0.17.0 bundle")
         super().prepare()
-        self.result["lane"] = "released-catalog-0.16.0"
+        self.result["lane"] = "released-catalog-0.17.0"
 
 
 if __name__ == "__main__":

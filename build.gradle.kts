@@ -77,7 +77,7 @@ repositories {
 
 val dorisVersion = "1.2-SNAPSHOT"
 
-// Historical experimental reader candidate, separate from the released 0.16.0 default.
+// Historical experimental reader candidate, separate from the released 0.17.0 default.
 // Do not use maven.repo.local: Doris's exclusive FE/SPI repository above must stay intact.
 val readCorrectnessCandidate = providers.gradleProperty("catalogReadCorrectnessCandidate").orNull == "true"
 check(!providers.gradleProperty("r07CatalogRepository").isPresent) {

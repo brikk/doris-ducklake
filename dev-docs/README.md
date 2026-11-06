@@ -26,6 +26,9 @@ archived commands/results apply only to their stated artifacts.
 
 ## Current evidence
 
+- [Catalog 0.17.0 adoption](VALIDATION-catalog-0.17.0.md): Central hash/compile/package
+  checks and bounded write/commit/API/pool smoke; optional current-bounds planning
+  is not enabled, no full suites/corpus or FE/BE deployment.
 - [Metadata pools and PgBouncer](PGBOUNCER.md): configuration and deployment requirements.
   [Formal 0.16.0 adoption](VALIDATION-catalog-0.16.0.md) uses Central bytes identical
   to the [completed owner-local trial](TRIAL-PGBOUNCER-LOCAL-0.16.md); its local

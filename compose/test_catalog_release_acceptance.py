@@ -6,7 +6,7 @@ from read_correctness_acceptance import DefaultNestedAcceptance, ReadCorrectness
 
 
 class CatalogReleaseAcceptanceTest(unittest.TestCase):
-    def fixture(self, a="0.16.0", b="0.16.0"):
+    def fixture(self, a="0.17.0", b="0.17.0"):
         fixture = object.__new__(DefaultNestedAcceptance)
         fixture.artifacts = {key: {"files": {f"lib/ducklake-catalog-{version}.jar": "digest"}}
                              for key, version in (("A", a), ("B", b))}
@@ -19,15 +19,15 @@ class CatalogReleaseAcceptanceTest(unittest.TestCase):
             fixture.prepare()
             prepare.assert_called_once()
         self.assertFalse(fixture.candidate)
-        self.assertEqual(fixture.result["lane"], "released-catalog-0.16.0")
+        self.assertEqual(fixture.result["lane"], "released-catalog-0.17.0")
         self.assertEqual(fixture.seed_script, "read_correctness_seed.py")
         self.assertEqual(fixture.live_tasks, ("readCorrectnessLiveTest", "readCorrectnessLiveJava17Test"))
         self.assertEqual(fixture.live_test_count, 2)
 
     def test_old_or_mixed_catalog_refuses_before_prepare(self):
-        for a, b in (("0.15.1", "0.16.0"), ("0.16.0", "0.15.1"), ("0.16.0-SNAPSHOT", "0.16.0")):
+        for a, b in (("0.16.0", "0.17.0"), ("0.17.0", "0.16.0"), ("0.17.0-SNAPSHOT", "0.17.0")):
             with self.subTest(a=a, b=b), patch.object(ReadCorrectnessAcceptance, "prepare") as prepare:
-                with self.assertRaisesRegex(ValueError, "Not a default catalog0.16.0 bundle"):
+                with self.assertRaisesRegex(ValueError, "Not a default catalog0.17.0 bundle"):
                     self.fixture(a, b).prepare()
                 prepare.assert_not_called()
 
@@ -35,7 +35,7 @@ class CatalogReleaseAcceptanceTest(unittest.TestCase):
         fixture = self.fixture()
         fixture.artifacts["A"]["files"]["lib/ducklake-catalog-0.12.0.jar"] = "old"
         with patch.object(ReadCorrectnessAcceptance, "prepare") as prepare:
-            with self.assertRaisesRegex(ValueError, "Not a default catalog0.16.0 bundle"):
+            with self.assertRaisesRegex(ValueError, "Not a default catalog0.17.0 bundle"):
                 fixture.prepare()
             prepare.assert_not_called()
 
