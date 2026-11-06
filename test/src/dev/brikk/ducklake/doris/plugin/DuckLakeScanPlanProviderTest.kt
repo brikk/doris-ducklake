@@ -28,10 +28,8 @@ import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Test
 
 /**
- * Step 3 of the roadmap: scan-plan provider returning one range per active
- * data file. Goes through the public SPI surface
- * ([DuckLakeConnectorProvider.create] -> [org.apache.doris.connector.spi.Connector.getScanPlanProvider])
- * so regressions in the connector-side wiring show up here.
+ * Goes through the public SPI surface ([DuckLakeConnectorProvider.create] → `getScanPlanProvider`)
+ * so regressions in the connector wiring show up here too.
  */
 internal class DuckLakeScanPlanProviderTest {
 
@@ -57,7 +55,7 @@ internal class DuckLakeScanPlanProviderTest {
     @Test
     @Throws(Exception::class)
     fun emitsOneRangePerActiveDataFile() {
-        val properties = DorisTestIdiomKit.isolatedProperties(isolated)
+        val properties = DorisTestSupport.isolatedProperties(isolated)
 
         val ctx = FakeConnectorContext("dl", 1L)
         val provider = DuckLakeConnectorProvider()
@@ -68,7 +66,7 @@ internal class DuckLakeScanPlanProviderTest {
 
             val plan = connector.getScanPlanProvider()
             assertThat(plan).isNotNull()
-            // API 24 retains read backfill by default; Paimon opts out, DuckLake must not.
+            // Read backfill of column defaults is on by default; Paimon opts out, DuckLake must not.
             assertThat(plan.applyColumnDefaultsOnRead()).isTrue()
             // The new scheduling/cache hooks are not a feature opt-in. DuckLake
             // still plans synchronously and pins files through its own handle.
@@ -77,9 +75,6 @@ internal class DuckLakeScanPlanProviderTest {
             assertThat(metadata.supportsNativePartitionPlanning(null, handle)).isFalse()
             assertThat(metadata.getSqlCacheVersion(null, handle)).isEmpty()
             assertThat(metadata.getPartitionViewVersion(null, handle)).isEmpty()
-            // getScanRangeType()/ConnectorScanRangeType was removed from the SPI (every
-            // range is a file scan now), so there is no range-type to assert on the provider.
-
             val ranges = plan.planScan(null, handle, listOf(), Optional.empty())
 
             // Bootstrap inserts rows into sales.orders. DuckLake's writer may
@@ -89,10 +84,6 @@ internal class DuckLakeScanPlanProviderTest {
             assertThat(ranges).isNotEmpty()
 
             for (range in ranges) {
-                // range.rangeType / range.deleteFiles were removed from ConnectorScanRange
-                // (range type is uniform; delete files now travel on the per-range thrift and
-                // are read back via ConnectorScanPlanProvider.getDeleteFiles). This orders-table
-                // scan has no position deletes, so the thrift-level list stays empty regardless.
                 assertThat(range.fileFormat).isEqualTo("parquet")
                 assertThat(range.start).isZero()
                 assertThat(range.fileSize).isPositive()
@@ -120,14 +111,9 @@ internal class DuckLakeScanPlanProviderTest {
     @Test
     @Throws(Exception::class)
     fun emitsPositionDeleteFileForFileBasedDeletePath() {
-        // sales.returns_file is seeded with INSERT + DELETE under
-        // DATA_INLINING_ROW_LIMIT = 0, so DuckLake writes the deletion as a
-        // position-delete parquet plus a ducklake_delete_file row (NOT as
-        // catalog-DB inline-delete rows). The catalog's LEFT JOIN in
-        // getDataFiles inlines the delete-file path on the DucklakeDataFile;
-        // Step 7 surfaces that as a populated iceberg_params.delete_files
-        // entry on the scan range's wire descriptor.
-        val properties = DorisTestIdiomKit.isolatedProperties(isolated)
+        // sales.returns_file is seeded with INSERT + DELETE under DATA_INLINING_ROW_LIMIT = 0, so
+        // the deletion is a position-delete parquet, not catalog inline-delete rows.
+        val properties = DorisTestSupport.isolatedProperties(isolated)
 
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
@@ -165,28 +151,15 @@ internal class DuckLakeScanPlanProviderTest {
     }
 
     @Disabled(
-        "Step 7.5: inline deletes from ducklake_inlined_delete_<tableId> " +
-            "are not yet surfaced to Doris. Two things needed before this " +
-            "can pass: (1) fixture work — DuckDB-JDBC 1.5.2 doesn't honour " +
-            "data_inlining_row_limit for DELETEs, so the bootstrap must " +
-            "INSERT directly into ducklake_inlined_delete_<tableId> over a " +
-            "PG JDBC connection to simulate the state DuckDB-Python " +
-            "produces by default; (2) connector work — DuckLakeScanPlanProvider " +
-            "should consume DucklakeCatalog#getInlinedDeletes(tableId, " +
-            "snapshotId) and synthesise a parquet delete file under a " +
-            "scratch location, then thread it through DuckLakeScanRange " +
-            "the same way file-based deletes are threaded today. " +
-            "See ducklake-doris-friction.md (2026-05-19) for the full " +
-            "writeup and Step 7.5 in dev-docs/TODO-read.md.",
+        "Inlined deletes are refused, not served: the connector would need to synthesize a parquet " +
+            "delete file from ducklake_inlined_delete_<tableId>, and the fixture would need to seed those " +
+            "rows directly over PG JDBC (DuckDB-JDBC ignores data_inlining_row_limit for DELETEs). " +
+            "See dev-docs/TODO-read.md.",
     )
     @Test
     @Throws(Exception::class)
     fun emitsDeletesForInlineDeletePath() {
-        // sales.returns_inline is currently seeded with INSERTs only —
-        // there's no inline-delete row in the catalog DB yet (see fixture
-        // TODO in the @Disabled message above). Once that's wired, the
-        // assertion below should hold.
-        val properties = DorisTestIdiomKit.isolatedProperties(isolated)
+        val properties = DorisTestSupport.isolatedProperties(isolated)
 
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
@@ -204,10 +177,6 @@ internal class DuckLakeScanPlanProviderTest {
                 val rangeDesc = TFileRangeDesc()
                 range.populateRangeParams(formatDesc, rangeDesc)
 
-                // Step 7.5 contract (currently NOT satisfied — that's why this
-                // test is @Disabled): the inlined-delete row in
-                // ducklake_inlined_delete_<tableId> must surface as at least one
-                // TIcebergDeleteFileDesc entry on iceberg_params.delete_files.
                 assertThat(formatDesc.icebergParams.deleteFiles).isNotEmpty()
             }
     }
@@ -215,7 +184,7 @@ internal class DuckLakeScanPlanProviderTest {
     @Test
     @Throws(Exception::class)
     fun scanPlanProviderIsCached() {
-        val properties = DorisTestIdiomKit.isolatedProperties(isolated)
+        val properties = DorisTestSupport.isolatedProperties(isolated)
 
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
@@ -231,7 +200,7 @@ internal class DuckLakeScanPlanProviderTest {
         // Catalog properties include the s3.* credentials a SELECT * needs the BE
         // to reach MinIO. Plus a Doris-injected engine property that must NOT
         // leak through to the BE (storage credentials only).
-        val properties = DorisTestIdiomKit.isolatedProperties(isolated)
+        val properties = DorisTestSupport.isolatedProperties(isolated)
         properties["s3.endpoint"] = "http://trino-ducklake-minio:9000"
         properties["s3.access_key"] = "minioadmin"
         properties["s3.secret_key"] = "minioadmin"
@@ -302,7 +271,7 @@ internal class DuckLakeScanPlanProviderTest {
     @Test
     @Throws(Exception::class)
     fun prunesFilesByPartitionEqualityFilter() {
-        val properties = DorisTestIdiomKit.isolatedProperties(isolated)
+        val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
                 val metadata = connector.getMetadata(null)
@@ -338,7 +307,7 @@ internal class DuckLakeScanPlanProviderTest {
     fun prunesFilesByNumericRangeFilter() {
         // Complements the partition-equality test: a numeric open range (GE) on a
         // non-partition column, exercising findDataFileIdsInRange's typed comparison.
-        val properties = DorisTestIdiomKit.isolatedProperties(isolated)
+        val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
                 val metadata = connector.getMetadata(null)
@@ -378,7 +347,7 @@ internal class DuckLakeScanPlanProviderTest {
         // intersection would go empty, and isNotEmpty() below would fail — i.e. this
         // can't silently keep the wrong file. (Hash itself is pinned in
         // DuckLakeBucketTransformTest.)
-        val properties = DorisTestIdiomKit.isolatedProperties(isolated)
+        val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
                 val metadata = connector.getMetadata(null)
@@ -413,7 +382,7 @@ internal class DuckLakeScanPlanProviderTest {
         // IN-list over a bucket column: `name IN ('alice','bob')` keeps buckets
         // {1,2} and prunes charlie's bucket-3 file. Exercises the membership →
         // {bucket(v)} set path that single-equality pruning can't cover.
-        val properties = DorisTestIdiomKit.isolatedProperties(isolated)
+        val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
                 val metadata = connector.getMetadata(null)
@@ -449,7 +418,7 @@ internal class DuckLakeScanPlanProviderTest {
     fun prunesFilesByOrOfEqualitiesFilter() {
         // `name = 'alice' OR name = 'bob'` is membership on a single column and must
         // prune identically to the IN-list above — proving the OR → IN normalization.
-        val properties = DorisTestIdiomKit.isolatedProperties(isolated)
+        val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
                 val metadata = connector.getMetadata(null)
@@ -483,7 +452,7 @@ internal class DuckLakeScanPlanProviderTest {
         // IN-list through the STATS path (not bucket): `id IN (3, 4)` spans 3..4, so
         // by_region's 'us' file (ids 1,2) is pruned by its id stats while 'eu' (3,4)
         // survives. Covers the typed-span pruning independent of partitioning.
-        val properties = DorisTestIdiomKit.isolatedProperties(isolated)
+        val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
                 val metadata = connector.getMetadata(null)
@@ -517,7 +486,7 @@ internal class DuckLakeScanPlanProviderTest {
         // (both > 'b') are pruned by their name stats. LIKE feeds only the stats
         // path (not bucket — a prefix scatters across buckets), so this isolates the
         // prefix → range conversion end-to-end.
-        val properties = DorisTestIdiomKit.isolatedProperties(isolated)
+        val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
                 val metadata = connector.getMetadata(null)
@@ -568,7 +537,7 @@ internal class DuckLakeScanPlanProviderTest {
     @Test
     @Throws(Exception::class)
     fun populateScanLevelParamsNoopOnEmptyMap() {
-        val properties = DorisTestIdiomKit.isolatedProperties(isolated)
+        val properties = DorisTestSupport.isolatedProperties(isolated)
 
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
@@ -607,19 +576,8 @@ internal class DuckLakeScanPlanProviderTest {
 
 
 /**
- * P6 read-side features on [DuckLakeScanPlanProvider], split from
- * [DuckLakeScanPlanProviderTest] only to keep each class under the detekt
- * LargeClass budget (same fixture, same SPI surface):
- *
- *  - COUNT(*) pushdown (7-arg `planScan` with `countPushdown=true`): a clean
- *    table collapses to ONE range carrying the exact metadata count (the
- *    emission shape copied from `IcebergScanPlanProvider.planCountPushdown`);
- *    ANY doubt (delete files, filters, pruned file sets) must emit only
- *    normal ranges so the -1 sentinel survives and BE counts by reading
- *    (`PluginDrivenScanNode.resolvePushDownRowCount`).
- *  - partition-bearing ranges: partitioned tables flag
- *    `isPartitionBearing=true` (+ identity values keyed by lowercased column
- *    name), unpartitioned tables keep the pre-P6 `false`/empty shape.
+ * COUNT(*) pushdown and partition-bearing ranges. Split from [DuckLakeScanPlanProviderTest] only to
+ * stay under the detekt LargeClass budget; same fixture.
  */
 internal class DuckLakeScanPlanCountAndPartitionTest {
 
@@ -650,7 +608,7 @@ internal class DuckLakeScanPlanCountAndPartitionTest {
         // (2+1 = 3 rows seeded on sales.orders) — the emission shape copied
         // from IcebergScanPlanProvider.planCountPushdown. The BE-side carrier
         // is iceberg's table_level_row_count on the format descriptor.
-        val properties = DorisTestIdiomKit.isolatedProperties(isolated)
+        val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
                 val metadata = connector.getMetadata(null)
@@ -680,7 +638,7 @@ internal class DuckLakeScanPlanCountAndPartitionTest {
     fun countPushdownOnEmptyTableEmitsNoRanges() {
         // Iceberg parity: an empty table under count pushdown yields ZERO
         // ranges, so BE sums nothing and COUNT(*) returns 0.
-        val properties = DorisTestIdiomKit.isolatedProperties(isolated)
+        val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
                 val metadata = connector.getMetadata(null)
@@ -702,7 +660,7 @@ internal class DuckLakeScanPlanCountAndPartitionTest {
         // count — and the single collapsed range keeps the partition-bearing
         // shape every normal range of the table carries (iceberg's count range
         // goes through the same buildRange as data ranges).
-        val properties = DorisTestIdiomKit.isolatedProperties(isolated)
+        val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
                 val metadata = connector.getMetadata(null)
@@ -728,7 +686,7 @@ internal class DuckLakeScanPlanCountAndPartitionTest {
         // provider must emit NO count range — every range keeps the -1
         // sentinel so PluginDrivenScanNode.resolvePushDownRowCount stays -1
         // and BE counts by reading (deletes applied).
-        val properties = DorisTestIdiomKit.isolatedProperties(isolated)
+        val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
                 val metadata = connector.getMetadata(null)
@@ -760,7 +718,7 @@ internal class DuckLakeScanPlanCountAndPartitionTest {
         // A remaining (non-pushed) filter expression means the COUNT(*) is
         // over a filtered row set — a whole-table metadata count would be
         // wrong. Normal ranges only.
-        val properties = DorisTestIdiomKit.isolatedProperties(isolated)
+        val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
                 val metadata = connector.getMetadata(null)
@@ -792,7 +750,7 @@ internal class DuckLakeScanPlanCountAndPartitionTest {
         // applyFilter leaves pushedFilter + prunedFileIds on the handle: the
         // engine-visible remaining filter may be empty, but the scan is no
         // longer whole-table — a metadata count would answer the wrong query.
-        val properties = DorisTestIdiomKit.isolatedProperties(isolated)
+        val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
                 val metadata = connector.getMetadata(null)
@@ -828,7 +786,7 @@ internal class DuckLakeScanPlanCountAndPartitionTest {
         // same range count, every range on the -1 sentinel. A stray
         // precomputed count here would let a non-COUNT query read a collapsed
         // single-range plan.
-        val properties = DorisTestIdiomKit.isolatedProperties(isolated)
+        val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
                 val metadata = connector.getMetadata(null)
@@ -855,7 +813,7 @@ internal class DuckLakeScanPlanCountAndPartitionTest {
         // null → no Hive key=value path parsing) and carries the file's
         // identity values keyed by lowercased column name (iceberg's
         // getIdentityPartitionInfoMap keying).
-        val properties = DorisTestIdiomKit.isolatedProperties(isolated)
+        val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
                 val metadata = connector.getMetadata(null)
@@ -893,7 +851,7 @@ internal class DuckLakeScanPlanCountAndPartitionTest {
         // as a raw column value (iceberg surfaces identity transforms only).
         // The ranges still flag partition-bearing — the table HAS an active
         // spec — with an empty values map.
-        val properties = DorisTestIdiomKit.isolatedProperties(isolated)
+        val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
                 val metadata = connector.getMetadata(null)
@@ -913,10 +871,7 @@ internal class DuckLakeScanPlanCountAndPartitionTest {
     @Test
     @Throws(Exception::class)
     fun unpartitionedTableRangesStayNonPartitionBearing() {
-        // No active spec → the pre-P6 behaviour is preserved exactly:
-        // isPartitionBearing=false and empty values (PluginDrivenSplit keeps
-        // its legacy empty→null collapse for these).
-        val properties = DorisTestIdiomKit.isolatedProperties(isolated)
+        val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
                 val metadata = connector.getMetadata(null)

@@ -1,5 +1,6 @@
 package dev.brikk.ducklake.doris.plugin
 
+import dev.brikk.ducklake.catalog.DucklakeCatalog
 import dev.brikk.ducklake.catalog.ExpireSnapshotsResult
 import dev.brikk.ducklake.catalog.DucklakeExpiryCleanupIncompleteException
 import dev.brikk.ducklake.catalog.TestingDucklakePostgreSqlCatalogServer
@@ -156,9 +157,9 @@ internal class DuckLakeExpiryMaintenanceTest {
     }
 
     @Test
-    fun qualifiedCatalogInheritsNewMethodsAndTheTwoArgumentResultConstructorRemainsUsable() {
+    fun catalogExposesResumableCleanupAndTheTwoArgumentResultConstructorRemainsUsable() {
         assertThat(ExpireSnapshotsResult(1, 2).cleanupComplete).isTrue()
-        val surface = DuckLakeQualifiedReadCatalog::class.java
+        val surface = DucklakeCatalog::class.java
         assertThat(surface.getMethod("cleanUpExpiredObjects", Int::class.javaPrimitiveType)).isNotNull()
         assertThat(surface.getMethod("cleanUpExpiredObjects", Long::class.javaPrimitiveType, Int::class.javaPrimitiveType)).isNotNull()
         assertThat(surface.getMethod("expireSnapshots", Set::class.java, Int::class.javaPrimitiveType)).isNotNull()

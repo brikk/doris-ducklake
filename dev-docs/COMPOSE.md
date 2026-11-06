@@ -175,7 +175,8 @@ With the same inputs, `compose/smoke_acceptance.py` exercises full supported
 correctness plus same-count tuple-corruption refusal. `compose/network_acceptance.py`
 exercises actual loopback and approved/unapproved SSH-key access (requires local
 `ssh`, `sshd`, `ssh-keygen`); it deploys A only and does not claim full-smoke SQL proof.
-Native default/candidate checks are in [CATALOG-CANDIDATE.md](CATALOG-CANDIDATE.md).
+Native nested/replay checks: `python3 compose/read_correctness_acceptance.py --bundle-a … --bundle-b … --duckdb … --evidence-root …`
+runs the `readCorrectnessLiveTest` / `readCorrectnessLiveJava17Test` probes on an owned API27 stack.
 
 Cluster-free regressions and opt-in simulated-Docker transport commands are in
 [DEVELOPMENT.md](DEVELOPMENT.md). Mock/simulated FE tests are never loaded-Doris proof.

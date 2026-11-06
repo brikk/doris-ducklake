@@ -218,12 +218,9 @@ internal class DorisReplayEngine(
             // nested v1 limits, inlined-state guard, …) fail cleanly by design.
             message.contains("not supported") || message.contains("Unsupported") ->
                 ReplayEngineSkip("connector documented gap: " + firstLine(message))
-            // Inlined-DELETE guard (Stage 2): the connector fails loud on a table
-            // whose deletes live in ducklake_inlined_delete_* rather than a delete
-            // file — a documented gap (its message predates the "not supported"
-            // wording the branch above keys on), so classify it as an engine-skip.
+            // The inlined-delete refusal doesn't use the "not supported" wording the branch above keys on.
             message.contains("inlined DELETEs in the metadata catalog") ->
-                ReplayEngineSkip("connector documented gap (inlined deletes, Stage 2): " + firstLine(message))
+                ReplayEngineSkip("connector documented gap (inlined deletes): " + firstLine(message))
             // DuckDB functions with no Doris equivalent (typeof,
             // uuid_extract_version, …): dialect gap, not a correctness signal —
             // the generic classification beats an ever-growing deny-list.

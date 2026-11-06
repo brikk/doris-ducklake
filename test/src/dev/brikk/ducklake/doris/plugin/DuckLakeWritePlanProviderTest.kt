@@ -76,7 +76,7 @@ internal class DuckLakeWritePlanProviderTest {
         return DuckLakeWritePlanProvider(
             catalog,
             DuckLakePathResolver(catalog, warehouse),
-            DorisTestIdiomKit.isolatedProperties(isolated),
+            DorisTestSupport.isolatedProperties(isolated),
         )
     }
 

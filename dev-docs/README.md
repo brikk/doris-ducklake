@@ -11,7 +11,6 @@ archived commands/results apply only to their stated artifacts.
 - [DORIS-RUNTIME.md](DORIS-RUNTIME.md): exact engine/SDK inputs and re-vendor contract.
 - [COMPOSE.md](COMPOSE.md): local/remote stack, replacement, receipts and recovery.
 - [TYPES.md](TYPES.md): default type mappings and write restrictions.
-- [CATALOG-CANDIDATE.md](CATALOG-CANDIDATE.md): published candidate, opt-ins and limits.
 - [DESIGN-corpus-replay-adapter.md](DESIGN-corpus-replay-adapter.md): replay contract and usage.
 - [CRUTCHES-AND-SHORTCUTS.md](CRUTCHES-AND-SHORTCUTS.md): load-bearing safety invariants.
 - [ducklake-doris-friction.md](ducklake-doris-friction.md): current upstream integration seams.

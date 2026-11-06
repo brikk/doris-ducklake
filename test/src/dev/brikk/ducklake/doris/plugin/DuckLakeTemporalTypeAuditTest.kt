@@ -69,7 +69,7 @@ internal class DuckLakeTemporalTypeAuditTest {
     }
 
     private inline fun <R> withMetadata(block: (ConnectorMetadata) -> R): R {
-        val properties = DorisTestIdiomKit.isolatedProperties(isolated)
+        val properties = DorisTestSupport.isolatedProperties(isolated)
         return DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L))
             .use { connector -> block(connector.getMetadata(null)) }

@@ -67,7 +67,7 @@ internal class DuckLakeConnectorListingTest {
         val provider = DuckLakeConnectorProvider()
         assertThat(provider.type).isEqualTo("ducklake")
 
-        val properties = DorisTestIdiomKit.isolatedProperties(isolated)
+        val properties = DorisTestSupport.isolatedProperties(isolated)
 
         provider.validateProperties(properties)
 
@@ -122,7 +122,7 @@ internal class DuckLakeConnectorListingTest {
     @Test
     @Throws(Exception::class)
     fun appliesProjectionPushdown() {
-        val properties = DorisTestIdiomKit.isolatedProperties(isolated)
+        val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
                 val metadata = connector.getMetadata(null)
@@ -153,7 +153,7 @@ internal class DuckLakeConnectorListingTest {
     @Test
     @Throws(Exception::class)
     fun reportsTableStatistics() {
-        val properties = DorisTestIdiomKit.isolatedProperties(isolated)
+        val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
                 val metadata = connector.getMetadata(null)

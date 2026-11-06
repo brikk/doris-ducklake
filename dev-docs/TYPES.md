@@ -1,8 +1,7 @@
 # Type mappings and limits
 
 These are connector descriptors, **not blanket value-level/read/write qualification**.
-The default lane is catalog 0.14.0 with the shared structured type parser. The
-[experimental reader candidate](CATALOG-CANDIDATE.md) remains separate. Refer to the
+The connector uses the catalog's shared structured type parser. Refer to the
 [findings register](REVIEW-FINDINGS.md) for pruning/domain/default caveats.
 
 | DuckLake type | Doris mapping | Important boundary |

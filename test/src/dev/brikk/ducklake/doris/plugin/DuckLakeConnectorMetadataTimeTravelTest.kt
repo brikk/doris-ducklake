@@ -17,14 +17,8 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
- * Exercises [DuckLakeConnectorMetadata.resolveTimeTravel] against the real
- * Postgres-backed DuckLake catalog.
- *
- * The P-series SPI consolidated the former `getSnapshotAt(timestampMillis)` +
- * `getSnapshotById(snapshotId)` overrides into a single `resolveTimeTravel` that
- * takes a [ConnectorTimeTravelSpec]. DuckLake has linear history only, so it
- * honours `SNAPSHOT_ID` (FOR VERSION AS OF) and `TIMESTAMP` (FOR TIME AS OF) and
- * returns empty for the provider-specific `TAG` / `BRANCH` / `INCREMENTAL` kinds.
+ * DuckLake has linear history only: `SNAPSHOT_ID` and `TIMESTAMP` resolve, `TAG` / `BRANCH` /
+ * `INCREMENTAL` / named `VERSION_REF` return empty.
  */
 internal class DuckLakeConnectorMetadataTimeTravelTest {
 
@@ -152,9 +146,6 @@ internal class DuckLakeConnectorMetadataTimeTravelTest {
             assertThat(
                 md.resolveTimeTravel(null, handle, ConnectorTimeTravelSpec.incremental(emptyMap())),
             ).isEmpty
-            // VERSION_REF (P6: FOR VERSION AS OF '<name>', non-numeric) — DuckLake
-            // snapshots are numeric-id only, so a named ref resolves to empty and the
-            // engine surfaces its "not found" user error.
             assertThat(
                 md.resolveTimeTravel(null, handle, ConnectorTimeTravelSpec.versionRef("release-1")),
             ).isEmpty

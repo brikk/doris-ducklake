@@ -12,7 +12,10 @@ import java.time.ZoneOffset
 import java.util.Locale
 import java.util.function.Supplier
 
-/** Positive evidence guard, not a claim that missing/unknown statistics prove representability. */
+/**
+ * Refuses tables whose temporal column stats, defaults or inlined values fall outside Doris's
+ * DATE/DATETIME domain (years 1..9999, finite). Missing statistics are not treated as evidence either way.
+ */
 internal object DuckLakeTemporalDomain {
     private val types = setOf("date", "timestamp", "timestamp_s", "timestamp_ms", "timestamp_ns", "timestamptz")
     private val infinities = setOf("infinity", "+infinity", "-infinity", "inf", "+inf", "-inf")
@@ -26,7 +29,6 @@ internal object DuckLakeTemporalDomain {
     private const val MAX_INLINE_SCHEMAS = 64
 
     fun checkKnownBounds(catalog: DucklakeCatalog, handle: DuckLakeTableHandle, columns: List<DucklakeColumn>) {
-        if (catalog is DuckLakeQualifiedReadCatalog) return
         val temporal = columns.filter { it.columnType.lowercase(Locale.ROOT) in types }
         if (temporal.isEmpty()) return
         catalog.readSession(Supplier {

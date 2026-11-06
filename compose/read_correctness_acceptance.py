@@ -1,4 +1,4 @@
-"""Bounded candidate/default acceptance on owned API27 FE/BE + PostgreSQL/S3."""
+"""Bounded native-file/replay acceptance on owned API27 FE/BE + PostgreSQL/S3."""
 import argparse
 import json
 import os
@@ -14,10 +14,10 @@ from smoke_acceptance import FullSmokeAcceptance
 
 
 class ReadCorrectnessAcceptance(FullSmokeAcceptance):
-    candidate = True
-    phase_name = "candidate-full-supported"
+    phase_name = "released-full-supported"
     seed_script = "read_correctness_seed.py"
-    output_directory = "catalog-read-correctness-33"
+    output_directory = "default-nested-qualification"
+    catalog_version = "0.17.0"
     live_tasks = ("readCorrectnessLiveTest", "readCorrectnessLiveJava17Test")
     live_test_count = 2
     live_marker = "positive mirrors=2/2; wrong-hash=1 failed, later mirror=1/1"
@@ -25,11 +25,18 @@ class ReadCorrectnessAcceptance(FullSmokeAcceptance):
     def source_hashes(self):
         project = self.source.parent
         files = [project / "build.gradle.kts", project / "gradle/libs.versions.toml"]
-        for directory in ("src", "read-tiers", "test/src", "test/r07"):
+        for directory in ("src", "test/src"):
             files.extend((project / directory).rglob("*.kt"))
         return {str(path.relative_to(project)): file_hash(path) for path in sorted(files)}
 
+    def require_released_bundles(self):
+        for key in ("A", "B"):
+            catalogs = {name for name in self.artifacts[key]["files"] if name.startswith("lib/ducklake-catalog-")}
+            require(catalogs == {f"lib/ducklake-catalog-{self.catalog_version}.jar"}, f"Not a default catalog{self.catalog_version} bundle")
+        self.result["lane"] = "released-catalog-" + self.catalog_version
+
     def prepare(self):
+        self.require_released_bundles()
         super().prepare()
         # Loopback ephemeral ports only, needed by the JDBC oracle and engine test JVMs.
         for file, service, port in ((self.doris_file, "doris-fe", 9030), (self.substrate_file, "minio", 9000)):
@@ -97,7 +104,7 @@ class ReadCorrectnessAcceptance(FullSmokeAcceptance):
                             "allprojects { tasks.withType(Test).configureEach { maxHeapSize = '768m'; maxParallelForks = 1; " +
                             "systemProperty 'java.io.tmpdir', " + json.dumps(str(java_tmp)) + " } }\n")
             command = [str(project / "gradlew"), "--project-cache-dir", str(self.root / "gradle-project-cache"), "-I", str(init),
-                       "-PcatalogReadCorrectnessCandidate=" + str(self.candidate).lower(), *self.live_tasks, "--continue",
+                       *self.live_tasks, "--continue",
                        "--no-daemon", "--max-workers=1", "-Pkotlin.compiler.execution.strategy=in-process",
                        "-Dorg.gradle.jvmargs=-Xmx1536m -XX:MaxMetaspaceSize=768m -Djava.io.tmpdir=" + str(java_tmp)]
             with (self.root / "live-jvm.log").open("w") as log:
@@ -141,30 +148,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("bundle-a", "bundle-b", "duckdb", "evidence-root"):
         parser.add_argument("--" + name, type=Path, required=True)
-    parser.add_argument("--released", action="store_true", help="Run catalog0.13 release nested/replay probes, not the candidate")
     args = parser.parse_args()
-    kind = DefaultNestedAcceptance if args.released else ReadCorrectnessAcceptance
-    fixture = kind(args.bundle_a, args.bundle_b, args.duckdb, args.evidence_root)
+    fixture = ReadCorrectnessAcceptance(args.bundle_a, args.bundle_b, args.duckdb, args.evidence_root)
     try:
         fixture.run()
     except Exception as error:
         print("Read-correctness acceptance failed:", str(error).replace(fixture.password, "<redacted>"))
         return 1
-    print("PASS bounded API27 " + ("released native-file/replay" if args.released else "candidate native-file/replay") + " acceptance:", fixture.root)
+    print("PASS bounded API27 released native-file/replay acceptance:", fixture.root)
     return 0
-
-
-class DefaultNestedAcceptance(ReadCorrectnessAcceptance):
-    candidate = False
-    phase_name = "released-full-supported"
-    output_directory = "default-nested-qualification"
-
-    def prepare(self):
-        for key in ("A", "B"):
-            catalogs = {name for name in self.artifacts[key]["files"] if name.startswith("lib/ducklake-catalog-")}
-            require(catalogs == {"lib/ducklake-catalog-0.17.0.jar"}, "Not a default catalog0.17.0 bundle")
-        super().prepare()
-        self.result["lane"] = "released-catalog-0.17.0"
 
 
 if __name__ == "__main__":

@@ -5,7 +5,11 @@ import dev.brikk.ducklake.catalog.DucklakeExpiryCleanupIncompleteException
 import dev.brikk.ducklake.catalog.ExpireSnapshotsResult
 import org.apache.doris.connector.spi.DorisConnectorException
 
-/** The released catalog distinguishes committed expiry from failed cleanup; never suggest re-expiry. */
+/**
+ * Expiry is two phases in the catalog: the snapshot expiry commits first, then cleanup pages run.
+ * When cleanup fails after the commit, retrying `expire_snapshots` would be wrong (the snapshots are
+ * already gone); the operator has to resume cleanup instead, so the message says exactly that.
+ */
 internal fun expireDuckLakeSnapshots(catalog: DucklakeCatalog, ids: Set<Long>): ExpireSnapshotsResult =
     try {
         catalog.expireSnapshots(ids)

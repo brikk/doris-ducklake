@@ -1,7 +1,7 @@
 """Opt-in F24-E real Doris A/B acceptance on new, UUID-owned infrastructure.
 
 Copies the unmodified public driver into a private compose sandbox. Never targets
-the retained default, qualification, R07 or DuckBridge stacks. Requires local
+the retained default, qualification or DuckBridge stacks. Requires local
 pinned images, two verified bundles and the released DuckDB 1.5.6 CLI.
 """
 
@@ -107,7 +107,7 @@ class Acceptance:
 
     def protected(self):
         names = self.command(["container", "ls", "--all", "--format", "{{.Names}}"])
-        selected = [n for n in names.splitlines() if n.startswith(("doris-api27-", "doris-api26-", "doris-api24-", "doris-r07-", "doris-ducklake-", "trino-ducklake-"))]
+        selected = [n for n in names.splitlines() if n.startswith(("doris-api27-", "doris-api26-", "doris-api24-", "doris-ducklake-", "trino-ducklake-"))]
         containers = {}
         for name in selected:
             item = self.data("container", "inspect", name)[0]

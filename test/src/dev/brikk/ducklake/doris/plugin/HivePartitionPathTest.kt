@@ -3,11 +3,6 @@ package dev.brikk.ducklake.doris.plugin
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 
-/**
- * Pure-logic coverage of [HivePartitionPath] — the hive `key=value/` path
- * parser + URL-decoder used to constant-fill body-absent partition columns of
- * hive-layout `add_files` files. Mirrors the trino side's parsing.
- */
 internal class HivePartitionPathTest {
 
     @Test

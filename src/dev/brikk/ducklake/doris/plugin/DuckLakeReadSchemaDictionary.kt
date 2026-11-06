@@ -18,7 +18,11 @@ import org.apache.thrift.TDeserializer
 import org.apache.thrift.TSerializer
 import org.apache.thrift.protocol.TBinaryProtocol
 
-/** Shared by released/candidate lanes for current native files; omitted nested fields are NOT a name fallback. */
+/**
+ * Adds the full field-id tree for nested (STRUCT/LIST/MAP) columns to the scalar schema dictionary.
+ * Only current-snapshot native files are supported: a nested field omitted from a legacy name map
+ * is not a name fallback, and history would need per-snapshot trees.
+ */
 internal fun encodeReadSchemaDictionary(
     catalog: DucklakeCatalog,
     handle: DuckLakeTableHandle,
@@ -29,7 +33,6 @@ internal fun encodeReadSchemaDictionary(
     val nested = columns.filter { it.columnType.typeName in setOf("STRUCT", "ARRAY", "MAP") }
     val scalar = DuckLakeSchemaDictionary.encode(columns, nameMaps)
     if (nested.isEmpty()) return scalar
-    require(catalog !is DuckLakeQualifiedReadCatalog) { "Final-1.1 nested file scans are not qualified" }
     require(!hasMappings) { "Doris nested legacy-file mappings are not qualified" }
     require(handle.snapshotId == catalog.currentSnapshotId) { "Doris historical nested file scans are not qualified" }
     val raw = catalog.getAllColumnsWithParentage(handle.tableId, handle.snapshotId)
@@ -62,7 +65,7 @@ private class NativeNestedFields(rows: List<DucklakeColumn>) {
             "struct" -> TPrimitiveType.STRUCT
             "list" -> TPrimitiveType.ARRAY
             "map" -> TPrimitiveType.MAP
-            else -> TPrimitiveType.STRING // Scalar tag is only a discriminator on this field-ID path.
+            else -> TPrimitiveType.STRING // only a discriminator here; the real type comes from the table schema
         }
         val field = TField().setId(Math.toIntExact(row.columnId)).setName(row.columnName.lowercase(Locale.ROOT))
             .setIsOptional(row.nullsAllowed).setType(TColumnType().setType(type))

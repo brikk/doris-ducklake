@@ -40,10 +40,11 @@ an upstream merge or an unrelated green suite.
   namespaced materializations and lifecycle/GC; verify UTC annotations and default
   refusals independently. The parked inline-delete test remains visible until its
   fixture and implementation are real; don't simply un-disable it.
-- [ ] **R07:** close statement-wide capture/cancellation/deadline/budget and physical
-  lease requirements before widening the [candidate tier](CATALOG-CANDIDATE.md).
-  Broader routes, per-row history filters, inline payloads, CDC, mixed versions,
-  fleet/production/performance and producer long-path failures remain unqualified.
+- [ ] **R07 (DuckLake 1.1 reads):** the connector refuses 1.1 catalogs. The experimental
+  bounded reader trial was removed in favour of a fresh design on the released catalog's
+  `Final11*` APIs; its findings are [archived](archive/CATALOG-CANDIDATE.md). Open
+  requirements: statement-wide capture/cancellation/deadline, physical file leases,
+  per-row history filters, inline payloads, CDC and mixed-version handling.
 
 ## Harness and compatibility
 

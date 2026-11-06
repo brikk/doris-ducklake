@@ -11,22 +11,11 @@ import org.junit.jupiter.api.Test
 import org.assertj.core.api.Assertions.assertThat
 
 /**
- * Pins the capability declaration on [DuckLakeConnector] against the P6
- * iceberg-cutover SPI (`branch-catalog-spi` @ 8b391c7), where the
- * capability-unification gutted the declarative enum: pushdown / insert /
- * create-table / time-travel / statistics constants were deleted (fe-core
- * never consumed them — pushdown is attempted unconditionally, INSERT
- * admission is `supportedWriteOperations()`, DDL routes through
- * `ConnectorTableOps`). `SUPPORTS_MVCC_SNAPSHOT` is the surviving flag that
- * matters: it gates MVCC table creation (snapshot pinning + time travel).
- *
- * Adding entries from the new opt-in set (`SUPPORTS_SHOW_CREATE_DDL`,
- * `SUPPORTS_TOPN_LAZY_MATERIALIZE`, `SUPPORTS_NESTED_COLUMN_PRUNE`,
- * `SUPPORTS_VIEW`, `SUPPORTS_COLUMN_AUTO_ANALYZE`,
- * `SUPPORTS_METADATA_PRELOAD`, `SUPPORTS_STORAGE_PREDICATE_PRUNING`,
- * `SUPPORTS_FIELD_ID_ACCESS_PATH`, `SUPPORTS_SYS_TABLE_NESTED_COLUMN_PRUNE`) is a deliberate roadmap step (see
- * `dev-docs/TODO-read.md` + `REPORT-doris-p6-iceberg-spi-cutover.md`) —
- * bump the assertion in the same PR that flips a feature on.
+ * Pins the capability declaration. Adding one of the opt-ins (`SUPPORTS_SHOW_CREATE_DDL`,
+ * `SUPPORTS_TOPN_LAZY_MATERIALIZE`, `SUPPORTS_NESTED_COLUMN_PRUNE`, `SUPPORTS_VIEW`,
+ * `SUPPORTS_COLUMN_AUTO_ANALYZE`, `SUPPORTS_METADATA_PRELOAD`, `SUPPORTS_STORAGE_PREDICATE_PRUNING`,
+ * `SUPPORTS_FIELD_ID_ACCESS_PATH`, `SUPPORTS_SYS_TABLE_NESTED_COLUMN_PRUNE`) is a deliberate step
+ * with prerequisites in `dev-docs/TODO-read.md`; bump this assertion in the same change.
  */
 internal class DuckLakeConnectorCapabilitiesTest {
 

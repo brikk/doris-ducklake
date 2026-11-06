@@ -61,7 +61,7 @@ internal class DuckLakeScanPlanLimitPushdownTest {
         // file too (2 < 3, 4 >= 3) → both ranges. The BE still applies the real
         // LIMIT on top; we only spare it the unreachable second file.
         DuckLakeConnectorProvider()
-            .create(DorisTestIdiomKit.isolatedProperties(isolated), FakeConnectorContext("dl", 1L))
+            .create(DorisTestSupport.isolatedProperties(isolated), FakeConnectorContext("dl", 1L))
             .use { connector ->
                 val metadata = connector.getMetadata(null)
                 val plan = connector.getScanPlanProvider()
@@ -93,7 +93,7 @@ internal class DuckLakeScanPlanLimitPushdownTest {
     fun limitKeepsAllFilesWhenLimitExceedsRowCount() {
         // LIMIT larger than the whole table (4 rows) can't drop anything.
         DuckLakeConnectorProvider()
-            .create(DorisTestIdiomKit.isolatedProperties(isolated), FakeConnectorContext("dl", 1L))
+            .create(DorisTestSupport.isolatedProperties(isolated), FakeConnectorContext("dl", 1L))
             .use { connector ->
                 val metadata = connector.getMetadata(null)
                 val plan = connector.getScanPlanProvider()
@@ -111,7 +111,7 @@ internal class DuckLakeScanPlanLimitPushdownTest {
         // -1 (the no-limit sentinel) and 0 must behave exactly like the 4-arg
         // planScan: full file set, no trim.
         DuckLakeConnectorProvider()
-            .create(DorisTestIdiomKit.isolatedProperties(isolated), FakeConnectorContext("dl", 1L))
+            .create(DorisTestSupport.isolatedProperties(isolated), FakeConnectorContext("dl", 1L))
             .use { connector ->
                 val metadata = connector.getMetadata(null)
                 val plan = connector.getScanPlanProvider()
@@ -134,7 +134,7 @@ internal class DuckLakeScanPlanLimitPushdownTest {
         // the full file set is emitted even though LIMIT 1 would otherwise trim
         // to one file.
         DuckLakeConnectorProvider()
-            .create(DorisTestIdiomKit.isolatedProperties(isolated), FakeConnectorContext("dl", 1L))
+            .create(DorisTestSupport.isolatedProperties(isolated), FakeConnectorContext("dl", 1L))
             .use { connector ->
                 val metadata = connector.getMetadata(null)
                 val plan = connector.getScanPlanProvider()
@@ -165,7 +165,7 @@ internal class DuckLakeScanPlanLimitPushdownTest {
         // over-counts the 3 live rows. The gate refuses trimming: the data file +
         // its delete survive, and the range stays a normal (-1) range.
         DuckLakeConnectorProvider()
-            .create(DorisTestIdiomKit.isolatedProperties(isolated), FakeConnectorContext("dl", 1L))
+            .create(DorisTestSupport.isolatedProperties(isolated), FakeConnectorContext("dl", 1L))
             .use { connector ->
                 val metadata = connector.getMetadata(null)
                 val plan = connector.getScanPlanProvider()

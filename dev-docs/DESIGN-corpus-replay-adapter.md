@@ -125,7 +125,7 @@ missing/ambiguous SQL counterparts unmapped. See the
 [November 4 baseline investigation](VALIDATION-CORPUS-BASELINE-2026-11-04.md).
 
 Current focused native/quoted/Boolean/float replay acceptance is independently
-strict and measured on Java25/17; see [CATALOG-CANDIDATE.md](CATALOG-CANDIDATE.md).
+strict and measured on Java25/17; see [COMPOSE.md](COMPOSE.md).
 It does not repair every broad-corpus M13–M17 finding or qualify a full campaign.
 
 The original interface sketch, bring-up checklist and old counts are retained in

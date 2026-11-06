@@ -49,15 +49,15 @@ internal class DorisCorpusReplayTest {
                 "custom METADATA_SCHEMA/METADATA_PARAMETERS not threaded to the FE catalog properties",
             "metadata/ducklake_settings.test" to
                 "asserts metadata backend type 'duckdb'; the PG backend-axis rewrite makes it 'postgres' by design",
-            // ---- data_inlining: served now (Stage 1 scalar); these hit known gaps ----
+            // ---- data_inlining: scalar inlined reads are served; these hit known gaps ----
             "data_inlining/data_inlining_encryption.test" to
                 "ENCRYPTED DuckLake attach (DuckDB-only parquet encryption); not a Doris read path",
             "data_inlining/data_inlining_per_schema_alter.test" to
                 "column DEFAULT values over inlined data (same gap as issue_1135; TODO-read)",
             "data_inlining/data_inlining_update_inline_verification.test" to
-                "inlined DELETEs (Stage 2): UPDATE produces inlined file-deletions the connector can't apply",
+                "UPDATE produces inlined file-deletions the connector can't apply",
             "data_inlining/data_inlining_transaction_local_delete.test" to
-                "inlined transaction-local deletes (Stage 2 inlined-delete territory)",
+                "inlined transaction-local deletes the connector can't apply",
             // These assert physical file counts over the warehouse via recursive
             // GLOB('<data_path>/**'). Our inlined-data read synthesizes a temp
             // Parquet on the SHARED warehouse storage (the compose crutch — the

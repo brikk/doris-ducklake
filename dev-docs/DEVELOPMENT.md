@@ -43,12 +43,8 @@ When building multiple output-directory lanes concurrently, give each its own
 
 ## Source map
 
-- `src/`: shared connector lifecycle, metadata, structured type mapper, scan/commit planning and field-ID encoding.
-- `read-tiers/released/`: default release reader refusal gate.
-- `read-tiers/r07/`: separately selected published-candidate experimental reader configuration.
-- `test/src/`: ordinary plugin tests, replay adapter, nested/replay regressions and release native live probes.
-- `test/released/`: 1.0 replay setup/execution/mirror scopes, PostgreSQL oracle bindings and release contract regressions.
-- `test/r07/`: extra candidate tests and bounded live probes.
+- `src/`: connector lifecycle, metadata, type mapping, scan/commit planning, field-ID encoding and maintenance procedures.
+- `test/src/`: plugin tests, replay adapter, nested/replay regressions, format-admission contracts and live probes.
 - `build-logic/`: packaging identity/manifest and shared build conventions.
 - `compose/`: deployment/provenance/correctness supervisor, fixture controllers and tests.
 - `ducklake/`: pinned upstream corpus submodule, not vendored connector implementation.
@@ -73,8 +69,7 @@ Python test discovery includes opt-in real-Docker tests that skip unless explici
 enabled. Report skips honestly; the qualification's frozen-source 130-case run is
 a separate recorded result, not a promised count for every invocation.
 
-See [COMPOSE.md](COMPOSE.md) for A/B/full-smoke acceptance and
-[CATALOG-CANDIDATE.md](CATALOG-CANDIDATE.md) for separate native read harnesses.
+See [COMPOSE.md](COMPOSE.md) for A/B/full-smoke acceptance and the native read harnesses.
 The API27 qualification's extended 450-DEFAULT/TopN/timezone/restart controller
 and exact build scripts are retained at the evidence paths in the
 [qualification report](VALIDATION-DORIS-API27-2026-11-02.md); they are local evidence,

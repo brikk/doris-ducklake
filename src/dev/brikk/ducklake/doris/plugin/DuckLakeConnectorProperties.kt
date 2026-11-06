@@ -1,46 +1,29 @@
 package dev.brikk.ducklake.doris.plugin
 
-/**
- * Catalog-level property names and the required-key set for this connector.
- *
- * The SPI's typed `ConnectorPropertyMetadata` descriptor was removed (upstream
- * #66135-era connector consolidation): the engine no longer consumes a per-property
- * metadata list, and required-property validation is done directly by the connector's
- * `ConnectorProvider.validateProperties`. We therefore keep only the key constants and
- * the plain set of required keys the provider checks — identical validation behaviour,
- * no dependency on the deleted descriptor type. (Iceberg's connector likewise validates
- * with plain code in IcebergConnectorProvider.validateProperties.)
- */
+/** Catalog property names. Required-key validation happens in [DuckLakeConnectorProvider.validateProperties]. */
 internal object DuckLakeConnectorProperties {
 
     const val METADATA_URL = "metadata.url"
     const val METADATA_USER = "metadata.user"
     const val METADATA_PASSWORD = "metadata.password"
     const val STORAGE_WAREHOUSE = "storage.warehouse"
-    const val ENABLE_FINAL11_READS = "experimental.final11.reads"
     const val CATALOG_MAX_CONNECTIONS = "catalog.max-connections"
     const val CATALOG_MIN_IDLE_CONNECTIONS = "catalog.min-idle-connections"
     const val CATALOG_CONNECTION_IDLE_TIMEOUT = "catalog.connection-idle-timeout"
     const val CATALOG_CONNECTION_MAX_LIFETIME = "catalog.connection-max-lifetime"
     const val CATALOG_CONNECTION_TIMEOUT = "catalog.connection-timeout"
 
-    // Mirrors the in-tree iceberg connector's ENABLE_MAPPING_TIMESTAMP_TZ
-    // (fe-connector-iceberg IcebergConnectorProperties): default false maps a
-    // DuckLake `timestamptz` to naive DATETIMEV2 (correct UTC values, zone-naive
-    // typing) for broad BE compatibility; true maps to zone-aware TIMESTAMPTZ,
-    // which needs a BE new enough to read TIMESTAMP_MICROS(isAdjustedToUtc) into
-    // a TimeStampTz slot (Int64ToTimestampTz, master-only; NOT in 4.0.x/4.1.x releases incl. 4.1.2 — verified).
+    /**
+     * Default false maps DuckLake `timestamptz` to zone-naive DATETIMEV2 (values are correct UTC
+     * instants). True maps it to zone-aware TIMESTAMPTZ, which needs a BE that can read
+     * TIMESTAMP_MICROS(isAdjustedToUtc) into a TimeStampTz slot — master only, not in any 4.x release.
+     */
     const val ENABLE_MAPPING_TIMESTAMP_TZ = "enable.mapping.timestamp_tz"
 
-    // Retention floor for the expire_snapshots maintenance procedure's retention mode — the
-    // Doris analogue of Trino's `ducklake.maintenance.min-retention`. Guards against a too-small
-    // retention_threshold nuking recent time-travel snapshots. Default 7d (see DuckLakeProcedureOps).
+    /** Floor for `expire_snapshots`' retention mode, so a careless threshold can't drop recent snapshots. Default 7d. */
     const val MAINTENANCE_MIN_RETENTION = "maintenance.min-retention"
 
-    // The catalog properties that must be present and non-empty on CREATE CATALOG.
-    // Same set the former requiredStringProperty(...) descriptors declared:
-    // metadata.url, metadata.user, storage.warehouse. metadata.password is optional
-    // (trust auth), and the boolean/retention knobs have defaults.
+    /** `metadata.password` is optional (trust auth); the pool and mapping knobs have defaults. */
     val REQUIRED_KEYS: List<String> = listOf(
         METADATA_URL,
         METADATA_USER,

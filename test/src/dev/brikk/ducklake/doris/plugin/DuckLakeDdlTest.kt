@@ -131,8 +131,7 @@ internal class DuckLakeDdlTest {
     @Throws(Exception::class)
     fun createsIcebergBucketPartitionedTable() {
         withCatalog { catalog ->
-            // PARTITIONED BY (bucket(4, name)) — the Iceberg-transform path that produces a
-            // real DuckLake (murmur3) bucket, BE-equivalence proven by the W2c live smoke.
+            // PARTITIONED BY (bucket(4, name)): the Iceberg-transform path that produces a real murmur3 bucket.
             val request = ConnectorCreateTableRequest.builder()
                 .dbName("w1b_bucket")
                 .tableName("by_name_bucket")

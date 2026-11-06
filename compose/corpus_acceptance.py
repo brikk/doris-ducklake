@@ -97,7 +97,7 @@ class FullCorpusAcceptance(Acceptance):
             (self.root / "selection.txt").write_text("\n".join(selection) + "\n")
         self.result["replay_scratch"] = "owned per-engine/per-target directory outside oracle TEST_DIR/warehouse"
         self.result["source_sha256"] = {str(p.relative_to(project)): file_hash(p)
-            for directory in ("src", "read-tiers", "test/src", "test/released", "test/r07")
+            for directory in ("src", "test/src")
             for p in (project / directory).rglob("*.kt")}
         for name in ("build.gradle.kts", "gradle/libs.versions.toml", "compose/corpus_acceptance.py"):
             self.result["source_sha256"][name] = file_hash(project / name)

@@ -25,16 +25,9 @@ import java.sql.SQLException
 import java.sql.DriverManager
 
 /**
- * Exercises [DuckLakeConnectorTransaction]'s commit path end-to-end against the
- * real Postgres-backed DuckLake catalog — the whole FE side of an INSERT *except*
- * the BE writing the Parquet file. We hand it a synthetic `TIcebergCommitData`
- * (what the BE's Iceberg sink would report), commit, and assert the catalog grew a
- * new snapshot whose data file + decoded column stats are visible to the read path.
- *
- * This is the validated core of write support (`supportsInsert=true`); the BE-coupled
- * half — the [DuckLakeWritePlanProvider] sink, Parquet field-ids, footer size — was
- * confirmed on a live cluster (W2 smoke). This headless test remains the independent
- * oracle for the commit mapping — see `dev-docs/TODO-write.md`.
+ * The whole FE side of an INSERT except the BE writing the file: a synthetic `TIcebergCommitData` is
+ * committed and the catalog must grow a snapshot whose data file and decoded stats the read path sees.
+ * The BE-coupled half (sink, field ids, footer size) is covered by the compose smoke.
  */
 internal class DuckLakeConnectorTransactionTest {
 

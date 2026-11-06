@@ -25,7 +25,6 @@ internal class DuckLakePoolConfigurationTest {
         assertThat(config.catalogConnectionMaxLifetime).isNull()
         assertThat(config.catalogConnectionTimeout).isEqualTo(defaults.catalogConnectionTimeout)
         assertThat(config.requiredCatalogFormat).isEqualTo(DucklakeCatalogFormat.V1_0)
-        assertThat(config.enableFinal11Reads).isFalse()
     }
 
     @Test

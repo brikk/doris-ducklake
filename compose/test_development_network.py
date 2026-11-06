@@ -47,22 +47,16 @@ class DevelopmentNetworkTests(unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get("F24_DOCKER_TEST") == "1", "opt-in real Compose rendering")
 class RenderedDevelopmentNetworkTests(unittest.TestCase):
-    def test_actual_default_and_r07_composes_are_loopback_only_without_internal_publications(self):
+    def test_actual_compose_is_loopback_only_without_internal_publications(self):
         root = Path(__file__).resolve().parent
-        for name in ("docker-compose.yml", "r07-qualification.yml"):
-            with self.subTest(compose=name):
-                config = json.loads(subprocess.check_output(
-                    ["docker", "compose", "-f", str(root / name), "config", "--format", "json"], text=True,
-                    env=dict(os.environ, DORIS_R07_ROOT="/tmp/opencode/f23-render-only")))
-                if name == "r07-qualification.yml":
-                    config["services"]["doris-fe"] = config["services"].pop("fe")
-                    config["services"]["doris-be"] = config["services"].pop("be")
-                development_compose_network(config)
-                ports = config["services"]["doris-fe"]["ports"]
-                self.assertEqual({(p["target"], p["host_ip"], p["protocol"]) for p in ports},
-                                 {(8030, "127.0.0.1", "tcp"), (9030, "127.0.0.1", "tcp")})
-                self.assertEqual(len(ports), 2)
-                self.assertFalse(config["services"]["doris-be"].get("ports"))
+        config = json.loads(subprocess.check_output(
+            ["docker", "compose", "-f", str(root / "docker-compose.yml"), "config", "--format", "json"], text=True))
+        development_compose_network(config)
+        ports = config["services"]["doris-fe"]["ports"]
+        self.assertEqual({(p["target"], p["host_ip"], p["protocol"]) for p in ports},
+                         {(8030, "127.0.0.1", "tcp"), (9030, "127.0.0.1", "tcp")})
+        self.assertEqual(len(ports), 2)
+        self.assertFalse(config["services"]["doris-be"].get("ports"))
 
 
 if __name__ == "__main__":

@@ -1,11 +1,11 @@
 package dev.brikk.ducklake.doris.plugin
 
-import dev.brikk.ducklake.catalog.DucklakeCatalogConfig
 import dev.brikk.ducklake.catalog.DucklakeCatalogFormat
 import dev.brikk.ducklake.catalog.DucklakeCatalogFormatNotAdmittedException
 import dev.brikk.ducklake.catalog.JdbcDucklakeCatalog
 import dev.brikk.ducklake.catalog.TestingDucklakePostgreSqlCatalogServer
 import dev.brikk.ducklake.doris.plugin.cache.FakeConnectorContext
+import org.apache.doris.connector.spi.DorisConnectorException
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.AfterAll
@@ -17,7 +17,7 @@ import java.sql.DriverManager
 import java.util.UUID
 import java.util.function.Supplier
 
-/** Stored-format admission through the released Doris configuration, not a manually edited version string. */
+/** DuckLake 1.0 lakes are read; 1.1 lakes are refused, both at connector creation and when a lake migrates under a live connector. */
 internal class DuckLakeCatalogFormatTest {
     @TempDir lateinit var root: Path
 
@@ -30,11 +30,10 @@ internal class DuckLakeCatalogFormatTest {
     private data class Fixture(val database: String, val data: Path)
 
     @Test
-    fun releasedConfigLocksOneZeroAndReadsItsParquetAndInlineMetadata() {
+    fun connectorLocksOneZeroAndReadsItsParquetAndInlineMetadata() {
         val fixture = fixture("1.0")
-        val config = config(fixture)
+        val config = connector(fixture).catalogConfiguration()
         assertThat(config.requiredCatalogFormat).isEqualTo(DucklakeCatalogFormat.V1_0)
-        assertThat(config.enableFinal11Reads).isFalse()
         JdbcDucklakeCatalog(config).use { catalog ->
             catalog.readSession(Supplier {
                 val snapshot = catalog.currentSnapshotId
@@ -50,8 +49,26 @@ internal class DuckLakeCatalogFormatTest {
     }
 
     @Test
-    fun storedOneOneRefusesLayoutReadsButRemainsDiagnosable() {
-        JdbcDucklakeCatalog(config(fixture("1.1"))).use { catalog ->
+    fun connectorOpensOneZeroAndListsItsSchemas() {
+        connector(fixture("1.0")).use { connector ->
+            connector.preCreateValidation(null)
+            assertThat(connector.getMetadata(null).listDatabaseNames(null)).contains("main")
+        }
+    }
+
+    @Test
+    fun connectorRefusesOneOneWithAnExplanation() {
+        connector(fixture("1.1")).use { connector ->
+            assertThatThrownBy { connector.preCreateValidation(null) }
+                .isInstanceOf(DorisConnectorException::class.java)
+                .hasMessageContaining("DuckLake 1.1")
+                .hasMessageContaining("not supported")
+        }
+    }
+
+    @Test
+    fun storedOneOneRefusesLibraryReadsButRemainsDiagnosable() {
+        JdbcDucklakeCatalog(connector(fixture("1.1")).catalogConfiguration()).use { catalog ->
             assertThat(catalog.getSpecVersion()).isEqualTo("1.1")
             assertThatThrownBy { catalog.readSession(Supplier { catalog.currentSnapshotId }) }
                 .isInstanceOf(DucklakeCatalogFormatNotAdmittedException::class.java)
@@ -65,7 +82,7 @@ internal class DuckLakeCatalogFormatTest {
     @Test
     fun migrationAfterConstructionIsRefusedOnTheNextReadAndWrite() {
         val fixture = fixture("1.0")
-        JdbcDucklakeCatalog(config(fixture)).use { catalog ->
+        JdbcDucklakeCatalog(connector(fixture).catalogConfiguration()).use { catalog ->
             assertThat(catalog.readSession(Supplier { catalog.currentSnapshotId })).isGreaterThan(0)
             native(fixture, "1.1", migrate = true)
             assertThat(catalog.getSpecVersion()).isEqualTo("1.1")
@@ -84,15 +101,17 @@ internal class DuckLakeCatalogFormatTest {
         }
     }
 
-    private fun config(fixture: Fixture) = DucklakeCatalogConfig().apply {
-        catalogDatabaseUrl = server.getJdbcUrl(fixture.database)
-        catalogDatabaseUser = server.getUser()
-        catalogDatabasePassword = server.getPassword()
-        dataPath = fixture.data.toString()
-        maxCatalogConnections = 1
-        minIdleCatalogConnections = 0
-        DuckLakeFinal11(emptyMap(), FakeConnectorContext("format-test", 1L)).configure(this)
-    }
+    private fun connector(fixture: Fixture) = DuckLakeConnector(
+        mapOf(
+            DuckLakeConnectorProperties.METADATA_URL to server.getJdbcUrl(fixture.database),
+            DuckLakeConnectorProperties.METADATA_USER to server.getUser(),
+            DuckLakeConnectorProperties.METADATA_PASSWORD to server.getPassword(),
+            DuckLakeConnectorProperties.STORAGE_WAREHOUSE to fixture.data.toString(),
+            DuckLakeConnectorProperties.CATALOG_MAX_CONNECTIONS to "1",
+            DuckLakeConnectorProperties.CATALOG_MIN_IDLE_CONNECTIONS to "0",
+        ),
+        FakeConnectorContext("format-test", 1L),
+    )
 
     private fun fixture(version: String): Fixture {
         val name = "format_" + UUID.randomUUID().toString().replace("-", "")

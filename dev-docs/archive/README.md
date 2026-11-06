@@ -17,8 +17,10 @@ Current developer docs start at [../README.md](../README.md).
   and rollback context, not API27 qualification.
 - F22/F23/F24/F25 validations and `TODO-F24-PLUGIN-PROVENANCE.md`: completed
   ownership/network/provenance/correctness work and its exact acceptance limits.
-- R07 validations and `R07-QUALIFICATION-API13.md`: historical local-candidate
-  campaign. Its retired repository override does not work in the current build.
+- R07 validations, `R07-QUALIFICATION-API13.md` and `CATALOG-CANDIDATE.md`: the
+  experimental DuckLake 1.1 reader trial (`read-tiers/r07`, pinned to catalog
+  0.13.0-SNAPSHOT). Removed from the tree on 2026-11-06; the connector refuses 1.1
+  catalogs. Neither the Gradle candidate lane nor the compose file exist any more.
 - Native nested/publication reports: initial reproductions, before/after controls
   and producer hashes; current API27 results are in the maintained qualification.
 - Original design/sanity/SPI/friction/research docs: useful prior mechanics and

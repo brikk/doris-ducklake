@@ -2,7 +2,6 @@ package dev.brikk.ducklake.doris.plugin
 
 import java.io.Serializable
 import java.util.Locale
-import java.util.Objects
 import java.util.Optional
 import org.apache.doris.connector.spi.scan.ConnectorScanRange
 import org.apache.doris.thrift.TFileFormatType
@@ -12,61 +11,28 @@ import org.apache.doris.thrift.TIcebergFileDesc
 import org.apache.doris.thrift.TTableFormatFileDesc
 
 /**
- * Per-file scan range emitted by [DuckLakeScanPlanProvider].
+ * One data file as the BE sees it. Emitted as `table_format_type = "iceberg"` with the file shape in
+ * `iceberg_params`, so the BE dispatches its existing Iceberg parquet reader: DuckLake's parquet
+ * files already carry field ids, which is what that reader keys on. Position deletes travel as
+ * `iceberg_params.delete_files`.
  *
- * Step 4 / Option A wire format (sanity-check §2.1): emits
- * `table_format_type = "iceberg"` and packs the file shape into
- * `iceberg_params` so Doris's BE dispatches the existing Iceberg
- * parquet reader. DuckLake's parquet files already carry field-ids on each
- * column, which is what the reader consumes — zero BE change needed.
- *
- * Step 7: position-delete files supplied via [DuckLakePositionDelete]
- * are emitted as `iceberg_params.delete_files` entries with
- * `content = POSITION_DELETE (1)`. DuckLake catalogues only one active
- * position-delete file per data file per snapshot, so `positionDeletes`
- * has size 0 or 1 in v1; the wire list shape leaves headroom for that to
- * relax without a shape change.
- *
- * P6 additions (both FE-plan-level; the normal-range thrift bytes pinned by
- * `DuckLakeScanRangeThriftParityTest` are unchanged):
- *  - [pushDownRowCount]: the precomputed COUNT(*)-pushdown total the single
- *    collapsed count range carries (`-1` sentinel on every normal range —
- *    load-bearing, see `PluginDrivenScanNode.resolvePushDownRowCount`).
- *  - [partitionBearing] / [partitionValues]: metadata-sourced partition info
- *    so the engine never falls back to Hive-style `key=value` path parsing
- *    for DuckLake's non-`key=value` file layout (see
- *    `PluginDrivenSplit.buildPartitionValues` and the P6 report §(d)).
- *
- * Constructed via [Builder] (mirrors `IcebergScanRange.Builder`); the
- * positional constructors below survive for the pre-P6 call sites and the
- * thrift-parity goldens.
+ * The thrift bytes of a normal range are pinned by `DuckLakeScanRangeThriftParityTest`; the
+ * FE-plan-level fields ([partitionBearing], [partitionValues], [pushDownRowCount]) and the
+ * hive-layout [columnsFromPath] fill leave them unchanged unless set.
  */
 internal class DuckLakeScanRange private constructor(builder: Builder) :
     ConnectorScanRange, Serializable {
 
-    private val path: String =
-        Objects.requireNonNull(builder.path, "path") as String
+    private val path: String = requireNotNull(builder.path) { "path" }
     private val start: Long = builder.start
     private val length: Long = builder.length
     private val fileSize: Long = builder.fileSize
-    private val fileFormat: String =
-        Objects.requireNonNull(builder.fileFormat, "fileFormat") as String
-    private val positionDeletes: List<DuckLakePositionDelete> =
-        java.util.List.copyOf(Objects.requireNonNull(builder.positionDeletes, "positionDeletes"))
-    // Metadata-sourced partition marker + identity values (see class KDoc).
-    // Copied defensively — the range is handed to the engine and serialized.
+    private val fileFormat: String = requireNotNull(builder.fileFormat) { "fileFormat" }
+    private val positionDeletes: List<DuckLakePositionDelete> = builder.positionDeletes.toList()
     private val partitionBearing: Boolean = builder.partitionBearing
-    private val partitionValues: Map<String, String> =
-        java.util.Map.copyOf(Objects.requireNonNull(builder.partitionValues, "partitionValues"))
-    // -1 = "no precomputed count" sentinel (the ConnectorScanRange default).
+    private val partitionValues: Map<String, String> = builder.partitionValues.toMap()
     private val pushDownRowCount: Long = builder.pushDownRowCount
-    // Body-ABSENT partition columns to constant-fill from the file path, in
-    // fill order (see [columnsFromPath] KDoc + [populateRangeParams]). Values are
-    // always non-null: NULL hive partition values are rejected FE-side (the BE's
-    // columns_from_path fill cannot represent NULL — see DuckLakeScanPlanProvider).
-    // Empty for every native DuckLake file (partition columns in the body).
-    private val columnsFromPath: Map<String, String> =
-        java.util.LinkedHashMap(Objects.requireNonNull(builder.columnsFromPath, "columnsFromPath"))
+    private val columnsFromPath: Map<String, String> = LinkedHashMap(builder.columnsFromPath)
 
     constructor(path: String, start: Long, length: Long, fileSize: Long, fileFormat: String) :
         this(path, start, length, fileSize, fileFormat, listOf())
@@ -91,10 +57,6 @@ internal class DuckLakeScanRange private constructor(builder: Builder) :
     @JvmName("positionDeletes")
     fun positionDeletes(): List<DuckLakePositionDelete> = positionDeletes
 
-    // getRangeType()/ConnectorScanRangeType was removed from ConnectorScanRange in the
-    // SPI scan-surface consolidation (upstream #66135-era): every range is a file scan
-    // now, so the engine no longer asks. Nothing to override; behaviour unchanged.
-
     override fun getPath(): Optional<String> = Optional.of(path)
 
     override fun getStart(): Long = start
@@ -110,73 +72,36 @@ internal class DuckLakeScanRange private constructor(builder: Builder) :
     override fun getTableFormatType(): String = TABLE_FORMAT_TYPE
 
     /**
-     * The identity partition column values for this file, keyed by lowercased
-     * column name in active-spec field order (mirrors iceberg's
-     * `getIdentityPartitionInfoMap` keying). Consumed FE-side only:
-     * `PluginDrivenSplit.buildPartitionValues` copies `values()` onto the
-     * split. For NATIVE DuckLake files this is not written to thrift — the
-     * writer stores partition columns in the parquet body, so the BE decodes
-     * them from the file. Hive-layout `add_files` files are the exception: their
-     * body lacks the partition columns, so those are emitted as
-     * `columns_from_path` on the wire — see [columnsFromPath] / [populateRangeParams].
+     * Identity partition values keyed by lowercased column name, consumed FE-side only. Native
+     * DuckLake files carry partition columns in the parquet body, so nothing goes to thrift here;
+     * hive-layout `add_files` files are the exception, handled by [columnsFromPath].
      */
     override fun getPartitionValues(): Map<String, String> = partitionValues
 
     /**
-     * `true` for every range of a table with an ACTIVE partition spec (even
-     * when this particular file recorded no values — e.g. bucket-only specs,
-     * or files written under a retired spec). DuckLake partition values come
-     * from `ducklake_file_partition_value` metadata, never from a Hive-style
-     * `key=value` directory layout, so the engine must map an empty values
-     * map to a non-null EMPTY list instead of `null` — `null` makes
-     * `FileQueryScanNode` path-parse, which breaks on our layout (see
-     * `PluginDrivenSplit.buildPartitionValues`). Unpartitioned tables keep
-     * `false`, preserving the pre-P6 behaviour byte-for-byte.
+     * True for every range of a table with an active spec, even a file that recorded no values.
+     * The engine must map an empty values map to an empty list, not null: null makes
+     * `FileQueryScanNode` parse `key=value` out of the path, which DuckLake's layout doesn't have.
      */
     override fun isPartitionBearing(): Boolean = partitionBearing
 
     /**
-     * The precomputed COUNT(*)-pushdown row count this range carries, or `-1`
-     * for every normal range. The generic `PluginDrivenScanNode` reads it
-     * (via `resolvePushDownRowCount`) for the EXPLAIN `pushdown agg=COUNT (n)`
-     * line; the same value drives the BE thrift `table_level_row_count` in
-     * [populateRangeParams]. The `-1` sentinel is load-bearing: a table whose
-     * count is not exactly servable from file metadata must emit NO count
-     * range so the BE counts by reading (mirrors `IcebergScanRange`).
+     * The metadata COUNT(*) total on the single collapsed count range; `-1` on every other range.
+     * The sentinel matters: a table whose count isn't exactly servable must emit no count range so
+     * the BE counts by reading.
      */
     override fun getPushDownRowCount(): Long = pushDownRowCount
 
-    // getDeleteFiles()/ConnectorDeleteFile was removed from ConnectorScanRange. Delete files
-    // now travel on the per-range thrift (iceberg_params.delete_files, populated below) and
-    // are read back for the VERBOSE EXPLAIN by ConnectorScanPlanProvider.getDeleteFiles(
-    // TTableFormatFileDesc) — implemented on DuckLakeScanPlanProvider. Behaviour unchanged:
-    // this range never carried SPI-level delete descriptors (it always returned empty).
-
     override fun populateRangeParams(formatDesc: TTableFormatFileDesc, rangeDesc: TFileRangeDesc) {
-        Objects.requireNonNull(formatDesc, "formatDesc")
-        Objects.requireNonNull(rangeDesc, "rangeDesc")
-
         val fileDesc = TIcebergFileDesc()
         fileDesc.formatVersion = ICEBERG_FORMAT_VERSION
         fileDesc.originalFilePath = path
-        // v2 enables BE delete-file dispatch. We always emit the list field
-        // (even when empty) so the BE side reads a present-but-empty list
-        // rather than an unset field — matches IcebergScanRange behaviour.
-        val deletes = ArrayList<TIcebergDeleteFileDesc>(positionDeletes.size)
-        for (pd in positionDeletes) {
-            deletes.add(toThrift(pd))
-        }
-        fileDesc.deleteFiles = deletes
+        // Always set, even when empty, so the BE reads a present-but-empty list like IcebergScanRange's.
+        fileDesc.deleteFiles = positionDeletes.map { toThrift(it) }
 
         formatDesc.icebergParams = fileDesc
-        // table_level_row_count: only the single collapsed COUNT(*)-pushdown
-        // range carries a real count (BE's count reader serves it without
-        // opening the file). Normal ranges leave the field UNSET: thrift
-        // declares `table_level_row_count = -1` as the default
-        // (PlanNodes.thrift), so unset is behaviourally identical to
-        // IcebergScanRange's explicit -1 while keeping the normal-range wire
-        // bytes byte-identical to the pre-count-pushdown shape pinned by
-        // DuckLakeScanRangeThriftParityTest.
+        // Thrift defaults table_level_row_count to -1, so leaving it unset on normal ranges keeps
+        // their wire bytes identical to the pre-count-pushdown shape.
         if (pushDownRowCount >= 0) {
             formatDesc.tableLevelRowCount = pushDownRowCount
         }
@@ -184,43 +109,20 @@ internal class DuckLakeScanRange private constructor(builder: Builder) :
     }
 
     /**
-     * Constant-fill for body-ABSENT partition columns (hive-layout `add_files`
-     * files). For a native DuckLake file [columnsFromPath] is empty and the
-     * three `columns_from_path*` fields stay UNSET — keeping the wire bytes
-     * byte-identical to the body-carried shape pinned by
-     * `DuckLakeScanRangeThriftParityTest` (the BE reads those partition columns
-     * from the parquet body). For a hive-layout file we emit the iceberg/hive
-     * native reader's path-fill triple: `columns_from_path_keys` (column names),
-     * `columns_from_path` (values), and `columns_from_path_is_null` (all `false`
-     * — NULL hive partition values are rejected FE-side because the BE's fill
-     * cannot represent them). The scan node must ALSO declare these columns as
-     * `path_partition_keys` (see `DuckLakeScanPlanProvider.getScanNodeProperties`)
-     * so the BE excludes them from the file/decode column set — without that the
-     * BE tries to read the body-absent column and fails "name_mapping must be set".
+     * Body-absent partition columns of a hive-layout file, filled from the path by the BE. Values
+     * are never null; NULL hive partitions are rejected FE-side because the BE fill can't represent
+     * them. The scan node must also declare these columns as `path_partition_keys` so the BE
+     * excludes them from file decode.
      */
     private fun populateColumnsFromPath(rangeDesc: TFileRangeDesc) {
         if (columnsFromPath.isEmpty()) {
             return
         }
-        val keys = ArrayList<String>(columnsFromPath.size)
-        val values = ArrayList<String>(columnsFromPath.size)
-        val isNull = ArrayList<Boolean>(columnsFromPath.size)
-        for ((name, value) in columnsFromPath) {
-            keys.add(name)
-            values.add(value)
-            isNull.add(false)
-        }
-        rangeDesc.columnsFromPathKeys = keys
-        rangeDesc.columnsFromPath = values
-        rangeDesc.columnsFromPathIsNull = isNull
+        rangeDesc.columnsFromPathKeys = columnsFromPath.keys.toList()
+        rangeDesc.columnsFromPath = columnsFromPath.values.toList()
+        rangeDesc.columnsFromPathIsNull = columnsFromPath.map { false }
     }
 
-    /**
-     * Builder mirroring `IcebergScanRange.Builder`, introduced when the range
-     * grew past the positional-constructor sweet spot (partition bearing +
-     * values + count pushdown would push the primary constructor to nine
-     * parameters). Only [DuckLakeScanPlanProvider] constructs through it.
-     */
     internal class Builder {
         var path: String? = null
             private set
@@ -274,54 +176,23 @@ internal class DuckLakeScanRange private constructor(builder: Builder) :
     companion object {
         private const val serialVersionUID: Long = 1L
 
-        // Iceberg v2 is the minimum that enables the BE reader's delete-file
-        // dispatch path. v2 also matches DuckLake's positional-delete semantics
-        // (sanity-check §2.1) so populating iceberg_params.delete_files is the
-        // entire Step 7 wire-side delta — no version bump required.
+        /** v2 is the minimum that enables the BE reader's delete-file dispatch. */
         const val ICEBERG_FORMAT_VERSION: Int = 2
 
-        // TODO(option-B): once upstream lands the 5-line BE patch recognising
-        // "ducklake" as a synonym of "iceberg" in file_scanner.cpp dispatch
-        // (sanity-check §2.1), flip this to "ducklake". The thrift bytes for
-        // iceberg_params remain identical — only this discriminator changes.
+        /** Until the BE recognises "ducklake" as a synonym in file_scanner.cpp, the iceberg reader is dispatched by name. */
         const val TABLE_FORMAT_TYPE: String = "iceberg"
 
-        // Iceberg's TIcebergDeleteFileDesc.content discriminator: 1 = position
-        // delete, 2 = equality delete, 3 = deletion vector. DuckLake only emits
-        // position deletes (sanity-check §4: no equality-delete capability).
-        // Mirrors IcebergDeleteFileDescriptor.Kind.POSITION_DELETE.wireValue().
+        /** TIcebergDeleteFileDesc.content: 1 = position delete, 2 = equality delete, 3 = deletion vector. */
         const val CONTENT_POSITION_DELETE: Int = 1
 
         private fun toThrift(pd: DuckLakePositionDelete): TIcebergDeleteFileDesc {
             val t = TIcebergDeleteFileDesc()
             t.setPath(pd.path)
-            if (pd.contentOffset != null) {
-                check(pd.fileFormat == "puffin" && pd.contentOffset >= 0 && (pd.contentSize ?: 0) > 0) {
-                    "Invalid qualified deletion-vector slice"
-                }
-                // content is a public Java field, unlike snake_case generated
-                // fields. Kotlin assignment bypasses setContent's isset bit!
-                t.setContent(3)
-                t.setContentOffset(pd.contentOffset)
-                t.setContentSizeInBytes(pd.contentSize!!)
-                return t
-            }
-            // DuckLake's catalog records the delete file's format on the
-            // ducklake_delete_file.format column ("parquet" in v1). The BE
-            // reader's iceberg path needs TFileFormatType (an enum); map by
-            // lowercased name. Anything other than parquet would be a writer
-            // upgrade we'd need to coordinate with the BE side anyway.
             when (pd.fileFormat.lowercase(Locale.ROOT)) {
                 "parquet" -> t.setFileFormat(TFileFormatType.FORMAT_PARQUET)
-                else -> throw IllegalStateException(
-                    "Unsupported DuckLake delete-file format: " + pd.fileFormat,
-                )
+                else -> throw IllegalStateException("Unsupported DuckLake delete-file format: ${pd.fileFormat}")
             }
-            // POSITION_DELETE discriminator. position_lower_bound /
-            // position_upper_bound are left unset: DuckLake's catalog doesn't
-            // record row-position bounds on delete files in v1, so the BE has
-            // to scan the full delete file. Functionally correct; pruning
-            // opportunity for a later pass.
+            // Position bounds are left unset: the catalog doesn't record them, so the BE scans the whole delete file.
             t.setContent(CONTENT_POSITION_DELETE)
             return t
         }

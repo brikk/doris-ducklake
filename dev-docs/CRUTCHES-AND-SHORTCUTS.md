@@ -1,7 +1,7 @@
 # Safety invariants and qualification limits
 
 Current default: catalog 0.14.0 on the exact [API27 runtime](DORIS-RUNTIME.md).
-The [published candidate](CATALOG-CANDIDATE.md) is separate and default-off.
+DuckLake 1.1 catalogs are refused; the experimental 1.1 reader trial is [archived](archive/CATALOG-CANDIDATE.md).
 This inventory records contracts to preserve, not a production-clean verdict.
 
 ## Native reader bridge
