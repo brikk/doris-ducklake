@@ -187,7 +187,7 @@ work; no extra writer dependency was bundled as an unrequested workaround.
 
 ## Duckbridge completion gate
 
-The source-qualified durable [build-reuse handoff](HANDOFF-DUCKBRIDGE-DORIS-62e3d81a-API24.md)
+The source-qualified durable build-reuse handoff (handoff note, removed)
 was delivered on October 28 via an informational prompt to Duckbridge's
 `doris-upstream` session `ses_f4491b970ffeOAw5swIcPceRUx` (`promptDispatched=true`).
 The Duckbridge project's knowledge note `3f0ba199-8afa-4a44-bac5-e6a32c3819fc` also

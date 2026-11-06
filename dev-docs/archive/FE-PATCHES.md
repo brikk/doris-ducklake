@@ -67,7 +67,7 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
   volumes and shared staged Duckbridge work are retained; no metadata migration.
   [API27 validation](../VALIDATION-DORIS-API27-2026-11-02.md) records final
   consumer/promotion closeout. At the user's explicit request the
-  [Duckbridge handoff](../HANDOFF-FOR-DUCKBRIDGE-DORIS-4bc7f426-API27.md)
+  Duckbridge handoff (handoff note, removed)
   is provided to the user only: **no Duckbridge message/dispatch/project note**.
 
 - **2026-10-31 -> source/SPI/runtime pin `8e10b235cf0`**
@@ -112,7 +112,7 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
 
   Promotion/final default checks and Duckbridge delivery are recorded in the
   [API26 validation](VALIDATION-DORIS-API26-2026-10-31.md) and
-  [build-reuse handoff](HANDOFF-DUCKBRIDGE-DORIS-8e10b235-API26.md).
+  build-reuse handoff (handoff note, removed).
   Historical API24 evidence and rollback remain below, not relabelled as API26.
 
 - **2026-10-28 -> source/SPI/runtime pin `62e3d81a42b`**
@@ -178,7 +178,7 @@ resolved upstream). See [[doris-fe-build-macos]] + [[doris-compose-smoke-remote]
   Full hashes, commands, evidence and rollback:
   [`VALIDATION-DORIS-API24-2026-10-28.md`](VALIDATION-DORIS-API24-2026-10-28.md).
   Mandatory Duckbridge build-reuse handoff:
-  [`HANDOFF-DUCKBRIDGE-DORIS-62e3d81a-API24.md`](HANDOFF-DUCKBRIDGE-DORIS-62e3d81a-API24.md).
+  `HANDOFF-DUCKBRIDGE-DORIS-62e3d81a-API24.md` (handoff note, removed).
 
 - **2026-10-10 -> source/SPI pin `dd456ab7a89`**
   (`[improvement](mtmv) Judge a base table column change by the MV query it reaches (#68646)`).

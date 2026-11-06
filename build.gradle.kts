@@ -238,7 +238,7 @@ tasks.check {
     dependsOn(pluginArtifactManifest, gradle.includedBuild("build-logic").task(":test"))
 }
 
-// ---- Live-cluster tests (dev-docs/DESIGN-corpus-replay-adapter.md) ----
+// ---- Live-cluster tests (dev-docs/CORPUS-REPLAY.md) ----
 // These need `compose/smoke.sh --up-only` and are kept out of `test`. The corpus mirror writes oracle
 // files under a host dir bind-mounted into the BE at the same absolute path, so java.io.tmpdir is
 // pinned there.

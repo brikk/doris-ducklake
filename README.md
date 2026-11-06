@@ -110,7 +110,7 @@ the documented prepared-statement requirement still applies.
 
 These are bounded capabilities, not a claim that all combinations or the full
 upstream corpus pass. See [type mappings](dev-docs/TYPES.md) and
-[catalog adoption checks](dev-docs/VALIDATION-catalog-0.17.0.md).
+[the safety invariants](dev-docs/SAFETY-INVARIANTS.md).
 
 ## Important limits
 
@@ -132,13 +132,13 @@ upstream corpus pass. See [type mappings](dev-docs/TYPES.md) and
 - **Temporal domain:** known infinities/out-of-range date or timestamp bounds and
   unsafe bounded inline temporal values refuse before query execution. Unknown
   file statistics are not proof of representability; see the
-  [read-safety limits](dev-docs/VALIDATION-DORIS-READ-SAFETY-2026-11-04.md).
+  [the safety invariants](dev-docs/SAFETY-INVARIANTS.md).
 - **Not available:** DELETE/UPDATE/MERGE, INSERT OVERWRITE, ALTER-column DDL,
   sorted writes, compaction procedures and DuckLake views. General DuckLake 1.1
   support is not enabled; the developer candidate is separate and default-off.
 - **Correctness gaps remain:** pruning/type conversions, concurrent rewrites and
   cross-engine write metadata still have open findings. The
-  [active findings register](dev-docs/REVIEW-FINDINGS.md) records their boundaries.
+  [findings register](dev-docs/FINDINGS.md) records their boundaries.
 
 If a write reports an **unknown COMMIT outcome** or a **post-commit finalization
 failure**, do not blindly retry or delete its output. The write may already be

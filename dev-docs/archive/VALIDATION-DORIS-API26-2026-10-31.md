@@ -250,7 +250,7 @@ reuse matching inputs. Pristine DuckLake JNI does not include its staged Java
 DuckDB type handler and must not be described as Duckbridge-qualified. Delivery
 and any acknowledgement will be recorded distinctly. No handoff completion is
 claimed merely because a handoff file exists. Delivery status is recorded below
-and in [the API26 handoff](HANDOFF-DUCKBRIDGE-DORIS-8e10b235-API26.md).
+and in the API26 handoff (handoff note, removed).
 
 Informational FYI was dispatched to Duckbridge's existing `doris-upstream`
 session `ses_f4491b970ffeOAw5swIcPceRUx` (`promptDispatched=true`), explicitly

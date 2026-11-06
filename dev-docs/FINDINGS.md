@@ -1,10 +1,9 @@
-# Active review findings
+# Findings register
 
-Stable IDs originate in [the retained review](archive/REVIEW-2026-09-05.md).
-Its examples and source lines describe their stated baselines, not fresh API27
-reproductions. This register preserves open/partial work; revalidate the affected
-code, dependency lane and runtime before fixing or closing an item. No new review
-or live defect campaign is claimed by this documentation cleanup.
+Stable IDs from the September 2026 review ([archive/REVIEW-2026-09-05.md](archive/REVIEW-2026-09-05.md))
+that are still open or only partly closed. [TODO.md](TODO.md) refers to these. Re-check an
+item against the current catalog and Doris pin before fixing or closing it; the original
+line numbers and examples describe the baseline they were written against.
 
 ## Correctness and data protection
 
@@ -14,8 +13,8 @@ or live defect campaign is claimed by this documentation cleanup.
 | F05 | Unsigned bucket pruning must use the source type's hash encoding or decline pruning. |
 | F06 | Membership bounds and prefix successors must use Unicode-scalar ordering, not UTF-16 code-unit assumptions. |
 | F07 | One logical snapshot does not fence physical flush/compaction. Carry/revalidate one coherent physical view across planning. |
-| F08 | **Mitigated by refusal:** ordinary historical scans with delete files now fail closed, including NULL advisory bounds. Latest deletes and delete-free history pass real FE/BE controls; correct per-position historical filtering remains unimplemented. [Read-safety proof](VALIDATION-DORIS-READ-SAFETY-2026-11-04.md). |
-| F09 | **Partial:** TIMESTAMP_NS statistics pruning is disabled while retaining the BE predicate. Lossy mapping semantics and other source-domain/cast preservation cases still need qualification. [Read-safety proof](VALIDATION-DORIS-READ-SAFETY-2026-11-04.md). |
+| F08 | **Mitigated by refusal:** ordinary historical scans with delete files now fail closed, including NULL advisory bounds. Latest deletes and delete-free history pass real FE/BE controls; correct per-position historical filtering remains unimplemented. [Read-safety proof](archive/VALIDATION-DORIS-READ-SAFETY-2026-11-04.md). |
+| F09 | **Partial:** TIMESTAMP_NS statistics pruning is disabled while retaining the BE predicate. Lossy mapping semantics and other source-domain/cast preservation cases still need qualification. [Read-safety proof](archive/VALIDATION-DORIS-READ-SAFETY-2026-11-04.md). |
 | F10 | Time-travel timestamp parsing must retain microsecond precision instead of round-tripping through epoch milliseconds. |
 | F11 | Registered imported-file mappings must be authoritative over conflicting embedded field IDs; reject unsupported shapes. |
 | F12 | **Partial:** complete native nested dictionaries and ordinary NULL-parent reads are fixed/qualified. Imported/mapped, historical, rename/re-add/default/evolution and final-1.1 nested behavior remain unqualified/refused. |
@@ -30,7 +29,7 @@ or live defect campaign is claimed by this documentation cleanup.
 | F26 | FE cast erasure can make file pruning unsafe despite a residual predicate; preserve casts or decline unproven conversion. |
 
 Native F12 evidence is in the [retained regression](archive/VALIDATION-DEFAULT-NESTED-READS-2026-11-01.md)
-and [current API27 qualification](VALIDATION-DORIS-API27-2026-11-02.md). It does not
+and [current API27 qualification](archive/VALIDATION-DORIS-API27-2026-11-02.md). It does not
 close F11 or expand nested support beyond the tested shapes.
 
 ## Functionality and validation gaps
@@ -55,14 +54,12 @@ close F11 or expand nested support beyond the tested shapes.
 | M17 | Use context-correct SQL literal/identifier/libpq escaping and avoid secret logging. |
 
 M01's nested-DECIMAL parser defect is addressed by the shared-parser cutover in
-[catalog 0.13 adoption](VALIDATION-catalog-0.13.0-2026-11-03.md); broader nested
+[catalog 0.13 adoption](archive/VALIDATION-catalog-0.13.0-2026-11-03.md); broader nested
 value/evolution/default boundaries remain N17/F12/M03.
 
-M18's JVM split and M19's exact-artifact/loaded-runtime gates are implemented for
-the qualified lanes; see [DEVELOPMENT.md](DEVELOPMENT.md) and the API27 evidence.
-They do not close M14's coverage problem, N20's FE-like loader test or general
-configuration audit M17. M20's standalone command/doc drift is addressed by this
-cleanup; historical commands remain explicitly archived.
+M18 (JVM split) and M19 (exact-artifact and loaded-runtime gates) are implemented; see
+[DEVELOPMENT.md](DEVELOPMENT.md). M20 (command/doc drift) is addressed by keeping dated
+commands in the archive.
 
 ## Hardening and retained knowledge
 
@@ -88,11 +85,8 @@ cleanup; historical commands remain explicitly archived.
 | N19 | Default inline/delete refusals need independent tests; parked future-feature tests do not prove them. |
 | N20 | Assembled ZIP through an FE-like isolated classloader, service/API/host identity and runtime closure. |
 | N21 | Tracked/linkable reproducible cold-build, lint, package and isolated integration automation. |
-| N22 | Revalidate tracked stale binary payloads; don't delete retained machine artifacts under a docs cleanup. |
-| N23 | Revalidate wrapper distribution checksum against the actual wrapper configuration. |
-| N24 | Revalidate stale Detekt suppressions/empty artifacts before removal. |
-| N25 | Keep source comments aligned with actual safety contracts; dated source commentary needs a separate scoped pass. |
-| N26 | Confirm consumers/API before moving the value normalizer to test-only sources. |
+| N22 | Revalidate tracked stale binary payloads (`compose/plugin/`) before deleting. |
+| N23 | Revalidate the wrapper distribution checksum against the wrapper configuration. |
 | N27 | Current setup guide is [COMPOSE.md](COMPOSE.md); keep plugin roots, FE-local health, JVM flags and injected-property rules accurate. |
 
 ## Boundaries carried forward from earlier review
@@ -103,9 +97,6 @@ O09 shared catalog NaN/swapped-bound read guards are not missing; F15/F16 are di
 O12 feature backlog is in the read/write TODOs. O13 function execution pushdown and
 DuckDB-native file reads remain non-goals.
 
-F01/N07, F03/F04, F21/F22, repository containment F23, provenance F24 and smoke
-assertion F25 are closed only within their recorded scopes. Their diagnoses,
-tests and limits remain in the archive and current API27/F01 evidence, not as
-unfinished TODOs. F23 does not authorize restarting/migrating legacy bindings or
-claim that wildcard bindings alone bypass the host firewall. W01–W04 semantic,
-test, maintainability and operations concerns still guide the [plan](PLAN.md).
+Closed within their recorded scope, with evidence in the archive: F01/N07 (S3 alias
+identity), F03/F04, F21/F22, F23 (network containment), F24 (plugin provenance), F25 (smoke
+assertions), N24–N26 (detekt baseline, dated source comments, value normalizer placement).

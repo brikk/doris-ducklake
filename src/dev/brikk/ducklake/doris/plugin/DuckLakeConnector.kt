@@ -53,7 +53,7 @@ class DuckLakeConnector internal constructor(
      * [ConnectorWritePlanProvider.supportedOperations] and DDL routes straight to the metadata, so
      * only the MVCC flag (snapshot pinning and time travel) is declared. Other opt-ins (SHOW CREATE,
      * TopN lazy materialization, nested column prune, views, auto-analyze, metadata preload) have
-     * prerequisites tracked in `dev-docs/TODO-read.md`.
+     * prerequisites tracked in `dev-docs/TODO.md`.
      */
     override fun getCapabilities(): Set<ConnectorCapability> =
         EnumSet.of(ConnectorCapability.SUPPORTS_MVCC_SNAPSHOT)

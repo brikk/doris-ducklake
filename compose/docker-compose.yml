@@ -44,7 +44,7 @@ services:
       # files under this dir (the corpusReplayTest gradle task pins
       # java.io.tmpdir here); mounting it at the SAME absolute path lets
       # FE/BE resolve identical file paths from the shared PG metadata.
-      # See dev-docs/DESIGN-corpus-replay-adapter.md. smoke.sh mkdir -p's it.
+      # See dev-docs/CORPUS-REPLAY.md. smoke.sh mkdir -p's it.
       - ${DORIS_CORPUS_DIR:-/tmp/ducklake-corpus}:${DORIS_CORPUS_DIR:-/tmp/ducklake-corpus}
     networks:
       doris-net:

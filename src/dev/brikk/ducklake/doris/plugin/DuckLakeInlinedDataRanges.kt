@@ -17,7 +17,7 @@ import java.util.Locale
  *
  * Dev/compose only: the BE opens the file by path, so FE and BE must share a filesystem. Off by
  * default behind [PROP_INLINED_READS] and limited to local-filesystem warehouses. The production
- * channel (object-store write or an SPI payload seam) is tracked in `dev-docs/TODO-read.md`.
+ * channel (object-store write or an SPI payload seam) is tracked in `dev-docs/TODO.md`.
  */
 internal class DuckLakeInlinedDataRanges(
     private val catalog: DucklakeCatalog,
