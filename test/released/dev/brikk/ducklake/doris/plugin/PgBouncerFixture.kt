@@ -11,7 +11,7 @@ import java.sql.DriverManager
 import java.util.UUID
 
 /** Two tiny server slots, no FE/BE, no retained volume; only the driver prepareThreshold=0 lane. */
-internal class PgBouncerTrialFixture(root: Path) : AutoCloseable {
+internal class PgBouncerFixture(root: Path) : AutoCloseable {
     private val server = TestingDucklakePostgreSqlCatalogServer()
     private val database = "doris_pool_" + UUID.randomUUID().toString().replace("-", "")
     private val data = Files.createTempDirectory(root, "data-")

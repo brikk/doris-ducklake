@@ -1,5 +1,11 @@
 # Owner-local PgBouncer configuration trial — 2026-11-06
 
+Historical trial evidence. The owner subsequently authorized
+[formal Central 0.16.0 adoption](VALIDATION-catalog-0.16.0.md) with byte-identical
+JARs. The local init-script override is removed and the retained proxy regression
+is now the opt-in `pgBouncerSmokeTest`. The historical counts and normal-pin
+preservation assertions below describe the trial, not a new formal-release run.
+
 The owner explicitly authorized this **local Maven snapshot exception**:
 `dev.brikk.ducklake:*:0.16.0-SNAPSHOT`, producer main
 `acec1f1b0208e545efad19d2afd3c574e870170d` (not pushed).
@@ -92,7 +98,7 @@ assembly, release, default promotion or push was performed.
 paths and hashes are under `build/pgbouncer-local-trial/reports/`. The compile-only
 first attempt is retained separately, not counted as test execution.
 
-## Stop condition
+## Original stop condition (superseded by the formal-release adoption request)
 
 When this wiring/trial finishes, commit locally, report the properties and counts,
 and **WAIT**. Do not push, release, promote the local snapshot or automatically

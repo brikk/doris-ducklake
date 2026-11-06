@@ -77,7 +77,7 @@ repositories {
 
 val dorisVersion = "1.2-SNAPSHOT"
 
-// Historical experimental reader candidate, separate from the released 0.15.1 default.
+// Historical experimental reader candidate, separate from the released 0.16.0 default.
 // Do not use maven.repo.local: Doris's exclusive FE/SPI repository above must stay intact.
 val readCorrectnessCandidate = providers.gradleProperty("catalogReadCorrectnessCandidate").orNull == "true"
 check(!providers.gradleProperty("r07CatalogRepository").isPresent) {
@@ -271,6 +271,8 @@ dependencies {
     // Used by tests to bootstrap the DuckLake metadata schema in Postgres via DuckDB's
     // postgres + ducklake extensions — same pattern as :ducklake-catalog and :trino-ducklake.
     testImplementation(libs.duckdb.jdbc)
+    // The opt-in proxy smoke inspects Hikari's effective configuration; it is already catalog runtime content.
+    testCompileOnly("com.zaxxer:HikariCP:7.0.2")
 
     // Corpus replay adapter (DorisReplayEngine): the runner seam + the mysql-protocol
     // driver the adapter uses to reach the live compose FE. Test-only; the corpus
@@ -458,6 +460,7 @@ tasks.test {
     exclude("**/DuckLakeDefaultNestedLiveTest*")
     exclude("**/DorisReadSafetyLiveTest*")
     exclude("**/DorisCorpusBaselineTest*")
+    exclude("**/DuckLakePgBouncerTest*")
     classpath = prependParquetFormat(classpath)
 }
 
@@ -472,11 +475,26 @@ tasks.register<Test>("java17PluginTest") {
     exclude("**/DuckLakeR07QualificationTest*")
     exclude("**/DuckLakeR07LiveQualificationTest*")
     exclude("**/DuckLakeR07LongPartitionNativeTest*")
+    exclude("**/DuckLakePgBouncerTest*")
+}
+
+tasks.register<Test>("pgBouncerSmokeTest") {
+    description = "Opt-in PostgreSQL transaction-pooling smoke on the released catalog; no FE/BE."
+    group = "verification"
+    testClassesDirs = sourceSets.test.get().output.classesDirs
+    classpath = prependParquetFormat(sourceSets.test.get().runtimeClasspath)
+    javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(17)) })
+    useJUnitPlatform()
+    include("**/DuckLakePgBouncerTest*")
+    maxHeapSize = "512m"
+    maxParallelForks = 1
+    doFirst { check(!readCorrectnessCandidate) { "PgBouncer smoke requires the released catalog lane" } }
+    outputs.upToDateWhen { false }
 }
 
 for ((taskName, jvm) in listOf("defaultNestedLiveTest" to 25, "defaultNestedLiveJava17Test" to 17)) {
     tasks.register<Test>(taskName) {
-        description = "Current native mixed scalar/nested reads on explicitly owned default API27/catalog0.14 infrastructure."
+        description = "Current native mixed scalar/nested reads on explicitly owned default API27/released-catalog infrastructure."
         group = "verification"
         testClassesDirs = sourceSets.test.get().output.classesDirs
         classpath = prependParquetFormat(sourceSets.test.get().runtimeClasspath)

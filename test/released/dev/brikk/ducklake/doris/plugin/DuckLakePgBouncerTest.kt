@@ -14,13 +14,13 @@ import java.sql.Connection
 import java.sql.DriverManager
 import java.util.function.Supplier
 
-/** Explicit local-snapshot trial only: never discovered by normal 0.15.1 tests. */
-internal class DuckLakePgBouncerLocalTrialTest {
+/** Explicit proxy smoke; run with pgBouncerSmokeTest, never implicitly with ordinary plugin tests. */
+internal class DuckLakePgBouncerTest {
     @TempDir lateinit var root: Path
 
     @Test
     fun connectorPoolAndUrlSettingsWorkBehindTransactionPoolingWithoutIsolationLeakage() {
-        PgBouncerTrialFixture(root).use { fixture ->
+        PgBouncerFixture(root).use { fixture ->
             DuckLakeConnector(fixture.properties(), FakeConnectorContext("pgbouncer-trial", 1L)).use { connector ->
                 assertThat(connector.catalogConfiguration().catalogDatabaseUrl).isEqualTo(fixture.url)
                 connector.preCreateValidation(null)
@@ -36,7 +36,7 @@ internal class DuckLakePgBouncerLocalTrialTest {
         }
     }
 
-    private fun verifyPinnedRead(connector: DuckLakeConnector, catalog: JdbcDucklakeCatalog, fixture: PgBouncerTrialFixture) {
+    private fun verifyPinnedRead(connector: DuckLakeConnector, catalog: JdbcDucklakeCatalog, fixture: PgBouncerFixture) {
         JdbcDucklakeCatalog(DucklakeCatalogConfig().apply {
             catalogDatabaseUrl = fixture.directUrl
             catalogDatabaseUser = fixture.user
@@ -74,7 +74,7 @@ internal class DuckLakePgBouncerLocalTrialTest {
         }
     }
 
-    private fun verifyBothServerDefaults(fixture: PgBouncerTrialFixture) {
+    private fun verifyBothServerDefaults(fixture: PgBouncerFixture) {
         DriverManager.getConnection(fixture.url, fixture.user, fixture.password).use { first ->
             DriverManager.getConnection(fixture.url, fixture.user, fixture.password).use { second ->
                 first.autoCommit = false

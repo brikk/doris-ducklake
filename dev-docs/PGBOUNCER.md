@@ -1,18 +1,18 @@
 # Metadata pools and PgBouncer
 
-## Status: configuration wiring, not a 0.16 release
+## Status: released catalog 0.16.0
 
-The normal dependency remains **0.15.1**. The owner-authorized local
-`0.16.0-SNAPSHOT` trial contains a PostgreSQL `readSession` isolation fix. In older
-catalogs, session-level isolation changes can land on a different backend behind
-transaction pooling, silently read at READ COMMITTED and leak settings to other
-clients. **Do not use the normal 0.15.1 pin as if that fix were adopted.**
+The normal dependency is **0.16.0 from Maven Central**, including the PostgreSQL
+`readSession` isolation fix. Its JAR bytes match the completed owner-local trial.
+In older catalogs such as 0.15.1, session-level isolation changes can land on a
+different backend behind transaction pooling, silently read at READ COMMITTED and
+leak settings to other clients; the JDBC prepared-statement workaround alone does
+not fix that bug.
 
-The property mapping below uses configuration APIs already present in 0.15.1, so
-direct PostgreSQL/session-pooled deployments can use it without changing defaults.
-Transaction-pooling support must wait for adoption of the published final 0.16.0
-with the isolation fix. No automatic release, dependency promotion or deployment
-is authorized by this local trial.
+The five properties/defaults below retain the configuration work from `de1cfbd`.
+The formal adoption verifies hashes and compile/package checks without rerunning
+the byte-identical trial's tests or deploying FE/BE. This is not a broader
+production/fleet or concurrent-file-rewrite qualification.
 
 ## Catalog properties
 
@@ -65,7 +65,7 @@ The released connector preserves the JDBC URL byte-for-byte, including existing
 parameters/percent escapes. It does not strip or automatically insert driver
 settings. Use `?` before the first parameter and `&` for subsequent ones.
 
-Example for a **future fixed catalog deployment**, assuming a proxy
+Example for released **0.16.0**, assuming a proxy
 `server_lifetime` of 1,800 seconds (30 minutes):
 
 ```sql
@@ -88,28 +88,24 @@ above are not real credentials. This example does not enable new DuckLake format
 experimental reader capabilities or production/fleet qualification. MySQL behind
 ProxySQL is outside this PostgreSQL trial.
 
-## Owner-local trial lane
+## Retained opt-in proxy smoke
 
-`compose/pgbouncer-local-trial.init.gradle` is an explicit exception to the usual
-published-artifact rule: it resolves only the three catalog-family modules from
-**`~/.m2`**, at `0.16.0-SNAPSHOT`, verifies the four owner-supplied JAR hashes,
-and isolates outputs in `build/pgbouncer-local-trial`. It leaves the normal pin,
-Doris SDK repository and default distribution unchanged. It cannot mix the old
-R07 reader lane and it adds the proxy test only to this trial, never normal 0.15.1
-test discovery.
+The owner-local Maven override and `test/pgbouncer-trial` source lane are removed.
+The same proxy regression/fixture are retained in the released test source set as
+`DuckLakePgBouncerTest` / `PgBouncerFixture`, using the normal Central dependency.
+It is opt-in, excluded from ordinary `test` and `java17PluginTest` discovery, so
+normal checks do not unexpectedly start a proxy. Configuration unit tests remain
+in the ordinary released lane. Hikari's already-bundled runtime version is exposed
+as test compile-only content for effective-setting inspection.
 
 ```sh
-DORIS_PGBOUNCER_TRIAL_PROJECT="$PWD" ./gradlew \
-  --project-cache-dir build/validation/pgbouncer-local-trial/gradle-cache \
-  -I compose/pgbouncer-local-trial.init.gradle \
-  verifyPgbouncerLocalTrial test java17PluginTest detekt \
+./gradlew pgBouncerSmokeTest \
   --no-daemon --max-workers=1 -Pkotlin.incremental=false \
   -Pkotlin.compiler.execution.strategy=in-process \
   '-Dorg.gradle.jvmargs=-Xmx1280m -XX:MaxMetaspaceSize=512m'
 ```
 
-This lane fixes test selection to pool-configuration unit tests on Java25 and the
-same units plus **one** PostgreSQL/PgBouncer smoke on the FE's Java17 runtime. The
+The task selects **one** PostgreSQL/PgBouncer smoke on the FE's Java17 runtime. The
 smoke uses `pool_mode=transaction`, two tiny server slots,
 `max_prepared_statements=0` and `prepareThreshold=0`; it checks effective Hikari/JDBC
 settings, snapshot pinning through Doris metadata during an intervening writer,
@@ -118,6 +114,8 @@ prepared-statement tracking is documented from the producer contract, not claime
 as an additional consumer-tested lane.
 
 Keep this serial and light alongside Trino: one worker, private 4 GiB/no-swap/
-150% CPU scope, 512 MiB test heap, and a 64 MiB/quarter-CPU proxy. The initial scope
-contains no full suites, corpus, FE/BE deployment, assembly or release. Stop and
-wait for the owner's final Central 0.16.0 before normal dependency adoption.
+150% CPU scope, 512 MiB test heap, and a 64 MiB/quarter-CPU proxy. This smoke was
+**not rerun for formal adoption** because the owner confirmed identical JARs;
+[its historical result](TRIAL-PGBOUNCER-LOCAL-0.16.md) remains separately recorded.
+Future execution is explicit and does not imply permission for full suites,
+corpus, FE/BE deployment or release work.
