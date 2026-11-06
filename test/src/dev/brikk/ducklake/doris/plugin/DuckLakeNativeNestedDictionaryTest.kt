@@ -38,9 +38,9 @@ internal class DuckLakeNativeNestedDictionaryTest {
     @Test
     fun unqualifiedNestedHistoryAndLegacyMappingsRefuseButScalarPathIsUnchanged() = fixture { catalog, handle, columns ->
         assertThatThrownBy { encodeReadSchemaDictionary(catalog, handle, columns, emptyList(), true) }
-            .hasMessageContaining("nested legacy-file mappings are not qualified")
+            .hasMessageContaining("not supported on tables with add_files name mappings")
         assertThatThrownBy { encodeReadSchemaDictionary(catalog, handle.copy(snapshotId = handle.snapshotId - 1), columns, emptyList(), false) }
-            .hasMessageContaining("historical nested file scans are not qualified")
+            .hasMessageContaining("not supported for time-travel reads")
         val scalar = columns.take(1)
         assertThat(encodeReadSchemaDictionary(catalog, handle, scalar, emptyList(), true))
             .isEqualTo(DuckLakeSchemaDictionary.encode(scalar, emptyList()))

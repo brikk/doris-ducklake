@@ -33,10 +33,10 @@ internal fun encodeReadSchemaDictionary(
     val nested = columns.filter { it.columnType.typeName in setOf("STRUCT", "ARRAY", "MAP") }
     val scalar = DuckLakeSchemaDictionary.encode(columns, nameMaps)
     if (nested.isEmpty()) return scalar
-    require(!hasMappings) { "Doris nested legacy-file mappings are not qualified" }
-    require(handle.snapshotId == catalog.currentSnapshotId) { "Doris historical nested file scans are not qualified" }
+    require(!hasMappings) { "nested columns are not supported on tables with add_files name mappings" }
+    require(handle.snapshotId == catalog.currentSnapshotId) { "nested columns are not supported for time-travel reads; read the latest snapshot" }
     val raw = catalog.getAllColumnsWithParentage(handle.tableId, handle.snapshotId)
-    require(raw.size <= 4096 && raw.map { it.columnId }.distinct().size == raw.size) { "Invalid/budget-exceeding nested column IDs" }
+    require(raw.size <= 4096 && raw.map { it.columnId }.distinct().size == raw.size) { "nested column ids are duplicated or exceed 4096 columns" }
     val tree = NativeNestedFields(raw)
     val carrier = TFileScanRangeParams()
     if (scalar != null) TDeserializer(TBinaryProtocol.Factory()).deserialize(carrier, Base64.getDecoder().decode(scalar))
@@ -57,7 +57,7 @@ private class NativeNestedFields(rows: List<DucklakeColumn>) {
     private val children = rows.groupBy { it.parentColumn }
 
     fun field(row: DucklakeColumn, depth: Int = 0): TField {
-        require(depth <= 64) { "Nested field depth budget exceeded" }
+        require(depth <= 64) { "nested field depth exceeds 64" }
         require(row.columnId > 0) { "Invalid nested field ID" }
         require(row.columnName.isNotEmpty()) { "Empty nested field name" }
         val nested = children[row.columnId].orEmpty().sortedBy { it.columnOrder }

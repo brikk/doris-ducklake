@@ -86,9 +86,9 @@ internal class DuckLakeNestedSignatureTest {
                 it.columnId.toInt() to it.columnName.lowercase(java.util.Locale.ROOT)
             })
             assertThatThrownBy { encodeReadSchemaDictionary(c, handle, handles, emptyList(), true) }
-                .hasMessageContaining("nested legacy-file mappings are not qualified")
+                .hasMessageContaining("not supported on tables with add_files name mappings")
             assertThatThrownBy { encodeReadSchemaDictionary(c, handle.copy(snapshotId = snapshot - 1), handles, emptyList(), false) }
-                .hasMessageContaining("historical nested file scans are not qualified")
+                .hasMessageContaining("not supported for time-travel reads")
         }
     }
 
