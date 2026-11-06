@@ -165,7 +165,20 @@ class DuckLakeConnector internal constructor(
         } catch (e: ClassNotFoundException) {
             throw IllegalStateException("PostgreSQL JDBC driver missing from plugin classpath", e)
         }
-        val config = DucklakeCatalogConfig().apply {
+        val result = JdbcDucklakeCatalog(catalogConfiguration())
+        var initialized = false
+        try {
+            result.readSession(Supplier { requireQualifiedFormat(result) })
+            initialized = true
+            return result
+        } finally {
+            if (!initialized) result.close()
+        }
+    }
+
+    /** Pure property binding; preserve the complete JDBC URL, including driver query parameters. */
+    internal fun catalogConfiguration(): DucklakeCatalogConfig =
+        DucklakeCatalogConfig().apply {
             catalogDatabaseUrl = DuckLakeConnectorProperties.requireString(
                 properties, DuckLakeConnectorProperties.METADATA_URL,
             )
@@ -177,18 +190,9 @@ class DuckLakeConnector internal constructor(
             dataPath = DuckLakeConnectorProperties.requireString(
                 properties, DuckLakeConnectorProperties.STORAGE_WAREHOUSE,
             )
+            configureDuckLakePool(this, properties)
+            final11.configure(this)
         }
-        final11.configure(config)
-        val result = JdbcDucklakeCatalog(config)
-        var initialized = false
-        try {
-            result.readSession(Supplier { requireQualifiedFormat(result) })
-            initialized = true
-            return result
-        } finally {
-            if (!initialized) result.close()
-        }
-    }
 
     private fun requireQualifiedFormat(result: JdbcDucklakeCatalog) {
         if (result.getSpecVersion() == "1.1" && !final11.enabled) {

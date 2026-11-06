@@ -26,6 +26,9 @@ archived commands/results apply only to their stated artifacts.
 
 ## Current evidence
 
+- [Metadata pools and PgBouncer](PGBOUNCER.md): configuration and deployment requirements.
+  The [owner-local 0.16 trial](TRIAL-PGBOUNCER-LOCAL-0.16.md) is isolated from the
+  normal 0.15.1 pin and must wait for the final published release before adoption.
 - [Catalog 0.15.1 adoption](VALIDATION-catalog-0.15.1.md): released default pin;
   the failing expiry-count regression and the later owner-requested **42/42 targeted
   checks on each JVM** pass, with no full re-verification or FE/BE deployment.

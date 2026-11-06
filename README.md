@@ -84,6 +84,14 @@ REFRESH CATALOG dl;  -- refresh after another engine changes the lake
 `metadata.password` is optional for databases configured for trust authentication.
 Storage credentials are forwarded to the native reader; do not commit real secrets.
 
+Metadata pools can be tuned with `catalog.max-connections`,
+`catalog.min-idle-connections`, `catalog.connection-idle-timeout`,
+`catalog.connection-max-lifetime` and `catalog.connection-timeout`. Defaults are
+unchanged; the complete `metadata.url` query string is passed to JDBC, including
+`prepareThreshold=0`. See [pool configuration and PgBouncer](dev-docs/PGBOUNCER.md).
+**Transaction-pooling safety requires the catalog read-session fix currently being
+trialled locally in 0.16.0; normal 0.15.1 is not promoted or qualified for this.**
+
 ## What works
 
 - Parquet scans, column projection, file-statistics pruning and bucket pruning.

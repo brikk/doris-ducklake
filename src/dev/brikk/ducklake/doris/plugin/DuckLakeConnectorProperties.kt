@@ -18,6 +18,11 @@ internal object DuckLakeConnectorProperties {
     const val METADATA_PASSWORD = "metadata.password"
     const val STORAGE_WAREHOUSE = "storage.warehouse"
     const val ENABLE_FINAL11_READS = "experimental.final11.reads"
+    const val CATALOG_MAX_CONNECTIONS = "catalog.max-connections"
+    const val CATALOG_MIN_IDLE_CONNECTIONS = "catalog.min-idle-connections"
+    const val CATALOG_CONNECTION_IDLE_TIMEOUT = "catalog.connection-idle-timeout"
+    const val CATALOG_CONNECTION_MAX_LIFETIME = "catalog.connection-max-lifetime"
+    const val CATALOG_CONNECTION_TIMEOUT = "catalog.connection-timeout"
 
     // Mirrors the in-tree iceberg connector's ENABLE_MAPPING_TIMESTAMP_TZ
     // (fe-connector-iceberg IcebergConnectorProperties): default false maps a
