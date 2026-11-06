@@ -25,11 +25,9 @@ import org.junit.jupiter.api.Test
 import java.util.Optional
 
 /**
- * FE-side coverage of [DuckLakeWritePlanProvider] — it assembles the
- * `TIcebergTableSink` the BE writes through. Per the connector-SPI migration's own
- * tests, sink construction is FE-unit-testable headless; the BE-defined formats
- * (`output_path`/`hadoop_config`) are validated by the compose smoke. The
- * `schema_json` is checked via iceberg's own `SchemaParser` (independent oracle).
+ * Covers the `TIcebergTableSink` that [DuckLakeWritePlanProvider] assembles for the BE.
+ * `schema_json` and the partition spec are checked with Iceberg's own parsers; the
+ * BE-defined fields (`output_path`, `hadoop_config`) are validated by the compose smoke test.
  */
 internal class DuckLakeWritePlanProviderTest {
 
@@ -87,7 +85,7 @@ internal class DuckLakeWritePlanProviderTest {
     private fun ordersHandle(catalog: JdbcDucklakeCatalog): ConnectorTableHandle =
         handleFor(catalog, "sales", "orders")
 
-    /** Drive planWrite for [schema].[table] with a fresh bound transaction; return the sink. */
+    /** Runs planWrite for [schema].[table] with a fresh bound transaction and returns the sink. */
     private fun sinkFor(catalog: JdbcDucklakeCatalog, schema: String, table: String) =
         provider(catalog)
             .planWrite(FakeSession(DuckLakeConnectorTransaction(99L, catalog)), FakeWriteHandle(handleFor(catalog, schema, table), overwrite = false))
@@ -123,7 +121,7 @@ internal class DuckLakeWritePlanProviderTest {
                         FakeWriteHandle(handle, overwrite = false, columns = writeColumns),
                     ).dataSink.icebergTableSink
 
-                    // FE binding owns row reordering/null fill; the positional sink still needs every column.
+                    // The FE reorders and null-fills rows; the positional sink still needs every column.
                     assertThat(SchemaParser.fromJson(sink.schemaJson).columns().map { it.name() })
                         .containsExactlyElementsOf(columns.map { it.name })
                 }
@@ -149,14 +147,11 @@ internal class DuckLakeWritePlanProviderTest {
             assertThat(sink.fileFormat).isEqualTo(TFileFormatType.FORMAT_PARQUET)
             assertThat(sink.compressionType).isEqualTo(TFileCompressType.ZSTD) // BE rejects UNKNOWN
             assertThat(sink.isOverwrite).isFalse()
-            // output path is the resolved table data dir (under the warehouse); local FS in tests.
             assertThat(sink.outputPath).startsWith(isolated.dataDir().toAbsolutePath().toString())
             assertThat(sink.fileType).isEqualTo(TFileType.FILE_LOCAL)
-            // schema_json is a well-formed iceberg schema (iceberg's own parser is the oracle)
-            // carrying the table's columns.
             val schema = SchemaParser.fromJson(sink.schemaJson)
             assertThat(schema.columns().map { it.name() }).contains("id", "total")
-            // orders is unpartitioned → no partition spec on the sink.
+            // orders is unpartitioned.
             assertThat(sink.isSetPartitionSpecId).isFalse()
             assertThat(sink.partitionSpecsJson).isNull()
         }
@@ -170,8 +165,6 @@ internal class DuckLakeWritePlanProviderTest {
 
             assertThat(sink.isSetPartitionSpecId).isTrue()
             assertThat(sink.partitionSpecId).isEqualTo(DuckLakeIcebergPartitionSpec.SINK_SPEC_ID)
-            // partition_specs_json is keyed by spec id and parses (iceberg's own oracle) to
-            // a single IDENTITY field on `region`.
             val json = sink.partitionSpecsJson.getValue(DuckLakeIcebergPartitionSpec.SINK_SPEC_ID)
             val spec = PartitionSpecParser.fromJson(SchemaParser.fromJson(sink.schemaJson), json)
             assertThat(spec.fields()).singleElement()
@@ -188,7 +181,6 @@ internal class DuckLakeWritePlanProviderTest {
             assertThat(sink.partitionSpecId).isEqualTo(DuckLakeIcebergPartitionSpec.SINK_SPEC_ID)
             val json = sink.partitionSpecsJson.getValue(DuckLakeIcebergPartitionSpec.SINK_SPEC_ID)
             val spec = PartitionSpecParser.fromJson(SchemaParser.fromJson(sink.schemaJson), json)
-            // bucket[4] is the murmur3 % 4 transform the BE must match DuckLake on (smoke-validated).
             assertThat(spec.fields().single().transform().toString()).isEqualTo("bucket[4]")
         }
     }
@@ -204,7 +196,7 @@ internal class DuckLakeWritePlanProviderTest {
         }
     }
 
-    /** Minimal session that just carries (optionally) the engine-opened transaction. */
+    /** Minimal session that carries the engine-opened transaction, if any. */
     private class FakeSession(private var transaction: ConnectorTransaction?) : ConnectorSession {
         override fun getQueryId(): String = "test-query"
         override fun getUser(): String = "test"
@@ -229,8 +221,6 @@ internal class DuckLakeWritePlanProviderTest {
         override fun getTableHandle(): ConnectorTableHandle = table
         override fun getColumns(): List<ConnectorColumn> = columns
         override fun isOverwrite(): Boolean = overwrite
-        // Renamed from getWriteContext() in the SPI write-handle consolidation; same
-        // Map<String, String> shape (static partition spec for a partition-targeted write).
         override fun getStaticPartitionSpec(): Map<String, String> = emptyMap()
     }
 }

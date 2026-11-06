@@ -16,7 +16,7 @@ import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
 import java.nio.file.Path
 
-/** F04: old specs and missing partition metadata must never exclude potentially matching files. */
+/** Files written under an older partition spec, or with missing partition values, must survive bucket pruning. */
 internal class DuckLakeBucketPruningEvolutionTest {
 
     companion object {

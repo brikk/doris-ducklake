@@ -66,10 +66,10 @@ internal class DuckLakeScanPlanProviderTest {
 
             val plan = connector.getScanPlanProvider()
             assertThat(plan).isNotNull()
-            // Read backfill of column defaults is on by default; Paimon opts out, DuckLake must not.
+            // Column-default backfill on read is the default; Paimon opts out, DuckLake must not.
             assertThat(plan.applyColumnDefaultsOnRead()).isTrue()
-            // The new scheduling/cache hooks are not a feature opt-in. DuckLake
-            // still plans synchronously and pins files through its own handle.
+            // DuckLake plans synchronously and pins files through its own handle,
+            // so the batch/streaming scheduling hooks stay off.
             assertThat(plan.supportsBatchScan(null, handle)).isFalse()
             assertThat(plan.streamingSplitEstimate(null, handle, Optional.empty(), false)).isEqualTo(-1L)
             assertThat(metadata.supportsNativePartitionPlanning(null, handle)).isFalse()
@@ -77,10 +77,8 @@ internal class DuckLakeScanPlanProviderTest {
             assertThat(metadata.getPartitionViewVersion(null, handle)).isEmpty()
             val ranges = plan.planScan(null, handle, listOf(), Optional.empty())
 
-            // Bootstrap inserts rows into sales.orders. DuckLake's writer may
-            // coalesce inserts into a single data file (no compaction needed) —
-            // assert "at least one" rather than a tight count so this stays
-            // robust against writer-side behaviour changes.
+            // DuckLake's writer may coalesce the seeded inserts into a single data
+            // file, so assert at least one range rather than an exact count.
             assertThat(ranges).isNotEmpty()
 
             for (range in ranges) {
@@ -100,7 +98,7 @@ internal class DuckLakeScanPlanProviderTest {
                 assertThat(path).endsWith(".parquet")
             }
 
-            // Empty table emits no ranges.
+            // sales.customers is seeded empty.
             val customers = metadata.getTableHandle(null, "sales", "customers")
                 .orFail("expected sales.customers handle")
             val emptyRanges = plan.planScan(null, customers, listOf(), Optional.empty())
@@ -124,13 +122,11 @@ internal class DuckLakeScanPlanProviderTest {
                 val plan = connector.getScanPlanProvider()
                 val ranges = plan.planScan(null, handle, listOf(), Optional.empty())
 
-                // returns_file has one INSERT batch → one active data file. That
-                // one data file carries one active position-delete file.
+                // One INSERT batch → one data file, carrying one position-delete file.
                 assertThat(ranges).hasSize(1)
                 val range = ranges[0]
 
-                // Inspect the wire descriptor: that's where the BE reads delete
-                // files from (table_format_type="iceberg" → iceberg_params).
+                // The BE reads delete files from iceberg_params on the wire descriptor.
                 val formatDesc = TTableFormatFileDesc()
                 val rangeDesc = TFileRangeDesc()
                 range.populateRangeParams(formatDesc, rangeDesc)
@@ -140,8 +136,7 @@ internal class DuckLakeScanPlanProviderTest {
                 assertThat(iceberg.deleteFiles).hasSize(1)
 
                 val delete = iceberg.deleteFiles[0]
-                // Path is resolved against the warehouse data dir (delete files
-                // live under the same table data path as data files in DuckLake).
+                // Delete files live under the same table data path as data files.
                 assertThat(delete.path)
                     .startsWith(isolated.dataDir().toAbsolutePath().toString())
                     .endsWith(".parquet")
@@ -151,10 +146,8 @@ internal class DuckLakeScanPlanProviderTest {
     }
 
     @Disabled(
-        "Inlined deletes are refused, not served: the connector would need to synthesize a parquet " +
-            "delete file from ducklake_inlined_delete_<tableId>, and the fixture would need to seed those " +
-            "rows directly over PG JDBC (DuckDB-JDBC ignores data_inlining_row_limit for DELETEs). " +
-            "See dev-docs/TODO-read.md.",
+        "Inlined deletes are refused, not served; the fixture also cannot seed them because " +
+            "DuckDB-JDBC ignores data_inlining_row_limit for DELETEs. See dev-docs/TODO.md.",
     )
     @Test
     @Throws(Exception::class)
@@ -197,17 +190,13 @@ internal class DuckLakeScanPlanProviderTest {
     @Test
     @Throws(Exception::class)
     fun scanNodePropertiesCarryStorageCredentialsUnderLocationPrefix() {
-        // Catalog properties include the s3.* credentials a SELECT * needs the BE
-        // to reach MinIO. Plus a Doris-injected engine property that must NOT
-        // leak through to the BE (storage credentials only).
         val properties = DorisTestSupport.isolatedProperties(isolated)
         properties["s3.endpoint"] = "http://trino-ducklake-minio:9000"
         properties["s3.access_key"] = "minioadmin"
         properties["s3.secret_key"] = "minioadmin"
         properties["s3.region"] = "us-east-1"
         properties["use_path_style"] = "true"
-        // Doris injects this on every CREATE CATALOG; must be silently dropped
-        // because it carries no meaning on the BE.
+        // Doris injects this on every CREATE CATALOG; it must not reach the BE.
         properties["enable.mapping.varbinary"] = "false"
 
         DuckLakeConnectorProvider()
@@ -219,9 +208,8 @@ internal class DuckLakeScanPlanProviderTest {
                     null, stub, listOf(), Optional.empty(),
                 )
 
-                // Storage keys are forwarded under the prefix; file_format_type
-                // is forwarded as a top-level key (PluginDrivenScanNode reads
-                // it directly to dispatch the BE reader). Nothing else escapes.
+                // file_format_type stays top-level because PluginDrivenScanNode reads
+                // it directly to dispatch the BE reader; storage keys go under the prefix.
                 assertThat(nodeProps)
                     .containsEntry("file_format_type", "parquet")
                     .containsEntry("ducklake.location.s3.endpoint", "http://trino-ducklake-minio:9000")
@@ -235,7 +223,6 @@ internal class DuckLakeScanPlanProviderTest {
                             .replace(".", "\\.") + ".+)$",
                     )
                 }
-                // No leakage of plugin-private or engine-injected keys.
                 assertThat(nodeProps).doesNotContainKeys(
                     "ducklake.location.metadata.url",
                     "ducklake.location.metadata.user",
@@ -245,19 +232,17 @@ internal class DuckLakeScanPlanProviderTest {
                     "ducklake.location.enable.mapping.varbinary",
                 )
 
-                // populateScanLevelParams strips the prefix and ALSO emits the
-                // canonical AWS_* aliases the BE's s3_util.cpp expects verbatim.
+                // The BE's s3_util.cpp reads the AWS_* aliases, so they are emitted
+                // alongside the unprefixed FE-style keys.
                 val params = TFileScanRangeParams()
                 plan.populateScanLevelParams(params, nodeProps)
                 assertThat(params.isSetProperties).isTrue()
                 assertThat(params.properties)
-                    // FE-style keys preserved for any consumer that prefers them.
                     .containsEntry("s3.endpoint", "http://trino-ducklake-minio:9000")
                     .containsEntry("s3.access_key", "minioadmin")
                     .containsEntry("s3.secret_key", "minioadmin")
                     .containsEntry("s3.region", "us-east-1")
                     .containsEntry("use_path_style", "true")
-                    // BE-canonical aliases for the iceberg+S3 reader path.
                     .containsEntry("AWS_ENDPOINT", "http://trino-ducklake-minio:9000")
                     .containsEntry("AWS_ACCESS_KEY", "minioadmin")
                     .containsEntry("AWS_SECRET_KEY", "minioadmin")
@@ -279,11 +264,10 @@ internal class DuckLakeScanPlanProviderTest {
                 val handle = metadata.getTableHandle(null, "sales", "by_region")
                     .orFail("expected sales.by_region handle")
 
-                // Full scan sees both partitions' files ('us' + 'eu').
+                // by_region has one file per partition ('us' and 'eu').
                 val allRanges = plan.planScan(null, handle, listOf(), java.util.Optional.empty())
                 assertThat(allRanges.size).isGreaterThanOrEqualTo(2)
 
-                // region = 'us' → applyFilter prunes the 'eu' file(s).
                 val region = metadata.getColumnHandles(null, handle)["region"] as DuckLakeColumnHandle
                 val filter = ConnectorComparison(
                     ConnectorComparison.Operator.EQ,
@@ -296,7 +280,6 @@ internal class DuckLakeScanPlanProviderTest {
                 assertThat(prunedHandle.prunedFileIds).isNotNull()
 
                 val prunedRanges = plan.planScan(null, prunedHandle, listOf(), java.util.Optional.empty())
-                // The 'us' file survives; the 'eu' file(s) are pruned away.
                 assertThat(prunedRanges).isNotEmpty()
                 assertThat(prunedRanges.size).isLessThan(allRanges.size)
             }
@@ -305,24 +288,22 @@ internal class DuckLakeScanPlanProviderTest {
     @Test
     @Throws(Exception::class)
     fun prunesFilesByNumericRangeFilter() {
-        // Complements the partition-equality test: a numeric open range (GE) on a
-        // non-partition column, exercising findDataFileIdsInRange's typed comparison.
+        // Open numeric range (GE) on a non-partition column, exercising
+        // findDataFileIdsInRange's typed stats comparison.
         val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
                 val metadata = connector.getMetadata(null)
                 val plan = connector.getScanPlanProvider()
-                // by_region keeps ≥2 files (one per partition; CHECKPOINT can't
-                // compact across partitions, unlike single-file `orders`). Its
-                // non-partition `id` column gives a clean numeric range to prune.
+                // by_region is used because CHECKPOINT cannot compact across partitions,
+                // so it reliably keeps two files: 'us' (ids 1, 2) and 'eu' (ids 3, 4).
                 val handle = metadata.getTableHandle(null, "sales", "by_region")
                     .orFail("expected sales.by_region handle")
 
-                // Two partition files: 'us' (ids 1, 2) and 'eu' (ids 3, 4).
                 val allRanges = plan.planScan(null, handle, listOf(), java.util.Optional.empty())
                 assertThat(allRanges.size).isGreaterThanOrEqualTo(2)
 
-                // id >= 3 → the 'us' file is pruned by its id stats (max id 2 < 3).
+                // id >= 3 prunes the 'us' file by its id stats (max id 2).
                 val id = metadata.getColumnHandles(null, handle)["id"] as DuckLakeColumnHandle
                 val filter = ConnectorComparison(
                     ConnectorComparison.Operator.GE,
@@ -342,11 +323,9 @@ internal class DuckLakeScanPlanProviderTest {
     @Test
     @Throws(Exception::class)
     fun prunesFilesByBucketEqualityFilter() {
-        // End-to-end BUCKET pruning. bucketPrune is intersected with stats pruning,
-        // so a wrong murmur3 hash would compute the wrong target bucket, the
-        // intersection would go empty, and isNotEmpty() below would fail — i.e. this
-        // can't silently keep the wrong file. (Hash itself is pinned in
-        // DuckLakeBucketTransformTest.)
+        // Bucket pruning is intersected with stats pruning, so a wrong murmur3 bucket
+        // would empty the intersection and fail isNotEmpty below. The hash itself is
+        // pinned in DuckLakeBucketTransformTest.
         val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
@@ -355,11 +334,10 @@ internal class DuckLakeScanPlanProviderTest {
                 val handle = metadata.getTableHandle(null, "sales", "by_name_bucket")
                     .orFail("expected sales.by_name_bucket handle")
 
-                // alice/bob/charlie hash to buckets 1/2/3 → three files.
+                // alice/bob/charlie hash to buckets 1/2/3, so three files.
                 val allRanges = plan.planScan(null, handle, listOf(), java.util.Optional.empty())
                 assertThat(allRanges.size).isGreaterThanOrEqualTo(3)
 
-                // name = 'alice' → only bucket 1's file survives.
                 val name = metadata.getColumnHandles(null, handle)["name"] as DuckLakeColumnHandle
                 val filter = ConnectorComparison(
                     ConnectorComparison.Operator.EQ,
@@ -379,9 +357,8 @@ internal class DuckLakeScanPlanProviderTest {
     @Test
     @Throws(Exception::class)
     fun prunesFilesByBucketInListFilter() {
-        // IN-list over a bucket column: `name IN ('alice','bob')` keeps buckets
-        // {1,2} and prunes charlie's bucket-3 file. Exercises the membership →
-        // {bucket(v)} set path that single-equality pruning can't cover.
+        // IN-list over a bucket column exercises the membership-to-bucket-set path
+        // that single-equality pruning does not cover.
         val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
@@ -406,7 +383,7 @@ internal class DuckLakeScanPlanProviderTest {
                     .orFail("expected applyFilter to push name IN ('alice','bob')")
                 val prunedHandle = applied.handle.asDuckLakeHandle<DuckLakeTableHandle>()
 
-                // alice + bob survive (2 files); charlie's bucket-3 file is pruned.
+                // alice and bob survive; charlie's bucket-3 file is pruned.
                 val prunedRanges = plan.planScan(null, prunedHandle, listOf(), java.util.Optional.empty())
                 assertThat(prunedRanges).hasSize(2)
                 assertThat(prunedRanges.size).isLessThan(allRanges.size)
@@ -416,8 +393,8 @@ internal class DuckLakeScanPlanProviderTest {
     @Test
     @Throws(Exception::class)
     fun prunesFilesByOrOfEqualitiesFilter() {
-        // `name = 'alice' OR name = 'bob'` is membership on a single column and must
-        // prune identically to the IN-list above — proving the OR → IN normalization.
+        // An OR of equalities on one column must prune identically to the IN-list
+        // above, covering the OR-to-IN normalization.
         val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
@@ -449,9 +426,8 @@ internal class DuckLakeScanPlanProviderTest {
     @Test
     @Throws(Exception::class)
     fun prunesFilesByNumericInListFilter() {
-        // IN-list through the STATS path (not bucket): `id IN (3, 4)` spans 3..4, so
-        // by_region's 'us' file (ids 1,2) is pruned by its id stats while 'eu' (3,4)
-        // survives. Covers the typed-span pruning independent of partitioning.
+        // IN-list through the stats path rather than bucket: `id IN (3, 4)` spans 3..4,
+        // so by_region's 'us' file (ids 1, 2) is pruned while 'eu' (ids 3, 4) survives.
         val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
@@ -482,10 +458,9 @@ internal class DuckLakeScanPlanProviderTest {
     @Test
     @Throws(Exception::class)
     fun prunesFilesByPrefixLikeFilter() {
-        // `name LIKE 'a%'` → stats range [a, b): alice's file survives, bob/charlie
-        // (both > 'b') are pruned by their name stats. LIKE feeds only the stats
-        // path (not bucket — a prefix scatters across buckets), so this isolates the
-        // prefix → range conversion end-to-end.
+        // `name LIKE 'a%'` becomes the stats range [a, b): alice's file survives,
+        // bob and charlie are pruned. A prefix scatters across buckets, so LIKE
+        // only feeds the stats path.
         val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
@@ -507,7 +482,6 @@ internal class DuckLakeScanPlanProviderTest {
                     .orFail("expected applyFilter to push name LIKE 'a%'")
                 val prunedHandle = applied.handle.asDuckLakeHandle<DuckLakeTableHandle>()
 
-                // Only alice's file matches the 'a' prefix.
                 val prunedRanges = plan.planScan(null, prunedHandle, listOf(), java.util.Optional.empty())
                 assertThat(prunedRanges).hasSize(1)
                 assertThat(prunedRanges.size).isLessThan(allRanges.size)
@@ -516,8 +490,6 @@ internal class DuckLakeScanPlanProviderTest {
 
     @Test
     fun canonicalAwsAliasMapping() {
-        // Pin the FE→BE key aliasing surface so a typo in the switch can't
-        // silently drop credentials on the BE side at runtime.
         assertThat(DuckLakeScanPlanProvider.canonicalAwsAlias("s3.access_key"))
             .isEqualTo("AWS_ACCESS_KEY")
         assertThat(DuckLakeScanPlanProvider.canonicalAwsAlias("s3.secret_key"))
@@ -528,7 +500,6 @@ internal class DuckLakeScanPlanProviderTest {
             .isEqualTo("AWS_REGION")
         assertThat(DuckLakeScanPlanProvider.canonicalAwsAlias("s3.session_token"))
             .isEqualTo("AWS_TOKEN")
-        // Path-style and unrelated keys have no AWS_ alias.
         assertThat(DuckLakeScanPlanProvider.canonicalAwsAlias("use_path_style")).isNull()
         assertThat(DuckLakeScanPlanProvider.canonicalAwsAlias("s3.path-style-access")).isNull()
         assertThat(DuckLakeScanPlanProvider.canonicalAwsAlias("metadata.url")).isNull()
@@ -546,17 +517,14 @@ internal class DuckLakeScanPlanProviderTest {
                 val params = TFileScanRangeParams()
                 plan.populateScanLevelParams(params, null)
                 plan.populateScanLevelParams(params, HashMap())
-                // Empty input leaves the params struct untouched — no spurious
-                // setProperties(empty) call to confuse downstream serialization.
+                // Empty input must not call setProperties(empty), which would
+                // change the serialized struct.
                 assertThat(params.isSetProperties).isFalse()
             }
     }
 
     @Test
     fun isStoragePropertyRecognisesS3Aliases() {
-        // Pin the predicate's recognition surface so deploys against
-        // Iceberg-style configs (s3.*) and SDK-style configs (AWS_*) both
-        // flow through unchanged.
         assertThat(DuckLakeScanPlanProvider.isStorageProperty("s3.endpoint")).isTrue()
         assertThat(DuckLakeScanPlanProvider.isStorageProperty("s3.access_key")).isTrue()
         assertThat(DuckLakeScanPlanProvider.isStorageProperty("s3.path-style-access")).isTrue()
@@ -565,7 +533,6 @@ internal class DuckLakeScanPlanProviderTest {
         assertThat(DuckLakeScanPlanProvider.isStorageProperty("fs.s3a.impl")).isTrue()
         assertThat(DuckLakeScanPlanProvider.isStorageProperty("use_path_style")).isTrue()
 
-        // Plugin / engine keys stay out.
         assertThat(DuckLakeScanPlanProvider.isStorageProperty("metadata.url")).isFalse()
         assertThat(DuckLakeScanPlanProvider.isStorageProperty("metadata.user")).isFalse()
         assertThat(DuckLakeScanPlanProvider.isStorageProperty("storage.warehouse")).isFalse()
@@ -573,7 +540,6 @@ internal class DuckLakeScanPlanProviderTest {
         assertThat(DuckLakeScanPlanProvider.isStorageProperty("enable.mapping.varbinary")).isFalse()
     }
 }
-
 
 /**
  * COUNT(*) pushdown and partition-bearing ranges. Split from [DuckLakeScanPlanProviderTest] only to
@@ -603,11 +569,9 @@ internal class DuckLakeScanPlanCountAndPartitionTest {
     @Test
     @Throws(Exception::class)
     fun countPushdownCollapsesCleanTableToSingleCountRange() {
-        // COUNT(*) pushdown on a clean table (no deletes, no filter, no
-        // pruning): the scan collapses to ONE range carrying the exact total
-        // (2+1 = 3 rows seeded on sales.orders) — the emission shape copied
-        // from IcebergScanPlanProvider.planCountPushdown. The BE-side carrier
-        // is iceberg's table_level_row_count on the format descriptor.
+        // A clean table (no deletes, filter, or pruning) collapses to one range carrying
+        // the exact total, mirroring IcebergScanPlanProvider.planCountPushdown.
+        // sales.orders is seeded with 3 rows.
         val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
@@ -623,8 +587,8 @@ internal class DuckLakeScanPlanCountAndPartitionTest {
                 val range = ranges[0]
                 assertThat(range.pushDownRowCount).isEqualTo(3L)
 
-                // The count range must ALSO carry the total on the thrift
-                // descriptor — that is what BE's count reader actually serves.
+                // The BE's count reader serves table_level_row_count from the thrift
+                // descriptor, not pushDownRowCount.
                 val formatDesc = TTableFormatFileDesc()
                 val rangeDesc = TFileRangeDesc()
                 range.populateRangeParams(formatDesc, rangeDesc)
@@ -636,8 +600,7 @@ internal class DuckLakeScanPlanCountAndPartitionTest {
     @Test
     @Throws(Exception::class)
     fun countPushdownOnEmptyTableEmitsNoRanges() {
-        // Iceberg parity: an empty table under count pushdown yields ZERO
-        // ranges, so BE sums nothing and COUNT(*) returns 0.
+        // No ranges means the BE sums nothing and COUNT(*) returns 0, as with Iceberg.
         val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
@@ -656,10 +619,8 @@ internal class DuckLakeScanPlanCountAndPartitionTest {
     @Test
     @Throws(Exception::class)
     fun countPushdownServedForPartitionedTableAndCarriesPartitionShape() {
-        // A partitioned but otherwise clean table still serves the metadata
-        // count — and the single collapsed range keeps the partition-bearing
-        // shape every normal range of the table carries (iceberg's count range
-        // goes through the same buildRange as data ranges).
+        // The collapsed count range keeps the partition-bearing shape of the table's
+        // normal ranges, since it goes through the same range builder.
         val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
@@ -681,11 +642,9 @@ internal class DuckLakeScanPlanCountAndPartitionTest {
     @Test
     @Throws(Exception::class)
     fun countPushdownRefusedWhenTableHasDeleteFiles() {
-        // sales.returns_file carries a position-delete file, so the file
-        // metadata count (4 inserted rows) over-counts the 3 live rows. The
-        // provider must emit NO count range — every range keeps the -1
-        // sentinel so PluginDrivenScanNode.resolvePushDownRowCount stays -1
-        // and BE counts by reading (deletes applied).
+        // returns_file carries a position-delete file, so the file-metadata count (4)
+        // over-counts the 3 live rows. Every range must keep the -1 sentinel so
+        // PluginDrivenScanNode.resolvePushDownRowCount stays -1 and the BE counts by reading.
         val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
@@ -697,15 +656,13 @@ internal class DuckLakeScanPlanCountAndPartitionTest {
                 val ranges = plan.planScan(
                     null, handle, listOf(), Optional.empty(), -1L, null, true,
                 )
-                // Normal scan shape survives: one range per data file, with the
-                // position delete still attached.
                 assertThat(ranges).hasSize(1)
                 for (range in ranges) {
                     assertThat(range.pushDownRowCount).isEqualTo(-1L)
                     val formatDesc = TTableFormatFileDesc()
                     range.populateRangeParams(formatDesc, TFileRangeDesc())
-                    // The -1 sentinel must not leak into the thrift either
-                    // (unset == thrift default -1; keeps parity bytes stable).
+                    // Left unset rather than set to -1: the thrift default is already -1
+                    // and setting it changes the serialized bytes.
                     assertThat(formatDesc.isSetTableLevelRowCount).isFalse()
                     assertThat(formatDesc.icebergParams.deleteFiles).hasSize(1)
                 }
@@ -715,9 +672,8 @@ internal class DuckLakeScanPlanCountAndPartitionTest {
     @Test
     @Throws(Exception::class)
     fun countPushdownRefusedWhenRemainingFilterPresent() {
-        // A remaining (non-pushed) filter expression means the COUNT(*) is
-        // over a filtered row set — a whole-table metadata count would be
-        // wrong. Normal ranges only.
+        // A remaining filter means COUNT(*) is over a filtered row set, so a
+        // whole-table metadata count would be wrong.
         val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
@@ -747,9 +703,8 @@ internal class DuckLakeScanPlanCountAndPartitionTest {
     @Test
     @Throws(Exception::class)
     fun countPushdownRefusedWhenHandleCarriesPrunedFileSet() {
-        // applyFilter leaves pushedFilter + prunedFileIds on the handle: the
-        // engine-visible remaining filter may be empty, but the scan is no
-        // longer whole-table — a metadata count would answer the wrong query.
+        // After applyFilter the engine-visible remaining filter may be empty, but the
+        // handle's prunedFileIds mean the scan is no longer whole-table.
         val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
@@ -782,10 +737,8 @@ internal class DuckLakeScanPlanCountAndPartitionTest {
     @Test
     @Throws(Exception::class)
     fun countSentinelNeverLeaksWhenCountPushdownIsOff() {
-        // countPushdown=false must behave exactly like the 4-arg planScan:
-        // same range count, every range on the -1 sentinel. A stray
-        // precomputed count here would let a non-COUNT query read a collapsed
-        // single-range plan.
+        // A stray precomputed count here would let a non-COUNT query read a
+        // collapsed single-range plan.
         val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
@@ -808,11 +761,9 @@ internal class DuckLakeScanPlanCountAndPartitionTest {
     @Test
     @Throws(Exception::class)
     fun partitionedTableRangesArePartitionBearingWithIdentityValues() {
-        // Identity-partitioned table: every range flags partition-bearing (so
-        // PluginDrivenSplit emits an EMPTY partition-values list instead of
-        // null → no Hive key=value path parsing) and carries the file's
-        // identity values keyed by lowercased column name (iceberg's
-        // getIdentityPartitionInfoMap keying).
+        // Partition-bearing makes PluginDrivenSplit emit an empty partition-values list
+        // instead of null, which skips Hive key=value path parsing. Values are keyed by
+        // lowercased column name, as in iceberg's getIdentityPartitionInfoMap.
         val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
@@ -830,15 +781,13 @@ internal class DuckLakeScanPlanCountAndPartitionTest {
                     assertThat(range.partitionValues).containsOnlyKeys("region")
                     seenRegions.add(range.partitionValues.getValue("region"))
 
-                    // FE-plan-level only: partition values must NOT surface as
-                    // columns_from_path on the wire (BE reads partition columns
-                    // from the parquet body; we emit no path_partition_keys).
+                    // Partition values stay FE-side; the BE reads partition columns from
+                    // the parquet body, so nothing goes out as columns_from_path.
                     val rangeDesc = TFileRangeDesc()
                     range.populateRangeParams(TTableFormatFileDesc(), rangeDesc)
                     assertThat(rangeDesc.isSetColumnsFromPath).isFalse()
                     assertThat(rangeDesc.isSetColumnsFromPathKeys).isFalse()
                 }
-                // Both partitions' files show their own value.
                 assertThat(seenRegions).containsExactlyInAnyOrder("us", "eu")
             }
     }
@@ -846,11 +795,9 @@ internal class DuckLakeScanPlanCountAndPartitionTest {
     @Test
     @Throws(Exception::class)
     fun bucketPartitionedRangesArePartitionBearingWithoutRawValues() {
-        // BUCKET-transformed partitions: the stored value is the derived
-        // bucket number, NOT the column value, so it must never be presented
-        // as a raw column value (iceberg surfaces identity transforms only).
-        // The ranges still flag partition-bearing — the table HAS an active
-        // spec — with an empty values map.
+        // A bucket partition stores the derived bucket number, not the column value,
+        // so it is never surfaced as a raw value (iceberg exposes identity transforms
+        // only). The ranges are still partition-bearing because the table has a spec.
         val properties = DorisTestSupport.isolatedProperties(isolated)
         DuckLakeConnectorProvider()
             .create(properties, FakeConnectorContext("dl", 1L)).use { connector ->
@@ -889,10 +836,7 @@ internal class DuckLakeScanPlanCountAndPartitionTest {
     }
 }
 
-// The SPI collapsed planScan's four overloads into a single
-// planScan(session, ConnectorScanRequest). These test-only shims reconstruct the
-// former 4-arg and 7-arg call shapes by packing the args into a ConnectorScanRequest,
-// so every call site stays byte-for-byte the same and exercises the identical inputs.
+// Test-only convenience overloads that pack positional arguments into a ConnectorScanRequest.
 private fun ConnectorScanPlanProvider.planScan(
     session: ConnectorSession?,
     handle: ConnectorTableHandle,

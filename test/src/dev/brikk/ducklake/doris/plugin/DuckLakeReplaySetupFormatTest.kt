@@ -63,7 +63,7 @@ internal class DuckLakeReplaySetupFormatTest {
             ----
             1.1
         """.trimIndent())
-        // Diagnostic native contract, deliberately outside the consumer's 1.0 execution scope.
+        // Uses the plain CorpusRunner: this checks the native downgrade contract, which the Doris runner's 1.0 lane would halt on.
         val report = CorpusRunner(root, setupFormat = ReplaySetupFormat.DUCKLAKE_1_0).run(listOf(file))
         assertThat(report.skippedFiles).isEmpty()
         assertThat(report.failures).isEmpty()

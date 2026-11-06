@@ -41,18 +41,16 @@ internal class DuckLakeTypeMappingTest {
         assertThat(precision("timestamp")).isEqualTo(6)
         assertThat(precision("timestamp_s")).isEqualTo(0)
         assertThat(precision("timestamp_ms")).isEqualTo(3)
-        // nanos clamp to Doris's max datetime scale (6) — documented-lossy, see the
-        // mapping's DEGRADED note and DuckLakeTemporalTypeAuditTest.
+        // Nanoseconds clamp to Doris's maximum datetime scale of 6.
         assertThat(precision("timestamp_ns")).isEqualTo(6)
-        // timestamptz default (enable.mapping.timestamp_tz=false) → naive
-        // DATETIMEV2 (correct UTC values), for BE compatibility.
+        // With enable.mapping.timestamp_tz off, timestamptz maps to naive DATETIMEV2 for BE compatibility.
         assertThat(name("timestamptz")).isEqualTo("DATETIMEV2")
     }
 
     @Test
     fun timestamptzMappingIsGatedByEnableTimestampTz() {
-        // Mirrors the iceberg connector's enable.mapping.timestamp_tz: off →
-        // naive DATETIMEV2; on → zone-aware TIMESTAMPTZ (needs BE >= 4.1.2).
+        // Mirrors the iceberg connector's enable.mapping.timestamp_tz: off gives naive DATETIMEV2,
+        // on gives zone-aware TIMESTAMPTZ, which needs BE >= 4.1.2.
         val off = DuckLakeTypeMapping.fromDucklakeType("timestamptz", enableTimestampTz = false)
         assertThat(off.typeName).isEqualTo("DATETIMEV2")
         assertThat(off.precision).isEqualTo(6)

@@ -14,23 +14,10 @@ import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
 
 /**
- * Snapshot-pinning audit at the metadata level: a [DuckLakeTableHandle] pins the
- * snapshot it was resolved at, and every metadata read through that handle must
- * keep answering from THAT snapshot while the catalog advances underneath —
- * schema reads after ADD/RENAME COLUMN, data-file sets after inserts, even
- * whole-table reads after DROP TABLE.
- *
- * Ports the pinning semantics of trino-ducklake's
- * `TestDucklakeCatalogSnapshotPinningIntegration.kt` (a pinned read keeps seeing
- * the historical row count while the live catalog moves on) to the doris FE
- * surface, where the pin lives on the table handle instead of a session/catalog
- * property. The scan planner is out of scope here (BE-side); what the FE owns is
- * that a query planned against handle@snapN never sees snapN+1 metadata — the
- * repeatable-read guarantee everything downstream assumes.
- *
- * Complements [DuckLakeConnectorMetadataTimeTravelTest]: that suite covers
- * resolving a PAST snapshot onto a handle (FOR VERSION/TIME AS OF); this one
- * covers the dual — a handle staying stable while the FUTURE happens around it.
+ * A [DuckLakeTableHandle] pins the snapshot it was resolved at, and every metadata read through
+ * it must keep answering from that snapshot while the catalog advances underneath (ADD/RENAME
+ * COLUMN, inserts, DROP TABLE). Complements [DuckLakeConnectorMetadataTimeTravelTest], which
+ * covers resolving a past snapshot onto a handle.
  */
 internal class DuckLakeSnapshotPinningAuditTest {
 
@@ -48,7 +35,6 @@ internal class DuckLakeSnapshotPinningAuditTest {
                 "pinningaudit",
                 listOf(
                     "CREATE SCHEMA dl.pin",
-                    // Real inserts so the table owns real data files to count.
                     "CREATE TABLE dl.pin.facts (id INTEGER, name VARCHAR)",
                     "INSERT INTO dl.pin.facts VALUES (1, 'a'), (2, 'b')",
                     "INSERT INTO dl.pin.facts VALUES (3, 'c')",
@@ -96,16 +82,13 @@ internal class DuckLakeSnapshotPinningAuditTest {
             val pinned = handleFor(md, "facts")
             assertThat(columnNames(md, pinned)).containsExactly("id", "name")
 
-            // Advance the catalog underneath the handle: ADD COLUMN commits a new
-            // snapshot (columns carry begin/end-snapshot ranges in DuckLake).
+            // ADD COLUMN commits a new snapshot; columns carry begin/end-snapshot ranges.
             catalog.addColumn(pinned.tableId, TableColumnSpec.leaf("added_later", "int32", true))
             assertThat(catalog.currentSnapshotId).isGreaterThan(pinned.snapshotId)
 
-            // The OLD handle keeps resolving the OLD schema — both surfaces.
             assertThat(columnNames(md, pinned)).containsExactly("id", "name")
             assertThat(md.getColumnHandles(null, pinned).keys).containsExactly("id", "name")
 
-            // A freshly resolved handle pins the new snapshot and sees the new column.
             val fresh = handleFor(md, "facts")
             assertThat(fresh.snapshotId).isGreaterThan(pinned.snapshotId)
             assertThat(columnNames(md, fresh)).containsExactly("id", "name", "added_later")
@@ -116,8 +99,8 @@ internal class DuckLakeSnapshotPinningAuditTest {
     fun pinnedHandleSchemaIsStableAcrossRenameColumn() {
         withCatalog { catalog ->
             val md = DuckLakeConnectorMetadata(catalog)
-            // Own scratch table so this test doesn't depend on / interfere with the
-            // add-column mutation of pin.facts (JUnit method order is unspecified).
+            // Own scratch table: JUnit method order is unspecified and pin.facts is
+            // mutated by the add-column test.
             md.createTable(
                 null,
                 ConnectorCreateTableRequest.builder()
@@ -138,9 +121,8 @@ internal class DuckLakeSnapshotPinningAuditTest {
                 .columnId
             catalog.renameColumn(pinned.tableId, nameColumnId, "label")
 
-            // Rename is the nastier mutation: same columnId, new name. The pinned
-            // handle must keep the OLD name (a plan compiled against it references
-            // "name"); only a fresh handle may observe "label".
+            // Rename keeps the columnId; a plan compiled against the pinned handle
+            // still references "name".
             assertThat(columnNames(md, pinned)).containsExactly("id", "name")
             assertThat(columnNames(md, handleFor(md, "rename_scratch")))
                 .containsExactly("id", "label")
@@ -153,13 +135,10 @@ internal class DuckLakeSnapshotPinningAuditTest {
             val md = DuckLakeConnectorMetadata(catalog)
             val pinned = handleFor(md, "facts")
             val filesAtPin = catalog.getDataFiles(pinned.tableId, pinned.snapshotId).size
-            // The seed INSERTs guarantee at least one real data file; the exact count
-            // is DuckDB's business (it may consolidate at CHECKPOINT) — the invariant
-            // under test is stability at the pin, not the initial file layout.
+            // DuckDB may consolidate the seed inserts at CHECKPOINT, so only assert
+            // that at least one data file exists.
             assertThat(filesAtPin).isPositive()
 
-            // A catalog-level insert commit (the same primitive the write path uses)
-            // registers one more data file in a new snapshot.
             catalog.commitInsert(
                 pinned.tableId,
                 listOf(
@@ -178,20 +157,16 @@ internal class DuckLakeSnapshotPinningAuditTest {
                 ),
             )
 
-            // trino's pinning test asserts the pinned read keeps counting 2 rows while
-            // current counts 4; the FE-metadata equivalent is the file set: unchanged
-            // at the pin, grown by one at the fresh handle's snapshot.
             assertThat(catalog.getDataFiles(pinned.tableId, pinned.snapshotId)).hasSize(filesAtPin)
             val fresh = handleFor(md, "facts")
             assertThat(catalog.getDataFiles(fresh.tableId, fresh.snapshotId)).hasSize(filesAtPin + 1)
 
-            // beginQuerySnapshot must pin the query to the HANDLE's snapshot, not to
-            // whatever is current at call time — this is what the engine serializes
-            // toward the BE, so a drift here re-introduces read skew end to end.
+            // beginQuerySnapshot is what the engine serializes toward the BE; it must
+            // use the handle's snapshot, not whatever is current at call time.
             val mvcc = md.beginQuerySnapshot(null, pinned).orFail("expected an mvcc snapshot")
             assertThat(mvcc.snapshotId).isEqualTo(pinned.snapshotId)
-            // API 8's retained-schema publication is a stronger Paimon-style opt-in.
-            // DuckLake already resolves schema through the snapshot-stamped handle.
+            // Retained-schema publication is a Paimon-style opt-in; DuckLake already
+            // resolves schema through the snapshot-stamped handle.
             assertThat(mvcc.isSchemaRetained).isFalse()
         }
     }
@@ -204,13 +179,11 @@ internal class DuckLakeSnapshotPinningAuditTest {
 
             md.dropTable(null, pinned)
 
-            // Listings and fresh lookups follow the CURRENT snapshot: gone.
             assertThat(md.listTableNames(null, "pin")).doesNotContain("doomed")
             assertThat(md.getTableHandle(null, "pin", "doomed")).isEmpty
 
-            // But DuckLake drops are soft (end-snapshot stamping), so the pinned
-            // handle still resolves its historical schema — an in-flight query that
-            // resolved the handle before the DROP committed must not blow up mid-plan.
+            // DuckLake drops are soft (end-snapshot stamping), so an in-flight query
+            // that resolved the handle before the DROP must still plan.
             assertThat(columnNames(md, pinned)).containsExactly("id")
         }
     }

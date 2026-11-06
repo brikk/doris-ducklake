@@ -8,10 +8,9 @@ import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
 
 /**
- * Pure-logic coverage of [DuckLakeIcebergSchema] — the DuckLake-columns → iceberg
- * `Schema` builder that produces the write sink's `schema_json`. The key assertion
- * round-trips the schema through iceberg's **own** `SchemaParser` (an independent
- * oracle for well-formedness + field-id preservation), not just self-comparison.
+ * Covers the DuckLake columns to iceberg `Schema` builder behind the write sink's `schema_json`.
+ * The key assertion round-trips the schema through iceberg's own `SchemaParser` as an independent
+ * check of well-formedness and field-id preservation.
  */
 internal class DuckLakeIcebergSchemaTest {
 
@@ -60,8 +59,7 @@ internal class DuckLakeIcebergSchemaTest {
         assertThat(schema.findField("big").type()).isEqualTo(Types.LongType.get())
         assertThat(schema.findField("dec").type()).isEqualTo(Types.DecimalType.of(10, 2))
 
-        // ORACLE: iceberg's own SchemaParser round-trips the JSON losslessly and
-        // preserves field-ids — i.e. schema_json is a valid iceberg schema.
+        // Iceberg's own SchemaParser must round-trip the JSON and preserve field ids.
         val json = SchemaParser.toJson(schema)
         val reparsed = SchemaParser.fromJson(json)
         assertThat(reparsed.sameSchema(schema)).isTrue()
@@ -73,7 +71,7 @@ internal class DuckLakeIcebergSchemaTest {
         val columns = listOf(
             col(2, "b", "int32", order = 2),
             col(1, "a", "varchar", order = 1),
-            col(99, "child", "int32", parent = 1L), // nested child row → excluded
+            col(99, "child", "int32", parent = 1L), // nested child row, excluded
         )
         val schema = DuckLakeIcebergSchema.of(columns)
         assertThat(schema.columns().map { it.name() }).containsExactly("a", "b")

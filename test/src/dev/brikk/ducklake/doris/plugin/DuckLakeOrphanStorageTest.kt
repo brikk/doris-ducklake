@@ -19,7 +19,7 @@ import java.sql.Connection
 import java.sql.DriverManager
 import java.util.UUID
 
-/** F01: released JDBC ownership rows versus the actual S3 list/delete implementation, not a fake lister. */
+/** Runs remove_orphan_files against real catalog ownership rows and the real S3 list/delete implementation rather than a fake lister. */
 internal class DuckLakeOrphanStorageTest {
     companion object {
         private lateinit var server: TestingDucklakePostgreSqlCatalogServer
@@ -102,7 +102,7 @@ internal class DuckLakeOrphanStorageTest {
         assertObjects(contents)
         val store = S3WarehouseBlobStore(storage.client)
         assertThat(store.list(root).map { it.uri }).containsExactlyInAnyOrderElementsOf(contents.keys)
-        // Backend rejects this exact raw prefix. Do not silently broaden it to paths/.
+        // The backend rejects this exact raw prefix; it must not be broadened to paths/.
         assertThatThrownBy { store.list(root + "/") }
             .isInstanceOf(DorisConnectorException::class.java).hasMessageContaining("failed to read a listed object")
         val aliased = storage.client.statObject(StatObjectArgs.builder().bucket(bucket).`object`("paths//ducklake-live.parquet").build())

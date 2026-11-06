@@ -73,7 +73,7 @@ internal class PgBouncerFixture(root: Path) : AutoCloseable {
     }
 
     companion object {
-        // PgBouncer 1.23.1; same immutable fixture as the producer's transaction-pooling tests.
+        // PgBouncer 1.23.1, pinned by digest.
         private const val IMAGE = "edoburu/pgbouncer@sha256:377dec3c0e4a66a1077ec043e16a26ed5702a6d954011a7983a1457c2e070b1d"
     }
 }

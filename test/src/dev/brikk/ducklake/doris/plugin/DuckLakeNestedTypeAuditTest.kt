@@ -10,19 +10,11 @@ import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
 
 /**
- * Nested and wide-integer type audit against a REAL DuckDB-written catalog:
- * LIST/STRUCT/MAP shapes (including deep composition) plus DuckDB's wide/unsigned
- * integers (HUGEINT/UHUGEINT/UTINYINT/UINTEGER/UBIGINT) and byte-ish scalars
- * (BLOB/UUID/JSON), read back through `DuckLakeConnectorMetadata.getTableSchema`.
- *
- * Ports the FE-visible slice of trino-ducklake's
- * `TestDucklakeCrossEngineTypeAudit.kt` (the `list<T>` read audit and
- * HUGEINT/UHUGEINT widening-on-read sections). Values are BE-side; what the FE
- * owns is the type shape, and the sharp edge is that DuckLake persists nested
- * columns as a bare `list`/`struct`/`map` parent row plus child rows (probed
- * 2026-07-05) — `JdbcDucklakeCatalog.resolveColumnType` must reconstruct the
- * composite string before [DuckLakeTypeMapping] ever sees it. The pure-string
- * [DuckLakeTypeMappingTest] cannot catch a reconstruction bug; this audit can.
+ * Asserts the FE-visible type shapes for LIST/STRUCT/MAP columns, wide and unsigned
+ * integers, and BLOB/UUID/JSON in a catalog written by a real DuckDB writer. DuckLake
+ * persists nested columns as a bare `list`/`struct`/`map` parent row plus child rows,
+ * so this covers the reconstruction in `JdbcDucklakeCatalog.resolveColumnType` that
+ * the string-only [DuckLakeTypeMappingTest] cannot.
  */
 internal class DuckLakeNestedTypeAuditTest {
 
@@ -95,16 +87,15 @@ internal class DuckLakeNestedTypeAuditTest {
         withMetadata { md ->
             val types = schemaTypes(md, "nested_shapes")
 
-            // Field NAMES matter as much as field types: the BE resolves subfield
-            // access by name through the FE-provided shape (trino's nested-field
-            // tests lean on the same property).
+            // The BE resolves subfield access by name through the FE-provided shape,
+            // so field names matter as much as field types.
             val point = types.getValue("point")
             assertThat(point.typeName).isEqualTo("STRUCT")
             assertThat(point.fieldNames).containsExactly("id", "name")
             assertThat(point.children.map { it.typeName }).containsExactly("INT", "STRING")
 
-            // MAP children are positional: key first, value second. A swap here
-            // type-checks in many cases (both children exist) but corrupts reads.
+            // MAP children are positional (key, then value); a swap still type-checks
+            // but corrupts reads.
             val counts = types.getValue("counts")
             assertThat(counts.typeName).isEqualTo("MAP")
             assertThat(counts.children.map { it.typeName }).containsExactly("STRING", "BIGINT")
@@ -116,8 +107,6 @@ internal class DuckLakeNestedTypeAuditTest {
         withMetadata { md ->
             val types = schemaTypes(md, "nested_shapes")
 
-            // list<struct<...>> — the composite the trino list-audit found most
-            // fragile on the inlined path; at FE level the shape must nest cleanly.
             val tagged = types.getValue("tagged")
             assertThat(tagged.typeName).isEqualTo("ARRAY")
             val element = tagged.children[0]
@@ -125,9 +114,8 @@ internal class DuckLakeNestedTypeAuditTest {
             assertThat(element.fieldNames).containsExactly("tag", "score")
             assertThat(element.children.map { it.typeName }).containsExactly("STRING", "DOUBLE")
 
-            // map<varchar, struct<list<int32>, map<varchar,date>>> — three levels;
-            // reconstruction is recursive, so this is the regression canary for
-            // depth-related bugs (off-by-one child ordering, dropped grandchildren).
+            // Three levels deep; reconstruction is recursive, so this catches child
+            // ordering and dropped-grandchild bugs.
             val deep = types.getValue("deep")
             assertThat(deep.typeName).isEqualTo("MAP")
             assertThat(deep.children[0].typeName).isEqualTo("STRING")
@@ -147,14 +135,13 @@ internal class DuckLakeNestedTypeAuditTest {
         withMetadata { md ->
             val types = schemaTypes(md, "wide_scalars")
 
-            // The trino audit reads HUGEINT back as DECIMAL(38,0); doris mirrors it.
             val huge = types.getValue("c_huge")
             assertThat(huge.typeName).isEqualTo("DECIMALV3")
             assertThat(huge.precision).isEqualTo(38)
             assertThat(huge.scale).isEqualTo(0)
 
-            // Unsigned types must widen to the next signed type that holds the FULL
-            // range — mapping uint32 to INT would silently wrap values > 2^31.
+            // Unsigned types widen to the next signed type that holds the full range;
+            // mapping uint32 to INT would wrap values above 2^31.
             assertThat(types.getValue("c_utiny").typeName).isEqualTo("SMALLINT")
             assertThat(types.getValue("c_usmall").typeName).isEqualTo("INT")
             assertThat(types.getValue("c_uint").typeName).isEqualTo("BIGINT")
@@ -162,8 +149,7 @@ internal class DuckLakeNestedTypeAuditTest {
             assertThat(ubig.typeName).isEqualTo("DECIMALV3")
             assertThat(ubig.precision).isEqualTo(20)
 
-            // uint128 exceeds DECIMALV3(38) — documented-lossy degrade to STRING
-            // (DuckLakeTypeMapping marks it DEGRADED). Pinned so it stays a choice.
+            // uint128 exceeds DECIMALV3(38), so it degrades to STRING.
             assertThat(types.getValue("c_uhuge").typeName).isEqualTo("STRING")
         }
     }
@@ -183,7 +169,6 @@ internal class DuckLakeNestedTypeAuditTest {
             assertThat(uuid.typeName).isEqualTo("VARBINARY")
             assertThat(uuid.precision).isEqualTo(16)
 
-            // JSON is a documented-lossy STRING (no doris-side JSON pushdown yet).
             assertThat(types.getValue("c_json").typeName).isEqualTo("STRING")
         }
     }

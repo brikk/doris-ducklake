@@ -4,9 +4,8 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 
 /**
- * Proves our murmur3-based BUCKET transform matches DuckLake's writer exactly —
- * the load-bearing correctness check for bucket pruning. A mismatch would
- * silently drop matching rows, so this pins it against DuckLake's own reference.
+ * Pins the murmur3 bucket transform against DuckLake's own reference values; a mismatch
+ * would prune files that contain matching rows.
  */
 internal class DuckLakeBucketTransformTest {
 
@@ -29,8 +28,7 @@ internal class DuckLakeBucketTransformTest {
 
     @Test
     fun returnsNullForUnbucketableLiteralTypes() {
-        // Pruning is best-effort: types we don't encode here yield null so the
-        // caller keeps every file rather than guessing a bucket.
+        // Types not encoded here yield null so the caller keeps every file rather than guessing a bucket.
         assertThat(DuckLakeBucketTransform.bucket(1.5, 4)).isNull()
         assertThat(DuckLakeBucketTransform.bucket(null, 4)).isNull()
     }

@@ -11,11 +11,8 @@ import org.junit.jupiter.api.Test
 import org.assertj.core.api.Assertions.assertThat
 
 /**
- * Pins the capability declaration. Adding one of the opt-ins (`SUPPORTS_SHOW_CREATE_DDL`,
- * `SUPPORTS_TOPN_LAZY_MATERIALIZE`, `SUPPORTS_NESTED_COLUMN_PRUNE`, `SUPPORTS_VIEW`,
- * `SUPPORTS_COLUMN_AUTO_ANALYZE`, `SUPPORTS_METADATA_PRELOAD`, `SUPPORTS_STORAGE_PREDICATE_PRUNING`,
- * `SUPPORTS_FIELD_ID_ACCESS_PATH`, `SUPPORTS_SYS_TABLE_NESTED_COLUMN_PRUNE`) is a deliberate step
- * with prerequisites in `dev-docs/TODO-read.md`; bump this assertion in the same change.
+ * Pins the capability declaration. Each opt-in has prerequisites listed in `dev-docs/TODO.md`;
+ * update this test in the same change that adds one.
  */
 internal class DuckLakeConnectorCapabilitiesTest {
 
@@ -35,9 +32,8 @@ internal class DuckLakeConnectorCapabilitiesTest {
 
     @Test
     fun newOptInCapabilitiesStayOffUntilTheirPrerequisitesLand() {
-        // Each of these has behavioral prerequisites (field-id stamping for
-        // nested prune, credential-free properties for SHOW CREATE, ...);
-        // declaring one without the matching implementation misplans queries.
+        // Declaring one of these without its implementation (field-id stamping for
+        // nested prune, credential-free properties for SHOW CREATE, ...) misplans queries.
         val connector: Connector = DuckLakeConnector(
             emptyMap(),
             FakeConnectorContext("dl", 1L),

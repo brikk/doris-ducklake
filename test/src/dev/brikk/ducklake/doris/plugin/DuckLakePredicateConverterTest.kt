@@ -15,8 +15,7 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 
 /**
- * Pure-logic coverage of [DuckLakePredicateConverter] — the filter → file-stat
- * range mapping that drives applyFilter's pruning. No catalog / FE needed.
+ * Covers the filter-to-file-stat range mapping that drives applyFilter's pruning.
  */
 internal class DuckLakePredicateConverterTest {
 
@@ -73,23 +72,21 @@ internal class DuckLakePredicateConverterTest {
 
     @Test
     fun skipsNonConvertiblePredicates() {
-        // NE can't be a single range.
+        // NE cannot be a single range.
         assertThat(convert(cmp(ConnectorComparison.Operator.NE, "id", 5))).isEmpty()
         // Unknown column.
         assertThat(convert(cmp(ConnectorComparison.Operator.EQ, "ghost", 5))).isEmpty()
-        // Function call — never pushed (no function pushdown by design).
+        // Function calls are never pushed down.
         val fn = ConnectorFunctionCall("lower", type, listOf(col("id")))
         assertThat(convert(fn)).isEmpty()
-        // A function buried in an AND is skipped; the sibling comparison still converts.
+        // A function inside an AND is skipped; the sibling comparison still converts.
         val mixed = ConnectorAnd(listOf(fn, cmp(ConnectorComparison.Operator.EQ, "id", 7)))
         assertThat(convert(mixed)).containsExactly(ColumnRangePredicate(1L, "7", "7"))
     }
 
     @Test
     fun inListBecomesTypedSpanRange() {
-        // The span must be computed in the values' TYPED order: 3..10, not the
-        // string span "10".."9". A regression to string ordering would yield an
-        // inverted/incorrect range here.
+        // The span is computed in typed order (3..10), not string order ("10".."9").
         val inList = ConnectorIn(col("id"), listOf(lit(3), lit(10), lit(9)), false)
         assertThat(convert(inList)).containsExactly(ColumnRangePredicate(1L, "3", "10"))
     }
@@ -108,7 +105,6 @@ internal class DuckLakePredicateConverterTest {
 
     @Test
     fun membershipComposesAsAConjunctInsideAnd() {
-        // `total >= 5 AND id IN (1, 2)` → a range from each conjunct.
         val and = ConnectorAnd(
             listOf(
                 cmp(ConnectorComparison.Operator.GE, "total", 5),
@@ -123,23 +119,22 @@ internal class DuckLakePredicateConverterTest {
 
     @Test
     fun prefixLikeBecomesCodepointRange() {
-        // 'abc%' matches exactly the strings in [abc, abd) — abd = codepoint successor.
+        // 'abc%' matches exactly the strings in [abc, abd), abd being the code point successor.
         assertThat(convert(like("id", "abc%")))
             .containsExactly(ColumnRangePredicate(1L, "abc", "abd"))
-        // single-char prefix: 'a%' → [a, b)
         assertThat(convert(like("id", "a%")))
             .containsExactly(ColumnRangePredicate(1L, "a", "b"))
     }
 
     @Test
     fun skipsNonPrefixLike() {
-        // Leading wildcard — no usable prefix.
+        // Leading wildcard: no usable prefix.
         assertThat(convert(like("id", "%abc"))).isEmpty()
         // `_` single-char wildcard inside the prefix.
         assertThat(convert(like("id", "a_c%"))).isEmpty()
-        // No trailing `%` — an exact match, left to the BE / equality path.
+        // No trailing `%`: an exact match, left to the BE.
         assertThat(convert(like("id", "abc"))).isEmpty()
-        // Escape char in the prefix — semantics we don't decode.
+        // Escape character in the prefix is not decoded.
         assertThat(convert(like("id", "a\\%b%"))).isEmpty()
         // REGEXP is not a prefix range.
         assertThat(convert(like("id", "abc.*", ConnectorLike.Operator.REGEXP))).isEmpty()
@@ -149,9 +144,9 @@ internal class DuckLakePredicateConverterTest {
 
     @Test
     fun skipsUnsafeMembership() {
-        // NOT IN is the unbounded complement — can't be a single range.
+        // NOT IN is the unbounded complement; it cannot be a single range.
         assertThat(convert(ConnectorIn(col("id"), listOf(lit(1), lit(2)), true))).isEmpty()
-        // OR across two columns can't collapse to one range per column.
+        // OR across two columns cannot collapse to one range per column.
         val mixedColumnOr = ConnectorOr(
             listOf(
                 cmp(ConnectorComparison.Operator.EQ, "id", 1),

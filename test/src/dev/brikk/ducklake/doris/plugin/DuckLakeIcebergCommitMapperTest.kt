@@ -9,9 +9,8 @@ import java.nio.ByteOrder
 import java.nio.charset.StandardCharsets
 
 /**
- * Pure-logic coverage of [DuckLakeIcebergCommitMapper] — the BE `TIcebergCommitData`
- * → DuckLake `DucklakeWriteFragment` mapping that the write transaction commits. No
- * catalog / BE needed; bounds are hand-encoded in Iceberg single-value binary.
+ * Covers the mapping from the BE's `TIcebergCommitData` to a `DucklakeWriteFragment`.
+ * Bounds are hand-encoded in Iceberg single-value binary form.
  */
 internal class DuckLakeIcebergCommitMapperTest {
 
@@ -54,7 +53,7 @@ internal class DuckLakeIcebergCommitMapperTest {
     fun mapsFileMetadataAndDecodesIntAndStringBounds() {
         val stats = TIcebergColumnStats().apply {
             columnSizes = mapOf(1 to 100L, 2 to 200L)
-            valueCounts = mapOf(1 to 10L, 2 to 10L) // Iceberg total counts (incl. nulls)
+            valueCounts = mapOf(1 to 10L, 2 to 10L) // Iceberg counts include nulls
             nullValueCounts = mapOf(1 to 2L, 2 to 0L)
             lowerBounds = mapOf(1 to leInt(5), 2 to utf8("alice"))
             upperBounds = mapOf(1 to leInt(50), 2 to utf8("zoe"))
@@ -75,14 +74,14 @@ internal class DuckLakeIcebergCommitMapperTest {
         assertThat(fragment.fileFormat).isEqualTo("parquet")
         assertThat(fragment.recordCount).isEqualTo(10)
         assertThat(fragment.fileSizeBytes).isEqualTo(1234)
-        assertThat(fragment.footerSize).isZero() // not carried by TIcebergCommitData → catalog stores NULL
+        assertThat(fragment.footerSize).isZero() // not carried by TIcebergCommitData
         assertThat(fragment.partitionValues).isEmpty()
         assertThat(fragment.partitionId).isNull()
 
         val byId = fragment.columnStats.associateBy { it.columnId }
         val intCol = byId.getValue(1L)
         assertThat(intCol.columnSizeBytes).isEqualTo(100)
-        assertThat(intCol.valueCount).isEqualTo(8) // 10 total - 2 null = 8 non-null
+        assertThat(intCol.valueCount).isEqualTo(8) // DuckLake counts non-null values only
         assertThat(intCol.nullCount).isEqualTo(2)
         assertThat(intCol.minValue).isEqualTo("5")
         assertThat(intCol.maxValue).isEqualTo("50")
@@ -111,7 +110,6 @@ internal class DuckLakeIcebergCommitMapperTest {
 
         val fragment = DuckLakeIcebergCommitMapper.toWriteFragment(data, mapOf(3L to "int64"))
 
-        // int64 → little-endian 8-byte decode.
         assertThat(fragment.columnStats.single().minValue).isEqualTo("1000")
         assertThat(fragment.columnStats.single().maxValue).isEqualTo("9000")
     }
@@ -121,7 +119,7 @@ internal class DuckLakeIcebergCommitMapperTest {
         val stats = TIcebergColumnStats().apply {
             valueCounts = mapOf(1 to 4L, 2 to 4L, 3 to 4L)
             nullValueCounts = mapOf(1 to 0L, 2 to 0L, 3 to 0L)
-            // float32 (4-byte LE IEEE-754), float64 (8-byte LE), date (4-byte LE int days).
+            // date is a 4-byte little-endian day count.
             lowerBounds = mapOf(1 to leFloat(1.5f), 2 to leDouble(-2.25), 3 to leInt(0))
             upperBounds = mapOf(1 to leFloat(3.5f), 2 to leDouble(10.75), 3 to leInt(19_737)) // 2024-01-15
         }
@@ -136,7 +134,7 @@ internal class DuckLakeIcebergCommitMapperTest {
         )
         val byId = fragment.columnStats.associateBy { it.columnId }
 
-        // Bounds render as DucklakeStatTypes-parseable strings (BigDecimal for floats, ISO for date).
+        // Bounds render as strings DucklakeStatTypes can parse: plain decimals for floats, ISO for date.
         assertThat(byId.getValue(1L).minValue).isEqualTo("1.5")
         assertThat(byId.getValue(1L).maxValue).isEqualTo("3.5")
         assertThat(byId.getValue(2L).minValue).isEqualTo("-2.25")
@@ -150,7 +148,6 @@ internal class DuckLakeIcebergCommitMapperTest {
         val stats = TIcebergColumnStats().apply {
             valueCounts = mapOf(1 to 3L, 2 to 3L)
             nullValueCounts = mapOf(1 to 0L, 2 to 0L)
-            // A NaN double bound has no ordering; timestamp we deliberately don't decode.
             lowerBounds = mapOf(1 to leDouble(Double.NaN), 2 to leLong(1))
             upperBounds = mapOf(1 to leDouble(Double.POSITIVE_INFINITY), 2 to leLong(9))
         }
@@ -165,11 +162,11 @@ internal class DuckLakeIcebergCommitMapperTest {
         )
         val byId = fragment.columnStats.associateBy { it.columnId }
 
-        // Non-finite float → null (safe: no pruning); counts still mapped.
+        // A non-finite bound has no ordering, so it becomes null (no pruning); counts still map.
         assertThat(byId.getValue(1L).minValue).isNull()
         assertThat(byId.getValue(1L).maxValue).isNull()
         assertThat(byId.getValue(1L).valueCount).isEqualTo(3)
-        // timestamp is deliberately not decoded (unpinned stat form) → null bounds.
+        // Timestamp bounds are not decoded because their catalog stat format is not settled.
         assertThat(byId.getValue(2L).minValue).isNull()
         assertThat(byId.getValue(2L).maxValue).isNull()
     }
@@ -179,8 +176,6 @@ internal class DuckLakeIcebergCommitMapperTest {
         val stats = TIcebergColumnStats().apply {
             valueCounts = mapOf(1 to 4L, 2 to 4L)
             nullValueCounts = mapOf(1 to 0L, 2 to 0L)
-            // Iceberg decimal: minimum-length big-endian two's-complement unscaled int.
-            // decimal(10,2): unscaled 12345 → 123.45 ; unscaled -1 → -0.01.
             lowerBounds = mapOf(1 to beBytes(-1), 2 to beBytes(12_345))
             upperBounds = mapOf(1 to beBytes(9_999), 2 to beBytes(100_000))
         }
@@ -215,7 +210,7 @@ internal class DuckLakeIcebergCommitMapperTest {
             columnStats = stats
         }
 
-        // No (p,s) → scale unknown → null (safe: no pruning).
+        // Without (p,s) the scale is unknown, so the bounds stay null rather than guessed.
         val fragment = DuckLakeIcebergCommitMapper.toWriteFragment(data, mapOf(1L to "decimal"))
         val stat = fragment.columnStats.single()
         assertThat(stat.minValue).isNull()
@@ -225,7 +220,7 @@ internal class DuckLakeIcebergCommitMapperTest {
     @Test
     fun dropsStatsForColumnsNotInTheSchema() {
         val stats = TIcebergColumnStats().apply {
-            valueCounts = mapOf(1 to 3L, 99 to 3L) // field 99 isn't a known column
+            valueCounts = mapOf(1 to 3L, 99 to 3L) // field 99 is not a known column
             lowerBounds = mapOf(1 to leInt(1), 99 to leInt(1))
         }
         val data = TIcebergCommitData().apply {
@@ -265,8 +260,8 @@ internal class DuckLakeIcebergCommitMapperTest {
 
     @Test
     fun stampsBoundPartitionIdOnPartitionedFile() {
-        // For a partitioned write the FE binds the active DuckLake spec id; it isn't
-        // derivable from the fragment, so the mapper takes it as a parameter.
+        // The partition id is not derivable from the commit data, so the mapper takes it
+        // as a parameter.
         val data = TIcebergCommitData().apply {
             filePath = "sales/by_region/region=eu/part-0.parquet"
             rowCount = 2
@@ -285,7 +280,6 @@ internal class DuckLakeIcebergCommitMapperTest {
             filePath = "t/f.parquet"
             rowCount = 1
         }
-        // No partitionId argument → unpartitioned default.
         val fragment = DuckLakeIcebergCommitMapper.toWriteFragment(data, emptyMap())
         assertThat(fragment.partitionId).isNull()
         assertThat(fragment.partitionValues).isEmpty()
@@ -293,9 +287,9 @@ internal class DuckLakeIcebergCommitMapperTest {
 
     @Test
     fun relativizesAbsoluteBePathAgainstTableDataDir() {
-        // The BE reports an absolute s3:// path under the table dir (with a stray
-        // double slash). It must be stored relative, else DuckLake joins it under
-        // the table dir again → the doubled-path read-back failure.
+        // The BE reports an absolute path under the table dir, sometimes with a stray
+        // double slash. It must be stored relative, or DuckLake joins it under the
+        // table dir again on read.
         val data = TIcebergCommitData().apply {
             filePath = "s3://ducklake/data/tpch/doris_w//abc-0.zstd.parquet"
             rowCount = 1

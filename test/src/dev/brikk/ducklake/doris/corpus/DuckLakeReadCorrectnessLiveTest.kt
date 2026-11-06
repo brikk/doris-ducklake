@@ -15,7 +15,11 @@ import java.sql.DriverManager
 import java.sql.Types
 import java.util.Properties
 
-/** Release/candidate private fixture only; never discover shared or retained services. */
+/**
+ * Reads pre-seeded nested and scalar tables through a live FE and checks struct field
+ * names with punctuation, null identity, and the replay cell rendering end to end.
+ * Fixture comes from the `DORIS_READ_CORRECTNESS_FIXTURE` properties file.
+ */
 internal class DuckLakeReadCorrectnessLiveTest {
     private val p = Properties().apply {
         Files.newInputStream(Path.of(requireNotNull(System.getenv("DORIS_READ_CORRECTNESS_FIXTURE")))).use(::load)

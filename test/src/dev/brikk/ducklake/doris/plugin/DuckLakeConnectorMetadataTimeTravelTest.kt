@@ -89,8 +89,8 @@ internal class DuckLakeConnectorMetadataTimeTravelTest {
             val md = DuckLakeConnectorMetadata(catalog)
             val current = catalog.currentSnapshotId
 
-            // A digital TIMESTAMP spec carries raw epoch-millis. "now" must resolve to
-            // the latest committed snapshot (at-or-before semantics).
+            // A digital TIMESTAMP spec carries raw epoch-millis; "now" resolves to the
+            // latest committed snapshot.
             val nowMillis = System.currentTimeMillis()
             val resolved = md.resolveTimeTravel(
                 null,
@@ -108,7 +108,6 @@ internal class DuckLakeConnectorMetadataTimeTravelTest {
         withCatalog { catalog ->
             val md = DuckLakeConnectorMetadata(catalog)
 
-            // Epoch-millis 0 (1970) predates every catalog snapshot → no snapshot at-or-before.
             val resolved = md.resolveTimeTravel(
                 null,
                 handleFor(catalog),
@@ -140,7 +139,6 @@ internal class DuckLakeConnectorMetadataTimeTravelTest {
             val md = DuckLakeConnectorMetadata(catalog)
             val handle = handleFor(catalog)
 
-            // DuckLake has no tags / branches / incremental reads.
             assertThat(md.resolveTimeTravel(null, handle, ConnectorTimeTravelSpec.tag("v1"))).isEmpty
             assertThat(md.resolveTimeTravel(null, handle, ConnectorTimeTravelSpec.branch("main"))).isEmpty
             assertThat(
@@ -152,7 +150,7 @@ internal class DuckLakeConnectorMetadataTimeTravelTest {
         }
     }
 
-    // ---- applySnapshot — threads the resolved snapshot onto the table handle ----
+    // ---- applySnapshot ----
 
     @Test
     fun applySnapshotThreadsResolvedSnapshotIdOntoHandle() {
@@ -164,7 +162,6 @@ internal class DuckLakeConnectorMetadataTimeTravelTest {
             val applied = md.applySnapshot(null, handle, mvcc(targetId)) as DuckLakeTableHandle
 
             assertThat(applied.snapshotId).isEqualTo(targetId)
-            // Identity fields are preserved; only the snapshot pin moves.
             assertThat(applied.database).isEqualTo(handle.database)
             assertThat(applied.table).isEqualTo(handle.table)
             assertThat(applied.tableId).isEqualTo(handle.tableId)
@@ -177,11 +174,9 @@ internal class DuckLakeConnectorMetadataTimeTravelTest {
             val md = DuckLakeConnectorMetadata(catalog)
             val handle = handleFor(catalog)
 
-            // null pin (no time travel) → read latest, handle untouched.
             assertThat(md.applySnapshot(null, handle, null)).isSameAs(handle)
-            // negative id (empty-table / invalid pin) → handle untouched.
+            // A negative id is the empty-table / invalid pin.
             assertThat(md.applySnapshot(null, handle, mvcc(-1))).isSameAs(handle)
-            // already pinned at that snapshot → no-op.
             assertThat(md.applySnapshot(null, handle, mvcc(handle.snapshotId))).isSameAs(handle)
         }
     }
@@ -196,13 +191,10 @@ internal class DuckLakeConnectorMetadataTimeTravelTest {
             }.tableId
             val filesAtSnap0 = catalog.getDataFiles(tableId, snap0).size
 
-            // Advance history: commit one data file → a new current snapshot.
             val snap1 = commitOneInsertSnapshot(catalog, tableId, snap0)
             assertThat(snap1).isGreaterThan(snap0)
             assertThat(catalog.getDataFiles(tableId, snap1)).hasSize(filesAtSnap0 + 1)
 
-            // getTableHandle pins the latest (snap1); FOR VERSION AS OF snap0 resolves the
-            // historical snapshot, and applySnapshot threads it onto the handle.
             val handleNow = md.getTableHandle(null, "sales", "orders").orElseThrow() as DuckLakeTableHandle
             assertThat(handleNow.snapshotId).isEqualTo(snap1)
 
@@ -213,13 +205,12 @@ internal class DuckLakeConnectorMetadataTimeTravelTest {
             ).orElseThrow()
             val pinned = md.applySnapshot(null, handleNow, resolved) as DuckLakeTableHandle
 
-            // The pinned handle resolves the OLD data-file set — historical state, not current.
             assertThat(pinned.snapshotId).isEqualTo(snap0)
             assertThat(catalog.getDataFiles(pinned.tableId, pinned.snapshotId)).hasSize(filesAtSnap0)
         }
     }
 
-    // ---- getTableStatistics — snapshot-scoped, not the global current-snapshot row ----
+    // ---- getTableStatistics ----
 
     @Test
     fun tableStatisticsAreSnapshotScopedForTimeTravelPin() {
@@ -230,9 +221,8 @@ internal class DuckLakeConnectorMetadataTimeTravelTest {
                 "expected sales.orders"
             }.tableId
             val rows0 = catalog.getDataFiles(tableId, snap0).sumOf { it.recordCount }
-            assertThat(rows0).isGreaterThan(0) // seeded sales.orders
+            assertThat(rows0).isGreaterThan(0)
 
-            // Advance history: commit one 3-row data file → new current snapshot.
             val snap1 = commitOneInsertSnapshot(catalog, tableId, snap0)
             assertThat(snap1).isGreaterThan(snap0)
             val rows1 = catalog.getDataFiles(tableId, snap1).sumOf { it.recordCount }
@@ -242,23 +232,20 @@ internal class DuckLakeConnectorMetadataTimeTravelTest {
             val handleCurrent = DuckLakeTableHandle("sales", "orders", table.schemaId, tableId, snap1)
             val handleHistorical = handleCurrent.copy(snapshotId = snap0)
 
-            // Current-snapshot pin → whole-table stats (global `ducklake_table_stats`) are served.
+            // At the current snapshot the global ducklake_table_stats row is served.
             assertThat(md.getTableStatistics(null, handleCurrent)).isPresent
 
-            // 2-arg with a historical handle → snapshot-scoped stats from the files live at snap0:
-            // the OLD row count (rows0), NOT the current one (rows1).
+            // A historical handle gets snapshot-scoped stats from the files live at snap0.
             val historical = md.getTableStatistics(null, handleHistorical)
             assertThat(historical).isPresent
             assertThat(historical.get().rowCount).isEqualTo(rows0)
             assertThat(historical.get().rowCount).isLessThan(rows1)
 
-            // The path fe-core actually uses for time travel: the 3-arg overload with a CURRENT handle
-            // but the PINNED snapshot threaded as the arg. Must honour the arg (rows0), not the handle
-            // (rows1) — this is what makes `FOR VERSION AS OF` CBO cardinality match the pinned read.
+            // fe-core passes the pinned snapshot as the third argument with a current handle;
+            // the argument must win, or FOR VERSION AS OF cardinality would not match the read.
             val viaSnapshotArg = md.getTableStatistics(null, handleCurrent, mvcc(snap0))
             assertThat(viaSnapshotArg).isPresent
             assertThat(viaSnapshotArg.get().rowCount).isEqualTo(rows0)
-            // 3-arg at the current snapshot still serves the whole-table row.
             assertThat(md.getTableStatistics(null, handleCurrent, mvcc(snap1))).isPresent
         }
     }

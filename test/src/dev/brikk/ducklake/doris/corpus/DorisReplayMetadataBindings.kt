@@ -7,7 +7,12 @@ import dev.brikk.house.sql.dialects.Dialects
 import dev.brikk.house.sql.optimizer.traverseScope
 import dev.brikk.house.sql.parser.TokenType
 
-/** Rebind only known rewritten metadata catalogs' schema identifiers, never arbitrary SQL text. */
+/**
+ * Rewrites oracle-side `<metadata_catalog>.main.<table>` references to the PostgreSQL
+ * schema (`public`) when the metadata catalog was rewritten from DuckDB to PostgreSQL.
+ * Works on the parsed tree, scoped to the known catalogs, so unrelated identifiers
+ * named `main` are untouched.
+ */
 internal object DorisReplayMetadataBindings {
     private val identifierTokens = setOf(TokenType.VAR, TokenType.IDENTIFIER)
 

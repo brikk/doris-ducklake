@@ -13,7 +13,7 @@ import org.apache.doris.thrift.TFileScanRangeParams
 import org.apache.doris.thrift.TPrimitiveType
 import org.apache.doris.thrift.schema.external.TField
 
-/** Release regression: consume the published catalog's structured nested signatures. */
+/** Nested type signatures from the catalog must map losslessly, including quoted field names and decimal arities. */
 internal class DuckLakeNestedSignatureTest {
     @TempDir lateinit var root: Path
 

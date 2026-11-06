@@ -17,11 +17,9 @@ import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
 
 /**
- * Coverage of `remove_orphan_files`. The data-loss-critical selection ([OrphanFiles]) is pure and
- * tested exhaustively (the `ducklake-` residue gate, known-set exact match, dir-prefix guard, age
- * grace). The tiered-scope orchestration in [DuckLakeProcedureOps] (table → schema → catalog, from
- * the named table's viewpoint) is tested via a fake [WarehouseBlobStore] + fake catalog. The real S3
- * list/delete is covered by the compose smoke.
+ * Covers `remove_orphan_files`: the pure [OrphanFiles] selection (the `ducklake-` residue gate,
+ * known-set exact match, directory-prefix guard, age grace) and the table/schema/catalog scope
+ * orchestration in [DuckLakeProcedureOps] against a fake [WarehouseBlobStore] and catalog.
  */
 internal class DuckLakeRemoveOrphanFilesTest {
 
@@ -33,19 +31,19 @@ internal class DuckLakeRemoveOrphanFilesTest {
 
     @Test
     fun onlyDeletesDucklakeManagedResidue() {
-        // The critical safety gate: only ducklake-prefixed managed residue is a candidate. Foreign
-        // files — including a user's OWN non-ducklake parquet — are never deleted.
+        // Only ducklake-prefixed managed residue is a candidate; foreign files, including a user's
+        // own non-ducklake parquet, are never deleted.
         val listed = listOf(
             BlobEntry("s3://b/t/ducklake-1.parquet", old), // data residue → delete
             BlobEntry("s3://b/t/ducklake-delete-2.parquet", old), // delete-file residue → delete
             BlobEntry("s3://b/t/ducklake-3-delete.puffin", old), // DuckDB-named puffin delete → delete
             BlobEntry("s3://b/t/ducklake-4.db", old), // DuckDB-format data → delete
-            BlobEntry("s3://b/t/data.parquet", old), // user's own parquet (no prefix) → KEEP
-            BlobEntry("s3://b/t/_SUCCESS", old), // Hive marker → KEEP
-            BlobEntry("s3://b/t/ducklake-5.parquet.crc", old), // checksum sidecar (wrong ext) → KEEP
-            BlobEntry("s3://b/t/ducklake-6.vortex", old), // vortex not managed by Doris → KEEP
-            BlobEntry("s3://b/t/ducklake-7.lance/part.lance", old), // lance member (no prefix on basename) → KEEP
-            BlobEntry("s3://b/t/notes.txt", old), // stray → KEEP
+            BlobEntry("s3://b/t/data.parquet", old), // user's own parquet (no prefix) → keep
+            BlobEntry("s3://b/t/_SUCCESS", old), // Hive marker → keep
+            BlobEntry("s3://b/t/ducklake-5.parquet.crc", old), // checksum sidecar (wrong ext) → keep
+            BlobEntry("s3://b/t/ducklake-6.vortex", old), // vortex not managed by Doris → keep
+            BlobEntry("s3://b/t/ducklake-7.lance/part.lance", old), // lance member (no prefix on basename) → keep
+            BlobEntry("s3://b/t/notes.txt", old), // stray → keep
         )
         assertThat(OrphanFiles.find(listed, emptySet(), now)).containsExactlyInAnyOrder(
             "s3://b/t/ducklake-1.parquet",
@@ -299,7 +297,7 @@ internal class DuckLakeRemoveOrphanFilesTest {
         }.isInstanceOf(DorisConnectorException::class.java).hasMessageContaining("PARTITION")
     }
 
-    // ---- S3 dir-prefix normalization (foot-gun guard) ----
+    // ---- S3 dir-prefix normalization ----
 
     @Test
     fun dirUriAddsADirectoryBoundaryWithoutChangingTheRawKey() {
@@ -352,9 +350,8 @@ internal class DuckLakeRemoveOrphanFilesTest {
         }
         override fun list(prefixUri: String): List<BlobEntry> {
             listedPrefixes.add(prefixUri)
-            // Return only entries under this prefix (dir-safe), mimicking a real listing.
-            // Production parses aliases but always renders listed objects as s3://.
-            // Do not call the selection's comparison helper here: that would hide F01.
+            // Return only entries under this directory prefix, rendered as s3:// like a real listing.
+            // Do not reuse the selection's comparison helper here; the listing must stay an independent oracle.
             val (bucket, key) = S3WarehouseBlobStore.parseS3Uri(prefixUri)
             val dir = "s3://$bucket/" + if (key.endsWith('/')) key else "$key/"
             return listing.filter { it.uri.startsWith(dir) }

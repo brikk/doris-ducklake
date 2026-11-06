@@ -19,17 +19,14 @@ import org.junit.jupiter.api.Test
 import org.assertj.core.api.Assertions.assertThat
 
 /**
- * Round-trips DuckLake inlined rows through [DuckLakeInlinedParquetWriter] and
- * reads the Parquet back, asserting field ids (`== column_id`, which the BE
- * binds on), column names, scalar type encodings, nulls, and the DuckDB
- * text-form conversions jOOQ can hand back (blob `\xNN`, non-finite floats,
- * decimals). Pure — no cluster.
+ * Round-trips DuckLake inlined rows through [DuckLakeInlinedParquetWriter] and reads the Parquet
+ * back, asserting field ids (equal to column ids, which the BE binds on), column names, scalar
+ * encodings, nulls, and the DuckDB text forms jOOQ can hand back (blob `\xNN`, non-finite
+ * floats, decimals).
  *
- * Runs on both the normal Java-25 test lane and java17PluginTest (the FE
- * runtime). The PageHeader ABI issue was classpath shadowing, NOT the JDK:
- * Maven-local's fat fe-thrift bundles incompatible generated Parquet classes. Both tasks prepend
- * the real parquet-format-structures 1.17.0. The current FE also has fat
- * fe-thrift, but its runtime classpath puts Parquet 1.18.0 before that jar.
+ * Runs on both the Java 25 test lane and java17PluginTest. Both tasks prepend the real
+ * parquet-format-structures jar because the fat fe-thrift jar bundles incompatible generated
+ * Parquet classes that would otherwise shadow it.
  */
 internal class DuckLakeInlinedParquetWriterTest {
 
@@ -38,8 +35,7 @@ internal class DuckLakeInlinedParquetWriterTest {
     private fun col(name: String, type: String, id: Long = ++nextId) =
         DucklakeColumn(id, 1L, null, 1L, id, name, type, true, null)
 
-    // Reads via ParquetFileReader.open(LocalInputFile) — no Hadoop Path/UGI
-    // (broken on JDK 25).
+    // Reads via LocalInputFile to avoid Hadoop Path/UGI, which is broken on JDK 25.
     private fun writeAndReadBack(
         columns: List<DucklakeColumn>,
         rows: List<List<Any?>>,
@@ -74,7 +70,7 @@ internal class DuckLakeInlinedParquetWriterTest {
         val cols = listOf(col("id", "int32", id = 7), col("name", "varchar", id = 9))
         val (recs, schema) = writeAndReadBack(cols, listOf(listOf(1, "alice")))
 
-        // Field ids == column ids (the DuckLake invariant the BE matches on).
+        // Field ids equal column ids; the BE matches on them.
         assertThat(fieldId(schema, "id")).isEqualTo(7)
         assertThat(fieldId(schema, "name")).isEqualTo(9)
         assertThat(schema.fields.map { it.name }).containsExactly("id", "name")
@@ -87,7 +83,7 @@ internal class DuckLakeInlinedParquetWriterTest {
         val cols = listOf(col("id", "int64"), col("note", "varchar"))
         val (recs, _) = writeAndReadBack(cols, listOf(listOf(1L, null)))
         assertThat(recs[0].getLong("id", 0)).isEqualTo(1L)
-        // A null OPTIONAL column has zero repetition in the group.
+        // A null optional column has zero repetition in the group.
         assertThat(recs[0].getFieldRepetitionCount("note")).isEqualTo(0)
     }
 

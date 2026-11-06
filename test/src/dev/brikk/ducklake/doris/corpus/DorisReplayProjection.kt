@@ -13,7 +13,11 @@ import dev.brikk.house.sql.ast.Table
 import dev.brikk.house.sql.dialects.Dialects
 import dev.brikk.house.sql.parser.ParseError
 
-/** Only direct slots/stars from one owned lake table establish types; never inspect text to guess a type. */
+/**
+ * Resolves the DuckLake column types behind a replayed query's projection, so nested
+ * cells can be rendered from catalog types. Only plain column references and stars
+ * over a single lake table resolve; anything else yields null for that slot.
+ */
 internal object DorisReplayProjection {
     private data class Binding(val table: Table, val schema: String, val alias: String, val expressions: List<Expression?>)
 

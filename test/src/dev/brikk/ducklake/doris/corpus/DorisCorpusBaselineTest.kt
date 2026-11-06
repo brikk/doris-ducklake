@@ -14,7 +14,11 @@ import java.security.MessageDigest
 import java.sql.DriverManager
 import java.util.concurrent.atomic.AtomicInteger
 
-/** Same released driver/format/binder as Doris replay, but with NO engine and NO mirror skips. */
+/**
+ * Runs a corpus selection through the oracle alone, with the same runner setup as the
+ * Doris replay but no mirror engine, and writes a receipt of the outcomes. Separates
+ * oracle/runner failures from Doris read failures.
+ */
 internal class DorisCorpusBaselineTest {
     private fun property(name: String): String = requireNotNull(System.getProperty("baseline.$name")) { "Missing baseline.$name" }
 
@@ -37,7 +41,7 @@ internal class DorisCorpusBaselineTest {
             val counter = AtomicInteger()
             val rewrite: ((String) -> String)? = server?.let { pg -> { _ ->
                 val database = "baseline_" + counter.incrementAndGet()
-                pg.createDatabase(database) // Only the disposable server is owned; never adopt an existing DB.
+                pg.createDatabase(database)
                 pg.getDuckDbAttachUri(database).removePrefix("ducklake:")
             } }
             val runner = dorisCorpusRunner(root, metadataRewriter = rewrite)

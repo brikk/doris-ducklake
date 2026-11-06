@@ -25,9 +25,9 @@ import java.sql.SQLException
 import java.sql.DriverManager
 
 /**
- * The whole FE side of an INSERT except the BE writing the file: a synthetic `TIcebergCommitData` is
- * committed and the catalog must grow a snapshot whose data file and decoded stats the read path sees.
- * The BE-coupled half (sink, field ids, footer size) is covered by the compose smoke.
+ * Commits synthetic `TIcebergCommitData` through [DuckLakeConnectorTransaction] and checks
+ * the catalog grows a snapshot whose data file and decoded stats the read path sees.
+ * The BE side (sink, field ids, footer size) is covered by the compose smoke test.
  */
 internal class DuckLakeConnectorTransactionTest {
 
@@ -60,7 +60,7 @@ internal class DuckLakeConnectorTransactionTest {
         return JdbcDucklakeCatalog(config)
     }
 
-    // DucklakeCatalog has close() but isn't AutoCloseable, so use{} won't resolve.
+    // DucklakeCatalog has close() but is not AutoCloseable, so use {} does not resolve.
     private inline fun <R> withCatalog(block: (JdbcDucklakeCatalog) -> R): R {
         val catalog = openCatalog()
         return try {
@@ -91,14 +91,13 @@ internal class DuckLakeConnectorTransactionTest {
             val idColumn = catalog.getTableColumns(tableId, snap0).first { it.columnName == "id" }
             val recordsBefore = requireNotNull(catalog.getTableStats(tableId)).recordCount
 
-            // Sanity: no existing orders row sits near id=1500.
+            // No existing file covers id=1500 yet.
             assertThat(
                 catalog.findDataFileIdsInRange(
                     tableId, snap0, ColumnRangePredicate(idColumn.columnId, "1500", "1500"),
                 ),
             ).isEmpty()
 
-            // A BE write-result for one Parquet file: 3 rows, id stats in [1000, 2000].
             val commit = TIcebergCommitData().apply {
                 filePath = "sales/orders/inserted-by-test.parquet"
                 rowCount = 3
@@ -119,21 +118,18 @@ internal class DuckLakeConnectorTransactionTest {
 
             transaction.commit()
 
-            // A new snapshot was committed and the table row count grew by the file's rows.
             val snap1 = catalog.currentSnapshotId
             assertThat(snap1).isGreaterThan(snap0)
             assertThat(requireNotNull(catalog.getTableStats(tableId)).recordCount)
                 .isEqualTo(recordsBefore + 3)
 
-            // The committed file's decoded id stats [1000,2000] are live to the read path:
-            // id=1500 now matches a file (it didn't before) — proving the little-endian
-            // bound decode + stat recording are correct end-to-end.
+            // id=1500 matching a file now, and 5000..6000 not matching, shows the
+            // little-endian bounds were decoded and recorded as stats.
             assertThat(
                 catalog.findDataFileIdsInRange(
                     tableId, snap1, ColumnRangePredicate(idColumn.columnId, "1500", "1500"),
                 ),
             ).isNotEmpty()
-            // A range outside [1000,2000] still excludes it (the stats really bound the file).
             assertThat(
                 catalog.findDataFileIdsInRange(
                     tableId, snap1, ColumnRangePredicate(idColumn.columnId, "5000", "6000"),
@@ -145,23 +141,20 @@ internal class DuckLakeConnectorTransactionTest {
     @Test
     @Throws(Exception::class)
     fun commitsPartitionedFileWithBoundPartitionId() {
-        // The partitioned-INSERT shape: the plan binds the table's active DuckLake
-        // partition id, and the BE reports positional partition_values per file. Prove
-        // the real catalog accepts a partitioned fragment end-to-end (it throws if the
-        // partition data is malformed).
+        // The plan binds the table's active partition id and the BE reports positional
+        // partition_values per file; the catalog throws if the partition data is malformed.
         withCatalog { catalog ->
             val snap0 = catalog.currentSnapshotId
             val tableId = requireNotNull(catalog.getTable("sales", "by_region", snap0)) {
                 "expected sales.by_region"
             }.tableId
-            // IDENTITY-on-region spec; one active spec per snapshot.
             val spec = catalog.getPartitionSpecs(tableId, snap0).first()
             val recordsBefore = requireNotNull(catalog.getTableStats(tableId)).recordCount
 
             val commit = TIcebergCommitData().apply {
                 filePath = "inserted-us.parquet"
                 rowCount = 2
-                partitionValues = listOf("us") // positional: key index 0 == region
+                partitionValues = listOf("us") // positional: key index 0 is region
             }
 
             val transaction = DuckLakeConnectorTransaction(4L, catalog)
@@ -173,7 +166,6 @@ internal class DuckLakeConnectorTransactionTest {
             assertThat(snap1).isGreaterThan(snap0)
             assertThat(requireNotNull(catalog.getTableStats(tableId)).recordCount)
                 .isEqualTo(recordsBefore + 2)
-            // The new file is recorded under a partition (its partition values are tracked).
             assertThat(catalog.getFilePartitionValues(tableId, snap1)).isNotEmpty()
         }
     }
@@ -193,7 +185,7 @@ internal class DuckLakeConnectorTransactionTest {
             transaction.rollback()
 
             assertThat(transaction.getUpdateCnt()).isZero()
-            transaction.commit() // nothing accumulated → no-op
+            transaction.commit() // nothing accumulated, so a no-op
             assertThat(catalog.currentSnapshotId).isEqualTo(snap0)
         }
     }
@@ -213,11 +205,10 @@ internal class DuckLakeConnectorTransactionTest {
     private fun preservesCommittedOutput(failure: (Long) -> RuntimeException) {
         withCatalog { catalog ->
             val before = catalog.currentSnapshotId
-            // Do not add unknown-stat files to orders: its independent pruning
-            // regression deliberately assumes all existing files exclude id=1500.
+            // Not sales.orders: the pruning test above assumes none of its files cover id=1500,
+            // and a file without stats would match.
             val tableId = requireNotNull(catalog.getTable("sales", "returns_inline", before)).tableId
             val output = Files.createTempFile(isolated.dataDir(), "commit-outcome-", ".parquet")
-            // A real native-produced Parquet, not an empty path or catalog-only fake.
             DriverManager.getConnection("jdbc:duckdb:").use { connection ->
                 connection.createStatement().use { statement ->
                     Files.delete(output)
@@ -235,7 +226,7 @@ internal class DuckLakeConnectorTransactionTest {
                 }
                 if (method.name == "commitInsert") {
                     publications++
-                    throw problem // Inject after the real PostgreSQL publication.
+                    throw problem // thrown after the real commit has been published
                 }
                 result
             } as DucklakeCatalog
@@ -260,7 +251,6 @@ internal class DuckLakeConnectorTransactionTest {
     @Test
     @Throws(Exception::class)
     fun commitsMultipleFragmentsInOneSnapshot() {
-        // The realistic INSERT shape: the BE reports several files for one statement.
         withCatalog { catalog ->
             val snap0 = catalog.currentSnapshotId
             val tableId = requireNotNull(catalog.getTable("sales", "orders", snap0)).tableId
@@ -283,7 +273,7 @@ internal class DuckLakeConnectorTransactionTest {
             transaction.addCommitData(serialize(fileWithIdRange("sales/orders/a.parquet", 2, 3000, 3100)))
             transaction.addCommitData(serialize(fileWithIdRange("sales/orders/b.parquet", 4, 4000, 4100)))
             transaction.bindTarget(tableId, snap0)
-            assertThat(transaction.getUpdateCnt()).isEqualTo(6) // 2 + 4 rows across both files
+            assertThat(transaction.getUpdateCnt()).isEqualTo(6)
 
             transaction.commit()
 
@@ -291,7 +281,6 @@ internal class DuckLakeConnectorTransactionTest {
             assertThat(snap1).isGreaterThan(snap0)
             assertThat(requireNotNull(catalog.getTableStats(tableId)).recordCount)
                 .isEqualTo(recordsBefore + 6)
-            // Both files committed in the one snapshot, each with its own queryable stats.
             assertThat(
                 catalog.findDataFileIdsInRange(
                     tableId, snap1, ColumnRangePredicate(idColumn.columnId, "3050", "3050"),

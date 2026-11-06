@@ -14,12 +14,9 @@ import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
 
 /**
- * Pure-logic coverage of [DuckLakeProcedureOps] — the `expire_snapshots` argument contract,
- * duration parsing, retention-floor rejection, dry-run vs. real expiry dispatch, and result
- * shaping. Uses a recording [FakeCatalog] (no Postgres) so the whole file is headless; the
- * required deliverable per the task brief. An integration test that seeds real snapshots is
- * intentionally NOT added — the module has no trivially-reusable Testcontainers helper wired for
- * this path, and the catalog's own suite already covers the SQL-level expiry semantics.
+ * Covers the `expire_snapshots` argument contract, duration parsing, retention-floor
+ * rejection, dry-run dispatch and result shaping against a recording [FakeCatalog].
+ * SQL-level expiry semantics are covered by the catalog module's own suite.
  */
 internal class DuckLakeProcedureOpsTest {
 
@@ -49,7 +46,6 @@ internal class DuckLakeProcedureOpsTest {
 
         val res = ops.execute(null, null, "expire_snapshots", mapOf("retention_threshold" to "30d"), null, emptyList())
 
-        // retention mode → listExpirableSnapshots(cutoff, null), then expireSnapshots(the ids)
         assertThat(fake.listOlderThan).isNotNull()
         assertThat(fake.listVersions).isNull()
         assertThat(fake.expiredWith).containsExactlyInAnyOrder(1L, 2L, 3L)
@@ -68,7 +64,7 @@ internal class DuckLakeProcedureOpsTest {
 
         ops.execute(null, null, "expire_snapshots", emptyMap(), null, emptyList())
 
-        // default 7d → cutoff roughly 7 days ago (allow a generous window for test slowness).
+        // Generous window to absorb test slowness.
         val cutoff = requireNotNull(fake.listOlderThan)
         val sevenDaysMillis = 7L * 24 * 60 * 60 * 1000
         assertThat(cutoff).isBetween(before.minusMillis(sevenDaysMillis + 60_000), before.minusMillis(sevenDaysMillis - 60_000))
@@ -76,7 +72,7 @@ internal class DuckLakeProcedureOpsTest {
 
     @Test
     fun retentionBelowFloorIsRejected() {
-        // default floor is 7d; a 1h retention must be refused before touching the catalog.
+        // Must be refused before touching the catalog.
         val fake = FakeCatalog()
         val ops = DuckLakeProcedureOps(fake, emptyMap())
         assertThatThrownBy {
@@ -90,7 +86,6 @@ internal class DuckLakeProcedureOpsTest {
 
     @Test
     fun configurableFloorFromCatalogProperty() {
-        // Lower the floor to 1h via the catalog property; 2h retention now passes.
         val fake = FakeCatalog(expirable = listOf(9L), result = ExpireSnapshotsResult(1, 0))
         val ops = DuckLakeProcedureOps(fake, mapOf("maintenance.min-retention" to "1h"))
         ops.execute(null, null, "expire_snapshots", mapOf("retention_threshold" to "2h"), null, emptyList())
@@ -106,7 +101,6 @@ internal class DuckLakeProcedureOpsTest {
 
         ops.execute(null, null, "expire_snapshots", mapOf("snapshot_ids" to "11, 22"), null, emptyList())
 
-        // explicit mode → listExpirableSnapshots(null, {11,22})
         assertThat(fake.listOlderThan).isNull()
         assertThat(fake.listVersions).containsExactlyInAnyOrder(11L, 22L)
         assertThat(fake.expiredWith).containsExactlyInAnyOrder(11L, 22L)
@@ -148,7 +142,7 @@ internal class DuckLakeProcedureOpsTest {
         )
 
         assertThat(fake.listOlderThan).isNotNull()
-        assertThat(fake.expiredWith).isNull() // NEVER called on a dry run
+        assertThat(fake.expiredWith).isNull()
         val row = res.rows.single()
         assertThat(row).containsExactly("true", "catalog-wide (ignores the named table)", "2", "n/a", "1,2")
     }
@@ -229,8 +223,8 @@ internal class DuckLakeProcedureOpsTest {
 
     /**
      * Recording stub of [DucklakeCatalog]. Only the two methods the procedure calls are
-     * implemented; every other method delegates to a throwing [java.lang.reflect.Proxy] so an
-     * accidental extra catalog call fails loudly rather than silently returning a default.
+     * implemented; everything else delegates to a throwing [java.lang.reflect.Proxy] so an
+     * unexpected catalog call fails instead of returning a default.
      */
     private class FakeCatalog(
         private val expirable: List<Long> = emptyList(),

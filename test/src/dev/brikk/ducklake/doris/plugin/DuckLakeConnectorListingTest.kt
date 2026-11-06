@@ -11,10 +11,8 @@ import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
 
 /**
- * Exercises the read-only metadata path the FE walks for `SHOW DATABASES`
- * and `SHOW TABLES IN dl.<db>`. Goes through the public SPI surface
- * ([DuckLakeConnectorProvider.create]) so any wiring regression between
- * provider, connector, and metadata surfaces here.
+ * Read-only metadata path behind `SHOW DATABASES`, `SHOW TABLES` and `DESC`, driven through
+ * [DuckLakeConnectorProvider.create] so provider/connector wiring regressions surface here.
  */
 internal class DuckLakeConnectorListingTest {
 
@@ -47,9 +45,7 @@ internal class DuckLakeConnectorListingTest {
 
     @Test
     fun providerAcceptsEngineInjectedProperties() {
-        // Doris's DDL layer injects engine-level properties like
-        // `enable.mapping.varbinary` into every CREATE CATALOG; we must not
-        // reject them.
+        // Doris injects `enable.mapping.varbinary` into every CREATE CATALOG.
         val provider = DuckLakeConnectorProvider()
         provider.validateProperties(
             mapOf(
@@ -75,7 +71,7 @@ internal class DuckLakeConnectorListingTest {
         provider.create(properties, ctx).use { connector ->
             val metadata = connector.getMetadata(null)
 
-            // DuckLake bootstraps an implicit `main` schema; our seed adds two more.
+            // DuckLake also bootstraps an implicit `main` schema, hence contains rather than exactly.
             assertThat(metadata.listDatabaseNames(null))
                 .contains("sales", "analytics")
 
@@ -91,7 +87,6 @@ internal class DuckLakeConnectorListingTest {
             assertThat(metadata.listTableNames(null, "does_not_exist"))
                 .isEmpty()
 
-            // DESC dl.sales.orders — getTableHandle → getTableSchema / getColumnHandles
             val orders = metadata.getTableHandle(null, "sales", "orders")
                 .orFail("expected sales.orders handle")
             assertThat(metadata.getTableHandle(null, "sales", "nope")).isEmpty()
@@ -109,8 +104,7 @@ internal class DuckLakeConnectorListingTest {
             val ordersHandles = metadata.getColumnHandles(null, orders)
             assertThat(ordersHandles.keys).containsExactly("id", "total")
 
-            // analytics.events tests timestamp + varchar; confirms the schema.events
-            // table's typestrings round-trip through DuckLakeTypeMapping.
+            // analytics.events covers timestamp and varchar through DuckLakeTypeMapping.
             val events = metadata.getTableHandle(null, "analytics", "events")
                 .orFail("expected analytics.events handle")
             assertThat(metadata.getTableSchema(null, events).columns)
@@ -131,8 +125,7 @@ internal class DuckLakeConnectorListingTest {
                 val total = metadata.getColumnHandles(null, orders)["total"]
                     ?: error("expected a 'total' column handle")
 
-                // Projecting a subset returns a result whose handle records the
-                // projected column ids (used to stop the engine's fixed-point loop).
+                // The handle records projected column ids so the engine's fixed-point loop stops.
                 val result = metadata.applyProjection(null, orders, listOf(total))
                 assertThat(result.isPresent).isTrue()
                 val applied = result.get()
@@ -141,10 +134,9 @@ internal class DuckLakeConnectorListingTest {
                 assertThat(newHandle.projectedColumnIds)
                     .containsExactly((total as DuckLakeColumnHandle).columnId)
 
-                // Idempotent: re-applying the same projection opts out.
+                // Re-applying the same projection, or an empty one, opts out.
                 assertThat(metadata.applyProjection(null, newHandle, listOf(total)).isPresent)
                     .isFalse()
-                // Empty projection list opts out.
                 assertThat(metadata.applyProjection(null, orders, emptyList()).isPresent)
                     .isFalse()
             }
@@ -161,7 +153,7 @@ internal class DuckLakeConnectorListingTest {
                     .orFail("expected sales.orders handle")
                 val stats = metadata.getTableStatistics(null, orders)
                     .orFail("expected stats for sales.orders")
-                // sales.orders is seeded with 3 rows: (1, 2) then (3).
+                // sales.orders is seeded with 3 rows.
                 assertThat(stats.rowCount).isEqualTo(3L)
                 assertThat(stats.dataSize).isPositive()
             }

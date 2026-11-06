@@ -15,7 +15,11 @@ import java.sql.SQLException
 import java.sql.Statement
 import java.util.Properties
 
-/** Explicit owned fixture only. The real FE executes the plugin on Java 17; replay tooling uses Java 25. */
+/**
+ * Guards the connector's read-safety refusals (historical reads over delete files,
+ * non-finite temporal predicates) against a live FE, using a fixture described by the
+ * `DORIS_READ_SAFETY_FIXTURE` properties file.
+ */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 internal class DorisReadSafetyLiveTest {
     private val p = Properties().apply {

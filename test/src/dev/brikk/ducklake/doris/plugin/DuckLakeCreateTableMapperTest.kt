@@ -6,11 +6,9 @@ import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
 
 /**
- * Pure-logic coverage of [DuckLakeCreateTableMapper] — Doris [ConnectorType] → DuckLake
- * type string for CREATE TABLE. No catalog needed.
- *
- * The strong oracle is the round-trip against [DuckLakeTypeMapping] (the read-path
- * inverse): for every non-degraded scalar, `toDucklakeType(fromDucklakeType(t)) == t`.
+ * Covers the Doris [ConnectorType] to DuckLake type string mapping used by CREATE TABLE. The
+ * strongest check is the round trip against [DuckLakeTypeMapping]: for every non-degraded
+ * scalar, `toDucklakeType(fromDucklakeType(t)) == t`.
  */
 internal class DuckLakeCreateTableMapperTest {
 
@@ -36,9 +34,8 @@ internal class DuckLakeCreateTableMapperTest {
 
     @Test
     fun mapsDatetimeByPrecisionToDucklakeResolution() {
-        // DuckLakeTypeMapping carries the fractional-second resolution in the PRECISION
-        // slot for DATETIMEV2, so build the types directly (the of(name) shortcut would
-        // drop a 0 precision).
+        // DuckLakeTypeMapping carries the fractional-second resolution in the precision slot for
+        // DATETIMEV2, so build the types directly; the of(name) shortcut would drop a 0 precision.
         assertThat(DuckLakeCreateTableMapper.toDucklakeType(ConnectorType.of("DATETIMEV2", 0, 0))).isEqualTo("timestamp_s")
         assertThat(DuckLakeCreateTableMapper.toDucklakeType(ConnectorType.of("DATETIMEV2", 3, 0))).isEqualTo("timestamp_ms")
         assertThat(DuckLakeCreateTableMapper.toDucklakeType(ConnectorType.of("DATETIMEV2", 6, 0))).isEqualTo("timestamp")
@@ -48,13 +45,10 @@ internal class DuckLakeCreateTableMapperTest {
 
     @Test
     fun roundTripsTheNonDegradedCoreAgainstTheReadMapping() {
-        // Excludes the read path's deliberately-degraded mappings (int128→DECIMALV3,
-        // unsigned promotions, uuid/json/time → other types, and timestamp_ns whose
-        // read surface clamps to DATETIMEV2(6) — Doris's max datetime scale — and so
-        // write-maps back to "timestamp") which by design don't round-trip — those
-        // are DuckLakeTypeMapping choices, not this mapper's. timestamptz is
-        // likewise excluded: it reads as (degraded) DATETIMEV2 → write-maps to
-        // "timestamp" (BE can't read a TimeStampTz slot; see DuckLakeTypeMapping).
+        // Excludes the read path's deliberately degraded mappings, which write back to a different
+        // type by design: int128, unsigned promotions, uuid/json/time, timestamp_ns (clamped to
+        // DATETIMEV2(6), Doris's maximum scale) and timestamptz (read as DATETIMEV2 because the BE
+        // cannot read a TimeStampTz slot).
         val core = listOf(
             "boolean", "int8", "int16", "int32", "int64",
             "float32", "float64", "date",

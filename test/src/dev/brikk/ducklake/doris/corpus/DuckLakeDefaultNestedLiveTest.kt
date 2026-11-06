@@ -7,7 +7,11 @@ import java.nio.file.Path
 import java.sql.DriverManager
 import java.util.Properties
 
-/** Explicit private fixture; ordinary names isolate descriptor correctness from the candidate parser. */
+/**
+ * Reads a pre-seeded nested table (struct, list, map) through a live FE and checks
+ * that null parents stay distinct from null children. Fixture comes from the
+ * `DORIS_READ_CORRECTNESS_FIXTURE` properties file.
+ */
 internal class DuckLakeDefaultNestedLiveTest {
     @Test
     fun mixedScalarStructListAndMapKeepValuesAndNullParents() {

@@ -12,12 +12,9 @@ import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
 
 /**
- * Headless coverage of `cleanup_old_files` orchestration in [DuckLakeProcedureOps] — the physical
- * deletion phase that pairs with `expire_snapshots`'s scheduling phase. A recording [FakeCatalog]
- * (throwing-proxy for unused methods) and a [FakeBlobStore] stand in for Postgres + S3, so the
- * whole flow (retention floor, path resolution, delete, schedule-row removal, dry-run, partial
- * failure) is verifiable without infra. The real S3 delete is covered by the compose smoke; the
- * S3-URI parser is unit-tested directly below.
+ * Covers `cleanup_old_files` orchestration in [DuckLakeProcedureOps] with a recording [FakeCatalog]
+ * and [FakeBlobStore] standing in for Postgres and S3: retention floor, path resolution, deletion,
+ * schedule-row removal, dry run and partial failure.
  */
 internal class DuckLakeCleanupOldFilesTest {
 
@@ -44,15 +41,14 @@ internal class DuckLakeCleanupOldFilesTest {
                 scheduled(2L, "s3://ducklake/data/tpch/orders/f2.parquet", relative = false),
             ),
         )
-        val store = FakeBlobStore() // deletes everything asked by default
+        val store = FakeBlobStore()
         val res = ops(cat, store).execute(null, null, "cleanup_old_files", mapOf("retention_threshold" to "30d"), null, emptyList())
 
-        // Relative path resolved against the warehouse root; absolute passed through.
+        // Relative paths resolve against the warehouse root; absolute paths pass through.
         assertThat(store.deleteRequested).containsExactlyInAnyOrder(
             "s3://ducklake/data/tpch/orders/f1.parquet",
             "s3://ducklake/data/tpch/orders/f2.parquet",
         )
-        // Both deleted → both rows removed.
         assertThat(cat.removedIds).containsExactlyInAnyOrder(1L, 2L)
         assertThat(cat.listCutoff).isNotNull()
 
@@ -70,8 +66,8 @@ internal class DuckLakeCleanupOldFilesTest {
             null, null, "cleanup_old_files",
             mapOf("retention_threshold" to "30d", "dry_run" to "true"), null, emptyList(),
         )
-        assertThat(store.deleteRequested).isEmpty() // NEVER touched storage
-        assertThat(cat.removedIds).isNull() // NEVER removed rows
+        assertThat(store.deleteRequested).isEmpty()
+        assertThat(cat.removedIds).isNull()
         assertThat(res.rows.single()).containsExactly("true", "30d", "1", "0")
     }
 
@@ -83,12 +79,12 @@ internal class DuckLakeCleanupOldFilesTest {
                 scheduled(2L, "a/f2.parquet", true),
             ),
         )
-        // f2 fails to delete → its row must survive for a retry.
+        // f2 fails to delete, so its schedule row must survive for a retry.
         val store = FakeBlobStore(failUris = setOf("s3://ducklake/data/a/f2.parquet"))
         val res = ops(cat, store).execute(null, null, "cleanup_old_files", mapOf("retention_threshold" to "30d"), null, emptyList())
 
-        assertThat(cat.removedIds).containsExactly(1L) // only the deleted one
-        assertThat(res.rows.single()).containsExactly("false", "30d", "1", "1") // 1 deleted, 1 failed
+        assertThat(cat.removedIds).containsExactly(1L)
+        assertThat(res.rows.single()).containsExactly("false", "30d", "1", "1")
     }
 
     @Test
@@ -116,7 +112,7 @@ internal class DuckLakeCleanupOldFilesTest {
 
     @Test
     fun relativePathWithNoWarehouseRootFailsLoud() {
-        // No storage.warehouse prop and catalog.getDataPath() == null → can't resolve a relative path.
+        // With neither a storage.warehouse property nor a catalog data path, a relative path cannot be resolved.
         val cat = FakeCatalog(scheduled = listOf(scheduled(1L, "a/f.parquet", true)), dataPath = null)
         val store = FakeBlobStore()
         assertThatThrownBy {
@@ -154,7 +150,7 @@ internal class DuckLakeCleanupOldFilesTest {
         }
     }
 
-    /** Recording blob store: deletes everything except [failUris]; records what it was asked to delete. */
+    /** Deletes everything except [failUris] and records what it was asked to delete. */
     private class FakeBlobStore(private val failUris: Set<String> = emptySet()) : WarehouseBlobStore {
         val deleteRequested = mutableListOf<String>()
         override fun delete(uris: Collection<String>): BlobDeleteResult {
@@ -167,7 +163,7 @@ internal class DuckLakeCleanupOldFilesTest {
         override fun list(prefixUri: String): List<BlobEntry> = emptyList() // cleanup never lists
     }
 
-    /** Recording catalog stub; throwing-proxy for everything the procedure doesn't call. */
+    /** Records the calls the procedure makes; everything else throws via a proxy. */
     private class FakeCatalog(
         private val scheduled: List<DucklakeScheduledFile> = emptyList(),
         private val dataPath: String? = null,

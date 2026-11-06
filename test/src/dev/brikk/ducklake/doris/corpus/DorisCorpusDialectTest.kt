@@ -9,12 +9,7 @@ import dev.brikk.house.sql.shape.certify
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 
-/**
- * Pins the transpile-first [DorisCorpusDialect.gate]: brikk-sql translates the
- * DuckDB corpus query to Doris and the gate runs it only when the transpiler
- * can do so faithfully, else engine-skips with a specific reason. These tests
- * exercise the DECISION + the emitted Doris SQL (not the live cluster).
- */
+/** Pins the [DorisCorpusDialect.gate] decisions and the emitted Doris SQL; no live cluster. */
 internal class DorisCorpusDialectTest {
 
     private fun run(sql: String): Run =
@@ -29,8 +24,6 @@ internal class DorisCorpusDialectTest {
             it as Skip
         }
 
-    // ---- Runs: transpiled to Doris ----
-
     @Test
     fun transpilesPlainSelect() {
         assertThat(run("SELECT a, b FROM lake.s.t WHERE a > 3").dorisSql)
@@ -39,8 +32,9 @@ internal class DorisCorpusDialectTest {
 
     @Test
     fun rewritesCastShorthandWithoutAdmittingUnprovenSemantics() {
-        // 0.18.0 refuses unresearched CAST; 0.18.1 records conditional coverage.
-        // Neither verdict proves an arbitrary column's type/value domain safe for exact replay.
+        // brikk-sql versions differ on whether CAST is refused outright or recorded as
+        // conditional coverage; neither verdict proves an arbitrary column safe for
+        // exact replay, so both shapes are accepted here.
         val report = SqlFragment("SELECT o_orderkey::BIGINT FROM lake.s.orders", "duckdb")
             .certify("doris")
         assertThat(report.result.sql)
@@ -64,7 +58,6 @@ internal class DorisCorpusDialectTest {
 
     @Test
     fun rewritesFilterWhereToCase() {
-        // Doris has no `agg(...) FILTER (WHERE …)` — must become CASE.
         val sql = run("SELECT COUNT(*) FILTER (WHERE id % 2 = 0) FROM lake.s.t").dorisSql
         assertThat(sql).containsIgnoringCase("CASE WHEN").doesNotContainIgnoringCase("FILTER")
     }
@@ -77,8 +70,6 @@ internal class DorisCorpusDialectTest {
 
     @Test
     fun rewritesLiteralInlineTimeTravel() {
-        // brikk-sql passes `AT (VERSION => n)` through; the gate maps the literal
-        // form to Doris FOR VERSION AS OF n.
         assertThat(run("SELECT * FROM lake.s.t AT (VERSION => 2)").dorisSql)
             .contains("FOR VERSION AS OF 2")
             .doesNotContainIgnoringCase("AT (")
@@ -86,13 +77,9 @@ internal class DorisCorpusDialectTest {
 
     @Test
     fun dropsTrailingOrderByAll() {
-        // The mirror compares sorted rows, so a trailing ORDER BY ALL is dropped
-        // (brikk-sql would otherwise mis-parse ALL as a column).
         val sql = run("SELECT a FROM lake.s.t ORDER BY ALL").dorisSql
         assertThat(sql).doesNotContainIgnoringCase("ORDER BY")
     }
-
-    // ---- Skips: transpiler signals / residual divergences ----
 
     @Test
     fun skipsCastsWithoutTypeAndValueProof() {
@@ -121,7 +108,6 @@ internal class DorisCorpusDialectTest {
 
     @Test
     fun skipsClass3FunctionHoles() {
-        // Functions absent from Doris's catalog → certify UNMAPPABLE_FUNCTION.
         assertThat(skip("SELECT * FROM read_parquet('f.parquet')").reason)
             .contains("UNMAPPABLE_FUNCTION")
         assertThat(skip("SELECT * FROM ducklake_snapshots('lake')").reason)
@@ -131,12 +117,10 @@ internal class DorisCorpusDialectTest {
     @Test
     fun skipsPragmaPassthrough() {
         assertThat(skip("PRAGMA database_size").reason).containsIgnoringCase("read")
-        // (PRAGMA isn't a SELECT/WITH, so it's rejected at the read gate before transpile.)
     }
 
     @Test
     fun skipsScalarUnnestViaUnsupportedTranslation() {
-        // certify REFUSAL: scalar UNNEST/EXPLODE has no Doris equivalent.
         assertThat(skip("SELECT unnest([1, 2, 3])").reason).contains("UNSUPPORTED_TRANSLATION")
     }
 
@@ -148,27 +132,20 @@ internal class DorisCorpusDialectTest {
 
     @Test
     fun skipsNonLiteralInlineTimeTravel() {
-        // A non-literal timestamp (here a column ref) has no Doris FOR-VERSION form, so the
-        // gate refuses it at the inline-time-travel branch. NB: don't use now() here — as of
-        // brikk-sql 0.7.0 certify catches now() earlier as a semantic NOW hazard (rendering/
-        // zone divergence), which short-circuits before the time-travel branch is reached
-        // (see skipsNowInTimeTravelAsHazard). A bare column exercises the branch this test
-        // is named for.
+        // A bare column, not now(): certify flags now() as a semantic hazard before the
+        // time-travel branch is reached (see skipsNowInTimeTravelAsHazard).
         assertThat(skip("SELECT * FROM lake.s.t AT (TIMESTAMP => ts_col)").reason)
             .contains("time travel")
     }
 
     @Test
     fun skipsNowInTimeTravelAsHazard() {
-        // now() inside inline time travel is refused as a semantic NOW hazard (DuckDB vs Doris
-        // differ in rendering/precision/zone), before the non-literal time-travel branch.
         assertThat(skip("SELECT * FROM lake.s.t AT (TIMESTAMP => now())").reason)
             .contains("NOW")
     }
 
     @Test
     fun skipsOrderByAllGoverningLimit() {
-        // Dropping ORDER BY ALL before a LIMIT would change which rows survive.
         assertThat(skip("SELECT a FROM lake.s.t ORDER BY ALL LIMIT 5").reason)
             .contains("LIMIT")
     }

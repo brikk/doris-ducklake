@@ -15,7 +15,7 @@ import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
 
-/** Pins the installed SPI and regenerated wire contract to 4bc7f426828, not mutable Maven coordinates. */
+/** Pins the installed SPI and generated Thrift contract to the Doris baseline commit (4bc7f426828) rather than Maven coordinates. */
 internal class DorisBaselineContractTest {
     @Test
     fun installedSpiReportsApi27() {
@@ -64,8 +64,8 @@ internal class DorisBaselineContractTest {
 
     @Test
     fun externalReportAndPaimonIdsMatchTheApi24Runtime() {
-        // #68837 changed these wire meanings after API 13. A matching manifest
-        // alone must not certify the old generated Thrift against the new FE/BE.
+        // These field ids changed meaning upstream while the API version manifest stayed the same,
+        // so a matching manifest alone cannot certify the generated Thrift against the FE/BE.
         assertThat(TReportExecStatusParams._Fields.PAIMON_COMMIT_MESSAGES.thriftFieldId).isEqualTo(34.toShort())
         assertThat(TPaimonFileDesc._Fields.ORIGINAL_FILE_PATH.thriftFieldId).isEqualTo(20.toShort())
     }

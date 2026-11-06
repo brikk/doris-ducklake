@@ -9,18 +9,9 @@ import java.util.Locale
 
 /**
  * Seeds an isolated Postgres-backed DuckLake catalog with caller-supplied DuckDB
- * statements, for the read-side audit tests ported from trino-ducklake (see
- * `DuckLakeTemporalTypeAuditTest`, `DuckLakeUnicodeIdentifierAuditTest`,
- * `DuckLakeSnapshotPinningAuditTest`).
- *
- * Why a second bootstrap next to [DuckLakeTestCatalogBootstrap]: the audits need
- * bespoke fixtures (every DuckLake temporal type, unicode identifiers, a
- * pin-then-mutate table) that would bloat the shared listing fixture, and the
- * important property is that a REAL DuckDB writer produced the catalog rows —
- * `ducklake_column.column_type` strings, unicode identifier bytes, snapshot
- * bookkeeping — rather than our own catalog writer, so the doris metadata layer
- * is audited against what DuckLake actually persists (the same cross-engine
- * stance as trino's `AbstractDucklakeCrossEngineTest` fixtures).
+ * statements. Exists alongside [DuckLakeTestCatalogBootstrap] because the audit
+ * tests need bespoke fixtures, and because the catalog rows must come from a real
+ * DuckDB writer rather than the connector's own catalog writer.
  */
 object DuckLakeAuditFixtureSeeder {
 
@@ -79,8 +70,8 @@ object DuckLakeAuditFixtureSeeder {
                     try {
                         Files.delete(path)
                     } catch (e: Exception) {
-                        // IllegalStateException (not RuntimeException) keeps detekt's
-                        // TooGenericExceptionThrown gate green without a baseline entry.
+                        // IllegalStateException rather than RuntimeException to satisfy
+                        // detekt's TooGenericExceptionThrown rule.
                         throw IllegalStateException("Failed to delete $path", e)
                     }
                 }

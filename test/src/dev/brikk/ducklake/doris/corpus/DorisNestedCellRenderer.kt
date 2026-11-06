@@ -12,7 +12,11 @@ import java.math.BigInteger
 import java.math.RoundingMode
 import java.util.Locale
 
-/** MySQL complex-cell JSON -> native replay text, ONLY with a trusted source type. */
+/**
+ * Renders the JSON text Doris emits for ARRAY/MAP/STRUCT cells over the mysql protocol
+ * in the oracle's nested-value form, driven by the catalog column type rather than by
+ * the JSON shape so that scalars keep their declared type.
+ */
 internal object DorisNestedCellRenderer {
     private const val MAX_TEXT = 1_048_576
     private const val MAX_VALUES = 4096

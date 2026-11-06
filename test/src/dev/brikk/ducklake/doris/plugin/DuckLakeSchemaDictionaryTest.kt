@@ -8,10 +8,9 @@ import org.junit.jupiter.api.Test
 import org.assertj.core.api.Assertions.assertThat
 
 /**
- * Pins the field-id schema dictionary the connector emits so the Doris BE
- * matches file↔table columns by field id (renamed/reordered columns read
- * correctly) with a per-file `name_mapping` fallback. Round-trips through the
- * same encode→decode path the two scan SPI methods use.
+ * Guards the field-id schema dictionary the BE uses to match file columns to table
+ * columns, including the per-file `name_mapping` fallback. Round-trips through the
+ * same encode/decode path the scan SPI methods use.
  */
 internal class DuckLakeSchemaDictionaryTest {
 
@@ -37,9 +36,8 @@ internal class DuckLakeSchemaDictionaryTest {
         val fields = params.historySchemaInfo[0].rootField.fields
         assertThat(fields).hasSize(2)
         assertThat(fields.map { it.fieldPtr.id }).containsExactly(1, 2)
-        // Names are lowercased to byte-match the BE scan-slot names.
+        // Names are lowercased to match the BE scan-slot names.
         assertThat(fields.map { it.fieldPtr.name }).containsExactly("id", "name")
-        // No name_mapping when there are no add_files name maps.
         assertThat(fields.all { !it.fieldPtr.isSetNameMapping }).isTrue()
     }
 
@@ -59,8 +57,8 @@ internal class DuckLakeSchemaDictionaryTest {
 
     @Test
     fun unionsAlternateNamesAcrossMultipleFileMappingsDistinctly() {
-        // Two files with different historical names for the same field id 1
-        // (both unambiguous — each name maps to only field id 1).
+        // Two files with different physical names for field id 1; each name maps
+        // to only that id, so neither is ambiguous.
         val nameMaps = listOf(mapOf(1L to "name_a"), mapOf(1L to "name_b"), mapOf(1L to "name_a"))
         val encoded = DuckLakeSchemaDictionary.encode(listOf(handle(1, "id")), nameMaps)
         val field = decode(encoded).historySchemaInfo[0].rootField.fields[0]
@@ -70,11 +68,9 @@ internal class DuckLakeSchemaDictionaryTest {
 
     @Test
     fun dropsAmbiguousSourceNamesThatMapToDifferentFieldIdsAcrossFiles() {
-        // The add_files DROP+re-ADD collision: physical name "col2" maps to
-        // field id 2 in old files and field id 4 in the re-added column. It's
-        // ambiguous, so it must NOT be attached to either — else the BE binds
-        // an old file's physical col2 onto the new column (silent wrong rows).
-        // "col1" maps only to field id 1, so it stays.
+        // After a DROP and re-ADD, physical name "col2" maps to field id 2 in old
+        // files and field id 4 in new ones. Attaching it to either would let the BE
+        // bind an old file's col2 onto the new column, so it must be dropped.
         val nameMaps = listOf(
             mapOf(1L to "col1", 2L to "col2"), // old file mapping
             mapOf(1L to "col1", 4L to "col2"), // re-added-column file mapping
@@ -87,7 +83,6 @@ internal class DuckLakeSchemaDictionaryTest {
         val byId = fields.associateBy { it.fieldPtr.id }
 
         assertThat(byId.getValue(1).fieldPtr.nameMapping).containsExactly("col1")
-        // field id 4 (re-added col2): ambiguous "col2" dropped → no name_mapping.
         assertThat(byId.getValue(4).fieldPtr.isSetNameMapping).isFalse()
     }
 
@@ -110,17 +105,14 @@ internal class DuckLakeSchemaDictionaryTest {
 
     @Test
     fun excludesNestedColumnsToAvoidBeCrash() {
-        // A nested TField without its full subfield tree SIGABRTs the BE's
-        // by_parquet_field_id recursion — so struct/list/map columns are
-        // omitted from the dictionary (they read by name). Only the scalar
-        // survives here.
+        // A nested TField without its full subfield tree crashes the BE's
+        // by_parquet_field_id recursion, so struct/list/map columns are omitted
+        // from the dictionary and read by name instead.
         val encoded = DuckLakeSchemaDictionary.encode(
             listOf(
                 handle(1, "id"),
                 DuckLakeColumnHandle(2, "tags", ConnectorType.arrayOf(ConnectorType.of("STRING")), 1),
-                // ConnectorType.of("STRUCT") now throws — the SPI requires a STRUCT to carry
-                // at least one child. Build a valid one-field struct; the dictionary excludes it
-                // by typeName ("STRUCT"), so the childful shape exercises the same exclusion path.
+                // The SPI requires a STRUCT to carry at least one child.
                 DuckLakeColumnHandle(
                     3,
                     "props",

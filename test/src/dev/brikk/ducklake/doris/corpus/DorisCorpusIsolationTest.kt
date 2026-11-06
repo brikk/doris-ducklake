@@ -29,7 +29,10 @@ import org.junit.jupiter.api.io.TempDir
 import org.junit.jupiter.api.parallel.ResourceLock
 import org.junit.jupiter.api.parallel.Resources
 
-/** Real isolated PostgreSQL ownership checks; the recording FE is not an engine-correctness oracle. */
+/**
+ * Guards that a replay engine only ever drops PostgreSQL databases and FE catalogs it
+ * created itself, against a real embedded PostgreSQL and a recording stand-in FE.
+ */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @ResourceLock(Resources.SYSTEM_PROPERTIES)
 internal class DorisCorpusIsolationTest {
@@ -58,8 +61,8 @@ internal class DorisCorpusIsolationTest {
         connection(names.first()).use { active ->
             active.createStatement().use { it.execute("CREATE TABLE marker AS SELECT 42 AS value") }
             withStartupProperties {
-                // Exercise the actual @BeforeAll entry, including normal DuckDB and JDBC readiness checks.
-                // A failed prerequisite is a test failure here, not a new assumption-skip hiding F22.
+                // Runs the real @BeforeAll; a failed prerequisite must fail here rather
+                // than turn into an assumption-skip that hides a database sweep.
                 assertThatCode { DorisCorpusReplayTest().setUp() }.doesNotThrowAnyException()
             }
             assertThat(databases()).containsAll(names)
@@ -229,7 +232,7 @@ internal class DorisCorpusIsolationTest {
     }
 }
 
-/** Implements only SQL used by startup/connect/close. Unknown calls fail instead of pretending to succeed. */
+/** Records the SQL the engine sends to the FE; any JDBC call it doesn't model fails. */
 private class RecordingCorpusFeDriver : Driver {
     val commands = CopyOnWriteArrayList<String>()
     val rejectCreate = AtomicBoolean()

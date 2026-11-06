@@ -12,15 +12,10 @@ import org.junit.jupiter.api.Assertions
 import org.junit.jupiter.api.Test
 
 /**
- * Locks the wire shape of [DuckLakeScanRange.populateRangeParams] to
- * the Iceberg-compatible Option A format (sanity-check §2.1). The BE reader
- * branches on `table_format_type == "iceberg"` and then consumes
- * `iceberg_params` unchanged; DuckLake parquet files carry field-ids
- * just like Iceberg's, so this is zero BE change for v1.
- *
- * The Option-A → Option-B flip (once upstream lands the 5-line BE patch
- * to recognise `"ducklake"`) is a one-string change. Parameterising
- * the discriminator below means the same golden survives the flip.
+ * Locks the wire shape of [DuckLakeScanRange.populateRangeParams] to what the BE's Iceberg
+ * reader consumes: it branches on `table_format_type == "iceberg"` and reads `iceberg_params`
+ * unchanged. The discriminator is parameterised in the goldens so a future switch to a
+ * `"ducklake"` table format type is a one-string change.
  */
 internal class DuckLakeScanRangeThriftParityTest {
 
@@ -38,10 +33,7 @@ internal class DuckLakeScanRangeThriftParityTest {
     @Test
     @Throws(Exception::class)
     fun rangeDescStaysUntouchedForUnpartitionedRange() {
-        // The no-partitions branch in populateRangeParams must leave the
-        // TFileRangeDesc empty — pinning this guards against accidentally
-        // setting columns_from_path / columns_from_path_keys when there is
-        // nothing to fill.
+        // Guards against setting empty columns_from_path lists when there is nothing to fill.
         val range = DuckLakeScanRange(PATH, START, LENGTH, FILE_SIZE, FILE_FORMAT)
 
         val formatDesc = TTableFormatFileDesc()
@@ -56,11 +48,9 @@ internal class DuckLakeScanRangeThriftParityTest {
     @Test
     @Throws(Exception::class)
     fun rangeDescCarriesColumnsFromPathForHiveLayoutRange() {
-        // Hive-layout add_files files carry partition columns in the PATH, not
-        // the parquet body — so populateRangeParams emits the BE native reader's
-        // constant-fill triple (keys / values / is-null). Fill order is preserved;
-        // values are always non-null (NULL hive partitions are rejected FE-side),
-        // so is-null is uniformly false.
+        // Hive-layout add_files files carry partition columns in the path, not the
+        // parquet body, so the BE's constant-fill triple (keys / values / is-null) is
+        // emitted. NULL hive partitions are rejected FE-side, so is-null is always false.
         val columnsFromPath = LinkedHashMap<String, String>()
         columnsFromPath["part_key"] = "1"
         columnsFromPath["region"] = "us east" // decoded value with a space
@@ -79,17 +69,14 @@ internal class DuckLakeScanRangeThriftParityTest {
             .containsExactly("1", "us east")
         assertThat(rangeDesc.columnsFromPathIsNull)
             .containsExactly(false, false)
-        // iceberg_params still emitted unchanged (data files still dispatch to
-        // the iceberg reader; columns_from_path is orthogonal path-fill).
+        // Data files still dispatch to the iceberg reader; columns_from_path is orthogonal.
         assertThat(formatDesc.isSetIcebergParams).isTrue()
     }
 
     @Test
     fun tableFormatTypeIsIcebergUntilOptionB() {
-        // The discriminator string is the only field the Option-A → Option-B
-        // flip changes. Keep this assertion in lockstep with
-        // DuckLakeScanRange.TABLE_FORMAT_TYPE; flipping it without updating
-        // the BE side is the deploy-time accident this test is here to catch.
+        // Changing DuckLakeScanRange.TABLE_FORMAT_TYPE without a matching BE change
+        // breaks reader dispatch at deploy time; this assertion makes that explicit.
         assertThat(
             DuckLakeScanRange(PATH, START, LENGTH, FILE_SIZE, FILE_FORMAT)
                 .tableFormatType,
@@ -99,9 +86,7 @@ internal class DuckLakeScanRangeThriftParityTest {
     @Test
     @Throws(Exception::class)
     fun icebergParamsCarryFormatVersion2AndEmptyDeleteFiles() {
-        // Asserts the load-bearing knobs by reading them off the populated
-        // struct directly (cheaper than relying on the byte-identity test
-        // for diagnostics when this regresses).
+        // Field-level checks give better diagnostics than the byte-identity test.
         val formatDesc = populatedFormatDesc(
             DuckLakeScanRange(PATH, START, LENGTH, FILE_SIZE, FILE_FORMAT),
         )
@@ -112,8 +97,7 @@ internal class DuckLakeScanRangeThriftParityTest {
         assertThat(iceberg.originalFilePath).isEqualTo(PATH)
         assertThat(iceberg.isSetDeleteFiles).isTrue()
         assertThat(iceberg.deleteFiles).isEmpty()
-        // Partition spec id / partition data json / row count / first row id
-        // must remain unset so the BE reader picks its defaults.
+        // Left unset so the BE reader picks its defaults.
         assertThat(iceberg.isSetPartitionSpecId).isFalse()
         assertThat(iceberg.isSetPartitionDataJson).isFalse()
         assertThat(iceberg.isSetContent).isFalse()
@@ -122,9 +106,6 @@ internal class DuckLakeScanRangeThriftParityTest {
     @Test
     @Throws(Exception::class)
     fun formatDescMatchesIcebergGoldenForPositionDeleteRange() {
-        // Byte identity against a hand-built golden that mirrors how Iceberg
-        // emits a single position-delete file. A divergence here means the BE
-        // reader's delete-file dispatch could miss or misinterpret our entries.
         val range = DuckLakeScanRange(
             PATH, START, LENGTH, FILE_SIZE, FILE_FORMAT,
             listOf(DuckLakePositionDelete(DELETE_PATH, FILE_FORMAT)),
@@ -139,10 +120,8 @@ internal class DuckLakeScanRangeThriftParityTest {
     @Test
     @Throws(Exception::class)
     fun icebergParamsCarryPositionDeleteFile() {
-        // Field-level assertions on the populated delete-file descriptor:
-        // path, file format, content discriminator. Position bounds stay
-        // unset — DuckLake's catalog doesn't track them in v1, so the BE
-        // scans the full delete file (correct, just unpruned).
+        // Position bounds stay unset because DuckLake's catalog does not track them;
+        // the BE then scans the full delete file, which is correct but unpruned.
         val range = DuckLakeScanRange(
             PATH, START, LENGTH, FILE_SIZE, FILE_FORMAT,
             listOf(DuckLakePositionDelete(DELETE_PATH, FILE_FORMAT)),
@@ -155,8 +134,7 @@ internal class DuckLakeScanRangeThriftParityTest {
         val delete = iceberg.deleteFiles[0]
         assertThat(delete.path).isEqualTo(DELETE_PATH)
         assertThat(delete.fileFormat).isEqualTo(TFileFormatType.FORMAT_PARQUET)
-        // POSITION_DELETE discriminator (= 1). DuckLake has no equality
-        // deletes, so this constant should never change.
+        // DuckLake has no equality deletes, so content is always POSITION_DELETE (1).
         assertThat(delete.content)
             .isEqualTo(DuckLakeScanRange.CONTENT_POSITION_DELETE)
             .isEqualTo(1)
@@ -174,10 +152,8 @@ internal class DuckLakeScanRangeThriftParityTest {
 
         val deletes = range.positionDeletes()
         assertThat(deletes).containsExactly(pd)
-        // List.copyOf produces an unmodifiable list; mutation must throw so the range's internal
-        // state can't be corrupted by an outside caller. From Kotlin the return type is read-only
-        // (no `add`), so cast to MutableList to exercise the Java-visible add() — which the
-        // immutable copy rejects at runtime, exactly as a Java caller would experience.
+        // Kotlin's List has no add(), so cast to MutableList to exercise the
+        // Java-visible mutation a caller could attempt.
         Assertions.assertThrows(
             UnsupportedOperationException::class.java,
         ) { (deletes as MutableList<DuckLakePositionDelete>).add(DuckLakePositionDelete("x", "parquet")) }
@@ -195,17 +171,12 @@ internal class DuckLakeScanRangeThriftParityTest {
             val formatDesc = TTableFormatFileDesc()
             val rangeDesc = TFileRangeDesc()
             range.populateRangeParams(formatDesc, rangeDesc)
-            // The engine fills table_format_type on the descriptor before
-            // dispatching; pin it here so the golden matches.
+            // The engine, not the range, fills table_format_type; set it here so the golden matches.
             formatDesc.setTableFormatType(range.tableFormatType)
             return formatDesc
         }
 
-        /**
-         * Hand-built mirror of `IcebergScanRange.populateRangeParams` for
-         * a no-deletes, v2-format data file. Discriminator string is
-         * parameterised so the Option-A → Option-B flip is a one-line change.
-         */
+        /** Hand-built mirror of `IcebergScanRange.populateRangeParams` for a no-deletes v2 data file. */
         private fun goldenFormatDesc(path: String, discriminator: String): TTableFormatFileDesc {
             val formatDesc = TTableFormatFileDesc()
             formatDesc.setTableFormatType(discriminator)
@@ -219,11 +190,7 @@ internal class DuckLakeScanRangeThriftParityTest {
             return formatDesc
         }
 
-        /**
-         * Hand-built golden for a v2 data file carrying one position-delete file.
-         * Mirrors IcebergScanRange's single-position-delete emission with no
-         * bounds set (DuckLake's catalog doesn't surface row-position bounds).
-         */
+        /** Hand-built golden for a v2 data file carrying one position-delete file with no bounds. */
         private fun goldenFormatDescWithPositionDelete(
             path: String,
             discriminator: String,
@@ -250,8 +217,7 @@ internal class DuckLakeScanRangeThriftParityTest {
 
         @Throws(Exception::class)
         private fun serialize(desc: TTableFormatFileDesc): ByteArray {
-            // Use TBinaryProtocol explicitly so the byte-equality contract isn't
-            // at the mercy of the default protocol changing across thrift versions.
+            // Explicit protocol so byte equality does not depend on the thrift default.
             return TSerializer(TBinaryProtocol.Factory()).serialize(desc)
         }
     }

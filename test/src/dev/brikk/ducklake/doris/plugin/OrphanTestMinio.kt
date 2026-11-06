@@ -15,7 +15,7 @@ import java.time.format.DateTimeFormatter
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
-/** Exclusively UUID-owned, ephemeral storage for F01; no retained services or host data mounts. */
+/** Ephemeral MinIO container owned through a per-instance UUID label; no retained services or host mounts. */
 internal class OrphanTestMinio : AutoCloseable {
     private val token = UUID.randomUUID().toString().replace("-", "")
     private val name = "doris-f01-$token"

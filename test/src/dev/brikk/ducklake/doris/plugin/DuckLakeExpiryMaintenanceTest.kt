@@ -63,7 +63,7 @@ internal class DuckLakeExpiryMaintenanceTest {
             assertThat(committedScheduled).isEqualTo(1000)
             assertThat(f.count("data_file")).isEqualTo(4)
             f.sql("DROP TRIGGER trial_gc_failure ON ducklake_data_file")
-            // The existing procedure does not silently retry cleanup when no ids remain expirable.
+            // The procedure does not retry cleanup when no ids remain expirable.
             assertThat(f.expireProcedure().rows.single()[2]).isEqualTo("0")
             assertThat(f.count("data_file")).isEqualTo(4)
             val resumed = f.catalog.cleanUpExpiredObjects(Int.MAX_VALUE)

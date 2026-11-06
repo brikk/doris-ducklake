@@ -10,15 +10,12 @@ import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
 
 /**
- * Pure-logic coverage of [DuckLakeCreatePartitionMapper] — the SPI partition/bucket
- * clause → DuckLake [dev.brikk.ducklake.catalog.PartitionFieldSpec] mapping. No catalog
- * needed; the catalog round-trip (CREATE → getPartitionSpecs) lives in [DuckLakeDdlTest].
+ * Covers the SPI partition/bucket clause to DuckLake partition field mapping without a catalog;
+ * the catalog round-trip lives in [DuckLakeDdlTest].
  */
 internal class DuckLakeCreatePartitionMapperTest {
 
     private fun transformSpec(vararg fields: ConnectorPartitionField) =
-        // ConnectorPartitionSpec's 3rd ctor arg changed from a (partition-values) List to a
-        // `hasExplicitPartitionValues: Boolean`; the empty-values case is now `false`.
         ConnectorPartitionSpec(ConnectorPartitionSpec.Style.TRANSFORM, fields.toList(), false)
 
     @Test
@@ -93,9 +90,8 @@ internal class DuckLakeCreatePartitionMapperTest {
 
     @Test
     fun mapsTransformFieldsUnderListOrRangeStyle() {
-        // Live Doris stamps iceberg-style partitioning with the grammar keyword
-        // (LIST/RANGE), not Style.TRANSFORM, carrying the real transform per field. We
-        // map by field regardless of style (confirmed live 2026-06-10; see friction log).
+        // Doris stamps iceberg-style partitioning with the grammar keyword (LIST/RANGE) rather
+        // than Style.TRANSFORM, carrying the real transform per field, so the mapper ignores style.
         for (style in listOf(ConnectorPartitionSpec.Style.LIST, ConnectorPartitionSpec.Style.RANGE)) {
             val fields = DuckLakeCreatePartitionMapper.toPartitionFields(
                 ConnectorPartitionSpec(

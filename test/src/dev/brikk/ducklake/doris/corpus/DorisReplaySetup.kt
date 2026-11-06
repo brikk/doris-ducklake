@@ -6,7 +6,10 @@ import dev.brikk.ducklake.corpus.ReplayOracleSqlBinder
 import dev.brikk.ducklake.corpus.ReplaySetupFormat
 import java.nio.file.Path
 
-/** A 1.0 execution/mirror lane, not a rewrite of explicit 1.1 fixtures or their goldens. */
+/**
+ * Builds the corpus runner pinned to DuckLake 1.0 for setup, execution and mirroring;
+ * fixtures that explicitly ask for 1.1 are left untouched rather than rewritten.
+ */
 internal fun dorisCorpusRunner(
     root: Path,
     skips: Map<String, String> = emptyMap(),

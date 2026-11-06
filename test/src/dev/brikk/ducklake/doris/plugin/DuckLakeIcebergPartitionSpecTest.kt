@@ -11,16 +11,12 @@ import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
 
 /**
- * Pure-logic coverage of [DuckLakeIcebergPartitionSpec] — DuckLake partition spec →
- * `org.apache.iceberg.PartitionSpec`. The oracle is iceberg's own `PartitionSpecParser`
- * round-trip (`fromJson(schema, toJson(spec)) == spec`), the same independent-parser
- * approach the schema builder is tested with. No catalog / BE needed.
- *
- * Field-id == column_id; partition columns are referenced by name through the schema.
+ * Covers the DuckLake partition spec to `org.apache.iceberg.PartitionSpec` mapping. The oracle is
+ * iceberg's own `PartitionSpecParser` round-trip. Field ids equal column ids, and partition
+ * columns are referenced by name through the schema.
  */
 internal class DuckLakeIcebergPartitionSpecTest {
 
-    // field_id == column_id, matching DuckLakeIcebergSchema.
     private val schema = Schema(
         listOf(
             Types.NestedField.optional(1, "region", Types.StringType.get()),
