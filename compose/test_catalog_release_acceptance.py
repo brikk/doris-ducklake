@@ -20,7 +20,8 @@ class CatalogReleaseAcceptanceTest(unittest.TestCase):
         self.assertEqual(fixture.result["lane"], "released-catalog-0.18.0")
         self.assertEqual(fixture.seed_script, "read_correctness_seed.py")
         self.assertEqual(fixture.live_tasks, ("readCorrectnessLiveTest", "readCorrectnessLiveJava17Test"))
-        self.assertEqual(fixture.live_test_count, 2)
+        self.assertEqual(fixture.live_test_count, 3)
+        self.assertEqual(fixture.boolean_marker, "BOOLEAN_DICTIONARY native+ducklake=28/28; lazy=false,true")
 
     def test_old_or_mixed_catalog_refuses_before_prepare(self):
         for a, b in (("0.17.0", "0.18.0"), ("0.18.0", "0.17.0"), ("0.18.0-SNAPSHOT", "0.18.0")):

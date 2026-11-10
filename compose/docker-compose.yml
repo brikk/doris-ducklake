@@ -11,7 +11,7 @@ name: doris-ducklake-dev
 
 services:
   doris-fe:
-    image: ${DORIS_FE_IMAGE:-doris-fe:ducklake-4bc7f426-api27}
+    image: ${DORIS_FE_IMAGE:-doris-fe:ducklake-9fb3e3a2-api30}
     container_name: doris-ducklake-fe
     hostname: doris-fe
     environment:
@@ -61,11 +61,11 @@ services:
       start_period: 60s
 
   doris-be:
-    # API-27 source 4bc7f426828 requires a matching FE/BE deployment; #68837 also
-    # changed external-report/Paimon Thrift fields after the API-13 baseline.
+    # API-30 source 9fb3e3a2 requires a matching FE/BE deployment; #70057 also
+    # corrected schema-table/routine-load Thrift IDs relative to our API-27 baseline.
     # The September API-9 FE + stock-4.1.4 smoke is historical, not qualification
     # for today's FE. A stock BE is now an explicit compatibility experiment.
-    image: ${DORIS_BE_IMAGE:-doris-be:ducklake-4bc7f426-api27-asan}
+    image: ${DORIS_BE_IMAGE:-doris-be:ducklake-9fb3e3a2-api30-asan}
     container_name: doris-ducklake-be
     hostname: doris-be
     # Host-overridable: defaults to arm64 (Apple Silicon dev box); set
@@ -110,12 +110,12 @@ networks:
 
 volumes:
   fe-meta:
-    name: doris-ducklake-api27-4bc7f426-fe-meta
+    name: doris-ducklake-api30-9fb3e3a2-fe-meta
   fe-log:
-    name: doris-ducklake-api27-4bc7f426-fe-log
+    name: doris-ducklake-api30-9fb3e3a2-fe-log
   fe-plugin-ducklake:
-    name: doris-ducklake-api27-4bc7f426-fe-plugin-ducklake
+    name: doris-ducklake-api30-9fb3e3a2-fe-plugin-ducklake
   be-storage:
-    name: doris-ducklake-api27-4bc7f426-be-storage
+    name: doris-ducklake-api30-9fb3e3a2-be-storage
   be-log:
-    name: doris-ducklake-api27-4bc7f426-be-log
+    name: doris-ducklake-api30-9fb3e3a2-be-log

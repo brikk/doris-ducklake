@@ -4,6 +4,8 @@ import java.util.Properties
 import java.util.concurrent.CancellationException
 
 import org.apache.doris.connector.spi.Connector
+import org.apache.doris.connector.spi.scan.ConnectorScanPlanProvider
+import org.apache.doris.connector.spi.scan.ConnectorSplitSource
 import org.apache.doris.connector.spi.scan.ConnectorScanContext
 import org.apache.doris.connector.spi.scan.ConnectorScanRequest
 import org.apache.doris.thrift.TIcebergTableSink
@@ -11,14 +13,18 @@ import org.apache.doris.thrift.TPaimonFileDesc
 import org.apache.doris.thrift.TQueryOptions
 import org.apache.doris.thrift.TReportExecStatusParams
 import org.apache.doris.thrift.TReportRequest
+import org.apache.doris.thrift.TRLTaskTxnCommitAttachment
+import org.apache.doris.thrift.TSchemaTableType
+import org.apache.doris.thrift.TIcebergFileDesc
+import org.apache.doris.thrift.TIcebergDeleteFileDesc
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
 
-/** Pins the installed SPI and generated Thrift contract to the Doris baseline commit (4bc7f426828) rather than Maven coordinates. */
+/** Pins the installed SPI and generated Thrift contract to Doris 9fb3e3a2a13, not merely Maven coordinates. */
 internal class DorisBaselineContractTest {
     @Test
-    fun installedSpiReportsApi27() {
+    fun installedSpiReportsApi30() {
         val properties = Properties()
         val resource = requireNotNull(
             Connector::class.java.getResourceAsStream(
@@ -26,7 +32,34 @@ internal class DorisBaselineContractTest {
             ),
         ) { "SPI API version resource missing" }
         resource.use { properties.load(it) }
-        assertThat(properties.getProperty("api.version")).isEqualTo("27.0")
+        assertThat(properties.getProperty("api.version")).isEqualTo("30.0")
+    }
+
+    @Test
+    fun api30CooperatingSourcesRemainOptional() {
+        assertThat(ConnectorScanPlanProvider::class.java.methods.single { it.name == "streamPartitionSources" }.isDefault).isTrue()
+        assertThat(ConnectorSplitSource::class.java.getMethod("isBlocked").isDefault).isTrue()
+    }
+
+    @Test
+    fun schemaAndRoutineLoadWireIdsMatchTheCorrectedFeBePair() {
+        assertThat(TSchemaTableType.SCH_FILE_CACHE_INFO.value).isEqualTo(62)
+        assertThat(TSchemaTableType.SCH_BLACKHOLE.value).isEqualTo(63)
+        assertThat(TSchemaTableType.SCH_DATABASE_PROPERTIES.value).isEqualTo(70)
+        assertThat(TRLTaskTxnCommitAttachment._Fields.findByName("firstErrorMsg")!!.thriftFieldId).isEqualTo(12.toShort())
+        assertThat(TRLTaskTxnCommitAttachment._Fields.findByName("kinesisRLTaskProgress")!!.thriftFieldId).isEqualTo(13.toShort())
+    }
+
+    @Test
+    fun optionalEncryptionFieldsAndWriterDefaultsMatchTheNewWireContract() {
+        assertThat(TIcebergFileDesc._Fields.findByName("encryption_info")!!.thriftFieldId).isEqualTo(14.toShort())
+        assertThat(TIcebergDeleteFileDesc._Fields.findByName("encryption_info")!!.thriftFieldId).isEqualTo(12.toShort())
+        val indexes = TQueryOptions._Fields.findByName("enable_parquet_write_page_index")!!
+        val pageSize = TQueryOptions._Fields.findByName("parquet_write_data_page_size")!!
+        assertThat(indexes.thriftFieldId).isEqualTo(238.toShort())
+        assertThat(pageSize.thriftFieldId).isEqualTo(239.toShort())
+        assertThat(TQueryOptions().getFieldValue(indexes)).isEqualTo(true)
+        assertThat(TQueryOptions().getFieldValue(pageSize)).isEqualTo(1048576)
     }
 
     @Test

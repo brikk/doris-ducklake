@@ -7,8 +7,8 @@ start at [../README.md](../README.md).
 ## What is here
 
 - **Validation reports** (`VALIDATION-*`): each catalog adoption (0.11 → 0.18), each Doris
-  pin (API13 → API27), the F-series hardening work, read safety, corpus baseline. The
-  current pin's report is `VALIDATION-DORIS-API27-2026-11-02.md`.
+  pin (API13 → API30), the F-series hardening work, read safety, corpus baseline. The
+  current pin's report is `VALIDATION-DORIS-API30-2026-11-10.md`.
 - **Trials** (`TRIAL-*`): snapshot-dependency and PgBouncer trials that preceded a release adoption.
 - **Upstream reviews** (`REVIEW-DORIS-UPSTREAM-*`, `UPSTREAM-DORIS-*`): what changed on Doris
   master and release branches at the time; none is a runtime bump.

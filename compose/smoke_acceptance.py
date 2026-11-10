@@ -32,6 +32,7 @@ class FullSmokeAcceptance(Acceptance):
         config["services"]["bootstrap"] = {"image": self.result["images"]["python:3.12-slim"],
             "environment": {"DUCKDB_VERSION": "1.5.6", "PG_PORT": "5432"},
             "volumes": ["./bootstrap:/bootstrap:ro"],
+            "mem_limit": "1g", "memswap_limit": "1g", "cpus": 1,
             "command": ["sh", "-ec", 'pip install --quiet --no-cache-dir "duckdb==1.5.6"; exec python /bootstrap/init_ducklake.py']}
         write_json(self.substrate_file, config)
 
@@ -49,7 +50,7 @@ class FullSmokeAcceptance(Acceptance):
         write_json(path, spec)
         env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ.get("PATH", ""),
                    F24_ACCEPTANCE_DOCKER=str(path), PYTHONDONTWRITEBYTECODE="1", DORIS_FE_STARTUP_TIMEOUT="300",
-                   DORIS_EXPECTED_SOURCE="4bc7f426828", DORIS_BE_PLATFORM="linux/amd64", DORIS_CORPUS_DIR=str(self.root / "corpus"))
+                   DORIS_EXPECTED_SOURCE="9fb3e3a2", DORIS_BE_PLATFORM="linux/amd64", DORIS_CORPUS_DIR=str(self.root / "corpus"))
         self.started = True
         result = subprocess.run(["bash", str(self.compose / "smoke.sh"), "--plugin-zip", str(self.bundles[bundle])],
                                 cwd=self.root, env=env, text=True, capture_output=True, timeout=1200)

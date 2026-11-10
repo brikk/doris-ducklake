@@ -14,7 +14,7 @@ import tempfile
 import zipfile
 
 
-API = "27.0"
+API = "30.0"
 SCHEMA = "doris-plugin-payload-v1"
 PROVIDER = "dev.brikk.ducklake.doris.plugin.DuckLakeConnectorProvider"
 PACKAGE = "dev/brikk/ducklake/doris/plugin/"

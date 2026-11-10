@@ -10,6 +10,7 @@ designs live in [archive/](archive/README.md).
 - [DORIS-RUNTIME.md](DORIS-RUNTIME.md) — the pinned Doris commit, SDK and images, and how to re-vendor.
 - [COMPOSE.md](COMPOSE.md) — the local FE/BE stack: smoke, deployment, rollback, network access.
 - [CORPUS-REPLAY.md](CORPUS-REPLAY.md) — replaying the upstream DuckLake SQL corpus through Doris.
+- [Duckbridge build-reuse handoff](HANDOFF-FOR-DUCKBRIDGE-DORIS-9fb3e3a2-API30.md) — exact API30 artifacts, commands and qualification limits.
 
 ## Behaviour and limits
 

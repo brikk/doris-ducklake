@@ -24,11 +24,11 @@ from plugin_preflight import API, file_hash, require, verify_bundle
 from plugin_volume import verify_backup
 
 
-FE = "doris-fe:ducklake-4bc7f426-api27"
-BE = "doris-be:ducklake-4bc7f426-api27-asan"
+FE = "doris-fe:ducklake-9fb3e3a2-api30"
+BE = "doris-be:ducklake-9fb3e3a2-api30-asan"
 IMAGE_PINS = {
-    FE: "sha256:54d04bc777b9eb3ae7ebfc7841969a3dc7db0ec81286dc4e640e98ab717b8053",
-    BE: "sha256:6666e38d600f56ba689e21747db038d4cd2626286e69d094467089abd27ba7e8",
+    FE: "sha256:abbc36e3dc4f3c528b6c6fbd2c162311075d26a0d21f58cb29bf35184686b9cd",
+    BE: "sha256:1f73d01a59e86a768e80bf035b6d49987ed3819103a7923e60ced398bf6d9bda",
 }
 SCRIPTS = ("smoke.sh", "smoke_run.sh", "plugin_deploy.py", "plugin_attest.py", "plugin_preflight.py",
            "plugin_volume.py", "fe.conf", "smoke_lake.py", "step7-delete.py", "step-default.py", "w2-insert.py",
@@ -107,7 +107,7 @@ class Acceptance:
 
     def protected(self):
         names = self.command(["container", "ls", "--all", "--format", "{{.Names}}"])
-        selected = [n for n in names.splitlines() if n.startswith(("doris-api27-", "doris-api26-", "doris-api24-", "doris-ducklake-", "trino-ducklake-"))]
+        selected = [n for n in names.splitlines() if n.startswith(("doris-api30-", "doris-api27-", "doris-api26-", "doris-api24-", "doris-ducklake-", "doris-duckbridge-", "trino-ducklake-", "trino-doris-"))]
         containers = {}
         for name in selected:
             item = self.data("container", "inspect", name)[0]
@@ -154,12 +154,13 @@ class Acceptance:
                 "networks": {"doris-net": {"ipv4_address": fe_ip}, "substrate": {}},
                 "healthcheck": {"test": ["CMD-SHELL", "mysql -h127.0.0.1 -P9030 -uroot -e 'SHOW FRONTENDS' >/dev/null 2>&1"],
                                 "interval": "5s", "timeout": "5s", "retries": 60, "start_period": "60s"},
-                "mem_limit": "5g", "cpus": 3},
+                "mem_limit": "3g", "memswap_limit": "3g", "cpus": 3},
             "doris-be": {"image": images[BE], "container_name": self.be, "hostname": "doris-be", "platform": "linux/amd64",
                 "environment": {"FE_SERVERS": f"fe1:{fe_ip}:9020", "BE_ADDR": f"{be_ip}:9050"},
                 "volumes": ["be-storage:/opt/apache-doris/be/storage", "be-log:/opt/apache-doris/be/log", *mounts],
                 "networks": {"doris-net": {"ipv4_address": be_ip}, "substrate": {}},
-                "ulimits": {"nofile": {"soft": 65536, "hard": 65536}}, "mem_limit": "12g", "cpus": 6}},
+                "ulimits": {"nofile": {"soft": 65536, "hard": 65536}},
+                "mem_limit": "7g", "memswap_limit": "7g", "cpus": 3}},
             "networks": {"doris-net": {"name": self.project + "-doris-network", "ipam": {"config": [{"subnet": str(subnet)}]}},
                          "substrate": {"external": True, "name": network}}, "volumes": volumes}
         substrate = {"name": self.substrate_project, "services": {
@@ -167,10 +168,12 @@ class Acceptance:
                 "environment": {"POSTGRES_USER": "ducklake", "POSTGRES_PASSWORD": self.password, "POSTGRES_DB": self.database},
                 "ports": ["127.0.0.1::5432"], "volumes": ["pg-data:/var/lib/postgresql"],
                 "healthcheck": {"test": ["CMD-SHELL", f"pg_isready -U ducklake -d {self.database}"],
-                                "interval": "2s", "timeout": "3s", "retries": 60}},
+                                 "interval": "2s", "timeout": "3s", "retries": 60},
+                 "mem_limit": "512m", "memswap_limit": "512m", "cpus": 1},
             "minio": {"image": images["minio/minio:RELEASE.2025-01-20T14-49-07Z"], "container_name": self.minio,
                 "command": ["server", "/data"], "volumes": ["minio-data:/data"],
-                "environment": {"MINIO_ROOT_USER": "f24-fixture", "MINIO_ROOT_PASSWORD": self.password}}},
+                 "environment": {"MINIO_ROOT_USER": "f24-fixture", "MINIO_ROOT_PASSWORD": self.password},
+                 "mem_limit": "512m", "memswap_limit": "512m", "cpus": 1}},
             "networks": {"default": {"name": network}},
             "volumes": {"pg-data": {"name": self.project + "-pg-data"}, "minio-data": {"name": self.project + "-minio-data"}}}
         write_json(self.doris_file, config)
@@ -195,7 +198,7 @@ class Acceptance:
         write_json(spec_path, spec)
         env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ.get("PATH", ""),
                    F24_ACCEPTANCE_DOCKER=str(spec_path), PYTHONDONTWRITEBYTECODE="1", DORIS_FE_STARTUP_TIMEOUT="300",
-                   DORIS_EXPECTED_SOURCE="4bc7f426828", DORIS_BE_PLATFORM="linux/amd64", DORIS_CORPUS_DIR=str(self.root / "corpus"))
+                   DORIS_EXPECTED_SOURCE="9fb3e3a2", DORIS_BE_PLATFORM="linux/amd64", DORIS_CORPUS_DIR=str(self.root / "corpus"))
         args = ["bash", str(self.compose / "smoke.sh"), "--plugin-zip", str(self.bundles[bundle])]
         if not stale:
             args.append("--up-only")

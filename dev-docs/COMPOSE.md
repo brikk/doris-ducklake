@@ -45,7 +45,7 @@ fresh FE process. Metadata, BE storage and the lake are untouched. The claim is 
 the run finishes; don't write to the volume manually meanwhile.
 
 Preflight refuses foreign containers, wrong images or mounts, legacy volumes and ownership
-collisions rather than migrating them. Default volumes are `doris-ducklake-api27-4bc7f426-*`.
+collisions rather than migrating them. Default volumes are `doris-ducklake-api30-9fb3e3a2-*`.
 API-major equality is not enough; the exact source commit is checked before allocation.
 
 The only proof of which plugin is loaded:
@@ -126,6 +126,14 @@ F24_ACCEPTANCE_PROJECT_ROOT="$PWD" F24_ACCEPTANCE_BUILD_DIR="$PWD/build/f24-acce
 
 All take `--bundle-a`, `--bundle-b`, `--duckdb` (and `--evidence-root` where relevant), never
 install into retained stacks, and remove only what they created.
+
+Read-correctness acceptance includes the upstream dictionary-encoded BOOLEAN
+fixture through both the DuckLake connector and native S3 TVF, with lazy reads
+off/on. Owned acceptance services have hard/no-extra-swap caps (FE 3 GiB, BE
+7 GiB, PostgreSQL/MinIO 512 MiB each); serialize build and live phases. A prolonged
+ASAN fixture can hit Doris's own memory guard without a kernel OOM. Keep that
+failed evidence and rerun only the blocked control on fresh owned infrastructure,
+not the already-passing suites or smokes.
 
 ## Diagnostics
 

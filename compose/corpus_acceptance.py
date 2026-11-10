@@ -1,4 +1,4 @@
-"""Full-directory replay on disposable, owned API27 infrastructure (not fleet conformance)."""
+"""Full-directory replay on disposable, owned API30 infrastructure (not fleet conformance)."""
 import argparse
 import json
 import os

@@ -54,7 +54,7 @@ val dorisVersion = "1.2-SNAPSHOT"
 // Must match the Doris-Connector-Plugin-Api-Version the pinned FE expects (fe/fe-connector/pom.xml,
 // <connector.plugin.api.version>); the FE rejects a plugin whose manifest major differs. The pinned
 // FE/BE pair is recorded in dev-docs/DORIS-RUNTIME.md.
-val connectorApiVersion = "27.0"
+val connectorApiVersion = "30.0"
 
 dependencies {
     // Provided by the FE's parent classloader at runtime.
@@ -293,12 +293,12 @@ registerTestTask("pgBouncerSmokeTest", 17, "**/DuckLakePgBouncerTest*",
 
 for ((taskName, jvm) in listOf("defaultNestedLiveTest" to 25, "defaultNestedLiveJava17Test" to 17)) {
     registerTestTask(taskName, jvm, "**/DuckLakeDefaultNestedLiveTest*",
-        "Native mixed scalar/nested reads on an owned API27 cluster.")
+        "Native mixed scalar/nested reads on an owned API30 cluster.")
 }
 
 for ((taskName, jvm) in listOf("readCorrectnessLiveTest" to 25, "readCorrectnessLiveJava17Test" to 17)) {
     registerTestTask(taskName, jvm, "**/DuckLakeReadCorrectnessLiveTest*",
-        "Bounded N03/H15/N19 probes on an owned API27 cluster; no full corpus.")
+        "Bounded nested/replay/BOOLEAN-dictionary probes on an owned API30 cluster; no full corpus.")
 }
 
 registerTestTask("corpusReplayTest", 25, "**/DorisCorpusReplayTest*",

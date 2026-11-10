@@ -46,6 +46,7 @@ internal class DuckLakeConnectorCapabilitiesTest {
                 ConnectorCapability.SUPPORTS_FIELD_ID_ACCESS_PATH,
                 ConnectorCapability.SUPPORTS_SYS_TABLE_NESTED_COLUMN_PRUNE,
                 ConnectorCapability.SUPPORTS_STORAGE_PREDICATE_PRUNING,
+                ConnectorCapability.SUPPORTS_CONNECTOR_PARTITION_PRUNING,
                 ConnectorCapability.SUPPORTS_VIEW,
                 ConnectorCapability.SUPPORTS_COLUMN_AUTO_ANALYZE,
                 ConnectorCapability.SUPPORTS_METADATA_PRELOAD,

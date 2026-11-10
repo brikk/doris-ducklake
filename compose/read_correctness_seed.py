@@ -21,6 +21,13 @@ try:
     con.execute("CREATE TABLE lake.tpch.replay_values(id INTEGER,b BOOLEAN,f FLOAT,d DOUBLE,payload BLOB)")
     con.execute("INSERT INTO lake.tpch.replay_values VALUES(0,true,0.1,1e16,from_hex('0022275C7FFF')),"
                 "(1,false,'-0.0'::FLOAT,1e-5,from_hex('41')),(2,NULL,NULL,NULL,NULL)")
+    boolean_file = os.environ["DATA_PATH"] + "boolean-dictionary.parquet"
+    boolean_encodings = con.execute("SELECT path_in_schema,encodings FROM parquet_metadata(?)", [boolean_file]).fetchall()
+    assert boolean_encodings == [("id", "PLAIN"), ("b", "PLAIN, RLE, RLE_DICTIONARY")]
+    con.execute("CREATE TABLE lake.tpch.boolean_dictionary(id INTEGER,b BOOLEAN)")
+    con.execute("CALL ducklake_add_data_files('lake','boolean_dictionary',?,schema='tpch')", [boolean_file])
+    boolean_values = con.execute("SELECT id,b FROM lake.tpch.boolean_dictionary ORDER BY id").fetchall()
+    assert boolean_values == list(enumerate([True, False, None, True, True, False, None, False, True, True]))
     # Full source identities, not only the formatted composite type projection.
     con.execute(f"ATTACH 'host={os.environ['PG_HOST']} dbname={os.environ['PG_DB']} user=ducklake "
                 f"password={os.environ['PG_PASSWORD']}' AS metadata (TYPE postgres,READ_ONLY)")
@@ -39,6 +46,8 @@ try:
     identities = {(name, field_id) for field_id, name, _, _, _ in columns}
     for footer in footers:
         assert {(name, field_id) for name, field_id in footer if field_id is not None} == identities
-    print(json.dumps({"duckdb": duckdb.__version__, "columns": columns, "expected": expected, "files": files, "parquet_field_ids": footers}))
+    print(json.dumps({"duckdb": duckdb.__version__, "columns": columns, "expected": expected, "files": files,
+                      "parquet_field_ids": footers, "boolean_dictionary": {
+                          "file": boolean_file, "encodings": boolean_encodings, "rows": boolean_values}}))
 finally:
     con.close()

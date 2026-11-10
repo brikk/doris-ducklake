@@ -1,5 +1,7 @@
-"""Bounded native-file/replay acceptance on owned API27 FE/BE + PostgreSQL/S3."""
+"""Bounded native-file/replay acceptance on owned API30 FE/BE + PostgreSQL/S3."""
 import argparse
+import base64
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -19,8 +21,9 @@ class ReadCorrectnessAcceptance(FullSmokeAcceptance):
     output_directory = "default-nested-qualification"
     catalog_version = "0.18.0"
     live_tasks = ("readCorrectnessLiveTest", "readCorrectnessLiveJava17Test")
-    live_test_count = 2
+    live_test_count = 3
     live_marker = "positive mirrors=2/2; wrong-hash=1 failed, later mirror=1/1"
+    boolean_marker = "BOOLEAN_DICTIONARY native+ducklake=28/28; lazy=false,true"
 
     def source_hashes(self):
         project = self.source.parent
@@ -38,6 +41,7 @@ class ReadCorrectnessAcceptance(FullSmokeAcceptance):
     def prepare(self):
         self.require_released_bundles()
         super().prepare()
+        self.result["images"]["minio/mc"] = self.data("image", "inspect", "minio/mc")[0]["Id"]
         # Loopback ephemeral ports only, needed by the JDBC oracle and engine test JVMs.
         for file, service, port in ((self.doris_file, "doris-fe", 9030), (self.substrate_file, "minio", 9000)):
             config = json.loads(file.read_text())
@@ -62,10 +66,26 @@ class ReadCorrectnessAcceptance(FullSmokeAcceptance):
         run = self.result["phases"][self.phase_name]["correctness"]["run_id"]
         self.fixture_database = "doris_smoke_" + run
         self.fixture_data = f"s3://ducklake/doris-smoke/{run}/"
+        encoded = self.source / "fixtures/boolean_rle_dictionary.parquet.b64"
+        payload = base64.b64decode(encoded.read_text().strip(), validate=True)
+        require(hashlib.sha256(payload).hexdigest() ==
+                "ba2016dcf7ba8af572371491f0b6701afb0b79c06a85930a80598628a020e5b2", "BOOLEAN fixture checksum mismatch")
+        fixture = self.root / "boolean-dictionary.parquet"
+        fixture.write_bytes(payload)
+        upload_env = dict(os.environ, S3_HOST=self.minio, S3_SECRET=self.password, SMOKE_RUN_ID=run)
+        self.command(["run", "--rm", "--pull=never", "--memory=256m", "--memory-swap=256m",
+                      "--network", self.project + "-substrate-network", "-v", str(fixture) + ":/fixture.parquet:ro",
+                      "-e", "S3_HOST", "-e", "S3_SECRET", "-e", "SMOKE_RUN_ID", "--entrypoint", "/bin/sh",
+                      self.result["images"]["minio/mc"],
+                      "-ec", 'mc alias set owned "http://$S3_HOST:9000" f24-fixture "$S3_SECRET" >/dev/null; '
+                             'mc cp /fixture.parquet "owned/ducklake/doris-smoke/$SMOKE_RUN_ID/boolean-dictionary.parquet"'],
+                     env=upload_env)
+        self.result["boolean_dictionary_fixture"] = {"sha256": hashlib.sha256(payload).hexdigest(), "bytes": len(payload)}
         env = dict(os.environ, SMOKE_RUN_ID=run, PG_DB=self.fixture_database, DATA_PATH=self.fixture_data,
                    PG_HOST=self.pg, PG_USER="ducklake", PG_PASSWORD=self.password, S3_ENDPOINT=self.minio + ":9000",
                    S3_KEY_ID="f24-fixture", S3_SECRET=self.password)
-        args = [self.docker, "run", "--rm", "--pull=never", "--network", self.project + "-substrate-network",
+        args = [self.docker, "run", "--rm", "--pull=never", "--memory=768m", "--memory-swap=768m",
+                "--network", self.project + "-substrate-network",
                 "-v", str(self.root / "controller-sources" / self.seed_script) + ":/script.py:ro",
                 "-v", str(self.compose / "smoke_lake.py") + ":/smoke_lake.py:ro"]
         for key in ("SMOKE_RUN_ID", "PG_DB", "DATA_PATH", "PG_HOST", "PG_USER", "PG_PASSWORD", "S3_ENDPOINT", "S3_KEY_ID", "S3_SECRET"):
@@ -81,7 +101,8 @@ class ReadCorrectnessAcceptance(FullSmokeAcceptance):
         self.result["native_fixture"] = oracle
         # Not a public receipt: private owned fixture connection settings, never print credentials.
         properties = {"fe.url": f"jdbc:mysql://127.0.0.1:{self.port(self.fe, 9030)}/?tinyInt1isBit=true",
-                      "pg.port": self.port(self.pg, 5432), "minio.host": "127.0.0.1:" + self.port(self.minio, 9000),
+                       "pg.port": self.port(self.pg, 5432), "minio.host": "127.0.0.1:" + self.port(self.minio, 9000),
+                       "minio.fe.host": self.minio + ":9000",
                       "catalog": self.fixture_database, "database": self.fixture_database,
                       "data.path": self.fixture_data, "password": self.password}
         self.fixture_file = self.root / "fixture-private.properties"
@@ -121,6 +142,7 @@ class ReadCorrectnessAcceptance(FullSmokeAcceptance):
                 counts = {key: int(suite.attrib[key]) for key in ("tests", "failures", "errors", "skipped")}
                 require(counts == {"tests": self.live_test_count, "failures": 0, "errors": 0, "skipped": 0}, "Incomplete live tests")
                 require(self.live_marker in files[0].read_text(), "Missing live read evidence")
+                require(self.boolean_marker in files[0].read_text(), "Missing BOOLEAN dictionary native/connector evidence")
                 require(self.password not in files[0].read_text(), "Credential in live test receipt")
                 shutil.copy2(files[0], self.root / (task + ".xml"))
                 self.result["live_tests"][task] = counts
@@ -155,7 +177,7 @@ def main():
     except Exception as error:
         print("Read-correctness acceptance failed:", str(error).replace(fixture.password, "<redacted>"))
         return 1
-    print("PASS bounded API27 released native-file/replay acceptance:", fixture.root)
+    print("PASS bounded API30 released native-file/replay acceptance:", fixture.root)
     return 0
 
 

@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test
 import java.nio.file.Files
 import java.nio.file.Path
 import java.sql.DriverManager
+import java.sql.Statement
 import java.sql.Types
 import java.util.Properties
 
@@ -62,7 +63,7 @@ internal class DuckLakeReadCorrectnessLiveTest {
 
     private fun verifyNativeValues() {
         fe().use { c -> c.createStatement().use { s ->
-            s.executeQuery("SHOW FRONTENDS").use { r -> check(r.next()); assertThat(r.getString("Version")).contains("4bc7f426828") }
+            s.executeQuery("SHOW FRONTENDS").use { r -> check(r.next()); assertThat(r.getString("Version")).contains("9fb3e3a2") }
             s.executeQuery("SELECT id,s.`a,b`,s.`MiXeD`,s.`x:y`,s.`q\"uote`,s.`back\\slash`,s.` spaced `,s.`雪`,s.`<angle>`," +
                 "struct_element(element_at(items,1),'x:y'),struct_element(element_at(attrs,'k'),'a,b') FROM $catalog.tpch.n03 ORDER BY id").use { r ->
                 val actual = buildList { while (r.next()) add((1..r.metaData.columnCount).map { r.getString(it) }) }
@@ -84,9 +85,66 @@ internal class DuckLakeReadCorrectnessLiveTest {
     }
 
     @Test
+    fun booleanDictionaryReadsKeepValuesNullAlignmentPredicatesAndAggregates() {
+        val values = listOf(true, false, null, true, true, false, null, false, true, true)
+        val cases = linkedMapOf(
+            "" to (0..9).toList(),
+            "WHERE b = TRUE" to listOf(0, 3, 4, 8, 9),
+            "WHERE b = FALSE" to listOf(1, 5, 7),
+            "WHERE b IS NULL" to listOf(2, 6),
+            "WHERE b <> TRUE OR b IS NULL" to listOf(1, 2, 5, 6, 7),
+            "WHERE id IN (1, 2, 5, 6, 9)" to listOf(1, 2, 5, 6, 9),
+        )
+        val native = "S3('uri'='${p.getProperty("data.path")}boolean-dictionary.parquet','format'='parquet'," +
+            "'s3.endpoint'='http://${p.getProperty("minio.fe.host")}','s3.region'='us-east-1'," +
+            "'s3.access_key'='f24-fixture','s3.secret_key'='${p.getProperty("password")}','use_path_style'='true')"
+        var checked = 0
+        fe().use { c -> c.createStatement().use { s ->
+            s.execute("SET enable_sql_cache=false")
+            s.execute("SET enable_query_cache=false")
+            for (source in listOf("$catalog.tpch.boolean_dictionary", native)) {
+                checked += verifyBooleanDictionarySource(s, source, cases, values)
+            }
+        } }
+        assertThat(checked).isEqualTo(28)
+        println("BOOLEAN_DICTIONARY native+ducklake=28/28; lazy=false,true")
+    }
+
+    private fun verifyBooleanDictionarySource(
+        statement: Statement,
+        source: String,
+        cases: Map<String, List<Int>>,
+        values: List<Boolean?>,
+    ): Int {
+        var checked = 0
+        for (lazy in listOf(false, true)) {
+            statement.execute("SET enable_parquet_lazy_materialization=$lazy")
+            for ((predicate, ids) in cases) {
+                val actual = booleanDictionaryRows(statement, "SELECT id,b FROM $source $predicate ORDER BY id")
+                assertThat(actual).isEqualTo(ids.map { it to values[it] })
+                checked++
+            }
+            statement.executeQuery("SELECT COUNT(*),COUNT(b),SUM(IF(b,1,0)),SUM(IF(b IS NULL,1,0)) FROM $source").use { r ->
+                check(r.next())
+                assertThat((1..4).map { r.getLong(it) }).containsExactly(10L, 8L, 5L, 2L)
+                assertThat(r.next()).isFalse()
+            }
+            checked++
+        }
+        return checked
+    }
+
+    private fun booleanDictionaryRows(statement: Statement, sql: String): List<Pair<Int, Boolean?>> =
+        statement.executeQuery(sql).use { rows ->
+            buildList {
+                while (rows.next()) add(rows.getInt(1) to if (rows.getObject(2) == null) null else rows.getBoolean(2))
+            }
+        }
+
+    @Test
     fun boundedReplayMeasuresActualSharedLakeMirrorsAndRejectsWrongBooleanHash() {
         val engine = object : ReplayReadEngine {
-            override val name = "doris-api27-read-correctness"
+            override val name = "doris-api30-read-correctness"
             override fun connect(attachment: OracleAttachment) {
                 assertThat(attachment.dataPath).isEqualTo(p.getProperty("data.path"))
             }

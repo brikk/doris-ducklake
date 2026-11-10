@@ -20,6 +20,12 @@ formats are a feasibility question under Research, not a planned phase.
 
 ## Reads
 
+- [ ] **Doris #67725** Adopt predicate-filtered connector partition views as a separate
+  optimization, not an automatic capability opt-in during re-vendoring. Push eligible
+  selection into DuckLake catalog SQL without enumerating all partitions/files first;
+  preserve one pinned handle, full residual predicates, partition-spec evolution and
+  NULL/unrepresentable-value fallback. Measure planning work and result correctness
+  against the existing file-statistics/bucket pruning before enabling the capability.
 - [ ] **F07** One coherent physical metadata view across filter collection, range planning
   and inline flush/compaction; per-call read sessions are not enough.
 - [ ] **F08** Per-position historical delete filtering. Today historical scans with delete

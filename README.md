@@ -14,8 +14,8 @@ DuckDB-native `.db` data files.
 that release is available, the connector requires the exact pinned master FE/BE
 builds listed below.
 
-- **Doris source:** `4bc7f426828e4cedfd2b7ce9b76fe95b14b5b146`, with matching FE and BE.
-- **Connector API:** 27.0; filesystem API 7.0; complete JNI API 6.0 distribution.
+- **Doris source:** `9fb3e3a2a13f972a62cb999d5599fc8e8f17f306`, with matching FE and BE.
+- **Connector API:** 30.0; filesystem API 7.0; complete JNI API 6.0 distribution.
 - **Default catalog library:** 0.18.0; native test JDBC: 2.0.0.1.
   Live interoperability fixtures also exercise DuckDB 1.5.6 / DuckLake 1.0.
 - **Plugin runtime:** Java 17. Building the plugin requires JDK 25.

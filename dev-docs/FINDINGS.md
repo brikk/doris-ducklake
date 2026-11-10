@@ -29,7 +29,7 @@ line numbers and examples describe the baseline they were written against.
 | F26 | FE cast erasure can make file pruning unsafe despite a residual predicate; preserve casts or decline unproven conversion. |
 
 Native F12 evidence is in the [retained regression](archive/VALIDATION-DEFAULT-NESTED-READS-2026-11-01.md)
-and [current API27 qualification](archive/VALIDATION-DORIS-API27-2026-11-02.md). It does not
+and [current API30 qualification](archive/VALIDATION-DORIS-API30-2026-11-10.md). It does not
 close F11 or expand nested support beyond the tested shapes.
 
 ## Functionality and validation gaps
