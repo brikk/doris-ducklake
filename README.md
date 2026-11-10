@@ -16,7 +16,7 @@ builds listed below.
 
 - **Doris source:** `4bc7f426828e4cedfd2b7ce9b76fe95b14b5b146`, with matching FE and BE.
 - **Connector API:** 27.0; filesystem API 7.0; complete JNI API 6.0 distribution.
-- **Default catalog library:** 0.17.0; native test JDBC: 2.0.0.1.
+- **Default catalog library:** 0.18.0; native test JDBC: 2.0.0.1.
   Live interoperability fixtures also exercise DuckDB 1.5.6 / DuckLake 1.0.
 - **Plugin runtime:** Java 17. Building the plugin requires JDK 25.
 
@@ -89,7 +89,7 @@ Metadata pools can be tuned with `catalog.max-connections`,
 `catalog.connection-max-lifetime` and `catalog.connection-timeout`. Defaults are
 unchanged; the complete `metadata.url` query string is passed to JDBC, including
 `prepareThreshold=0`. See [pool configuration and PgBouncer](dev-docs/PGBOUNCER.md).
-The normal 0.17.0 dependency retains the transaction-pooling read-session fix from 0.16;
+The normal dependency retains the transaction-pooling read-session fix from 0.16;
 the documented prepared-statement requirement still applies.
 
 ## What works

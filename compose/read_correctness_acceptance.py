@@ -17,7 +17,7 @@ class ReadCorrectnessAcceptance(FullSmokeAcceptance):
     phase_name = "released-full-supported"
     seed_script = "read_correctness_seed.py"
     output_directory = "default-nested-qualification"
-    catalog_version = "0.17.0"
+    catalog_version = "0.18.0"
     live_tasks = ("readCorrectnessLiveTest", "readCorrectnessLiveJava17Test")
     live_test_count = 2
     live_marker = "positive mirrors=2/2; wrong-hash=1 failed, later mirror=1/1"

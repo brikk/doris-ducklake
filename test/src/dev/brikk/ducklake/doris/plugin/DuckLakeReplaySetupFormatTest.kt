@@ -2,6 +2,8 @@ package dev.brikk.ducklake.doris.plugin
 
 import dev.brikk.ducklake.doris.corpus.dorisCorpusRunner
 import dev.brikk.ducklake.corpus.CorpusRunner
+import dev.brikk.ducklake.corpus.OracleAttachment
+import dev.brikk.ducklake.corpus.ReplayReadEngine
 import dev.brikk.ducklake.corpus.ReplaySetupFormat
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
@@ -68,6 +70,107 @@ internal class DuckLakeReplaySetupFormatTest {
         assertThat(report.skippedFiles).isEmpty()
         assertThat(report.failures).isEmpty()
         assertThat(report.totalPassed).isEqualTo(5)
+    }
+
+    @Test
+    fun implicitOneOneQueryHaltsNestedLoopsWithoutErasingEarlierResults() {
+        var mirrorCalls = 0
+        val engine = object : ReplayReadEngine {
+            override val name = "accounting-control"
+            override fun connect(attachment: OracleAttachment) = Unit
+            override fun executeQuery(sql: String): List<List<String?>> {
+                mirrorCalls++
+                return listOf(listOf("0"))
+            }
+            override fun close() = Unit
+        }
+        val sql = """
+            require ducklake
+
+            statement ok
+            ATTACH 'ducklake:{TEST_DIR}/v.db' AS lake (DATA_PATH '{TEST_DIR}/data')
+
+            statement ok
+            CREATE TABLE lake.t(ts TIMESTAMP)
+
+            query I
+            SELECT COUNT(*) FROM lake.t
+            ----
+            0
+
+            query I
+            SELECT 1
+            ----
+            2
+
+            loop i 0 3
+
+            loop j 0 2
+
+            onlyif duckdb
+            query I
+            ALTER TABLE lake.t SET PARTITIONED BY (epoch_hour(ts))
+            ----
+
+            statement ok
+            COPY (SELECT 1) TO '${root.resolve("sentinel.csv")}'
+
+            endloop
+
+            endloop
+
+            statement ok
+            THIS MUST NEVER EXECUTE
+        """.trimIndent()
+        val file = Files.writeString(root.resolve("implicit-one-one.test"), sql)
+        val report = dorisCorpusRunner(root, engine = engine).run(listOf(file))
+        val result = report.files.single()
+        assertThat(report.ranFiles).isEmpty()
+        assertThat(report.haltedFiles).hasSize(1)
+        assertThat(result.passed).isEqualTo(3)
+        assertThat(result.failed).singleElement().satisfies({
+            assertThat(it.reason).isEqualTo("row 1: expected [2], got [1]")
+        })
+        assertThat(result.skipped).hasSize(1)
+        assertThat(result.fileSkipReason).contains("format-out-of-scope:", "the epoch_hour partition transform")
+        assertThat(result.outcomes).hasSize(5)
+        assertThat(report.totalMirrorPasses).isEqualTo(1)
+        assertThat(mirrorCalls).isEqualTo(1)
+        assertThat(Files.exists(root.resolve("sentinel.csv"))).isFalse()
+        assertThat(Files.readString(file)).isEqualTo(sql)
+    }
+
+    @Test
+    fun expectedImplicitOneOneRefusalsStillPassAndContinue() {
+        val file = Files.writeString(root.resolve("expected-one-one.test"), """
+            require ducklake
+
+            statement ok
+            ATTACH 'ducklake:{TEST_DIR}/v.db' AS lake (DATA_PATH '{TEST_DIR}/data')
+
+            statement ok
+            CREATE TABLE lake.t(ts TIMESTAMP)
+
+            statement error
+            ALTER TABLE lake.t SET PARTITIONED BY (epoch_day(ts))
+            ----
+            DuckLake 1.0 does not support the epoch_day partition transform
+
+            statement maybe
+            ALTER TABLE lake.t SET PARTITIONED BY (epoch_month(ts))
+            ----
+
+            query I
+            SELECT COUNT(*) FROM lake.t
+            ----
+            0
+        """.trimIndent())
+        val report = dorisCorpusRunner(root).run(listOf(file))
+        assertThat(report.failures).isEmpty()
+        assertThat(report.skippedFiles).isEmpty()
+        assertThat(report.ranFiles).hasSize(1)
+        assertThat(report.totalPassed).isEqualTo(5)
+        assertThat(report.files.single().skipped).isEmpty()
     }
 
     private fun replay(options: String, version: String) {

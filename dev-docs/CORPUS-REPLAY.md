@@ -29,8 +29,11 @@ or DuckDB extension currently skips rather than fails (M14) — always read the 
 ## How it works
 
 - `DorisReplaySetup` creates a DuckLake 1.0 lake per test on UUID-named PostgreSQL databases
-  and cleans up only those. An explicit 1.1 `ATTACH` halts the file and is reported as a
-  format-scope halt, not a pass.
+  and cleans up only those. An explicit 1.1 `ATTACH`, or an unexpected native SQL
+  migration-refusal diagnostic for a 1.1-only feature, halts the file with one
+  format-out-of-scope skip, not a pass. Earlier failures and measured mirror coverage
+  remain; unexecuted records add no counts. Matching expected-error/maybe records
+  still pass and continue. Other errors keep failing.
 - The oracle's SQL is rebound from DuckDB's `main` metadata schema to PostgreSQL's `public`
   structurally, without touching literals or custom metadata schemas. Corpus files are
   never edited.
