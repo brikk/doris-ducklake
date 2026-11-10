@@ -74,8 +74,10 @@ comments:
 
 complexity:
   active: true
+  # Review signals, not build gates; see AGENTS.md before changing code to satisfy metrics.
   CognitiveComplexMethod:
-    active: false
+    active: true
+    severity: warning
     allowedComplexity: 15
   ComplexCondition:
     active: true
@@ -88,6 +90,7 @@ complexity:
     ignoreOverloaded: false
   CyclomaticComplexMethod:
     active: true
+    severity: warning
     allowedComplexity: 14
     ignoreSingleWhenExpression: false
     ignoreSimpleWhenEntries: false
@@ -111,6 +114,7 @@ complexity:
     allowedLines: 600
   LongMethod:
     active: true
+    severity: warning
     allowedLines: 60
   LongParameterList:
     active: true
@@ -694,7 +698,8 @@ style:
     maxChainedCalls: 5
   MaxLineLength:
     active: true
-    maxLineLength: 160  # tuned to this project's deliberate wide style
+    severity: warning
+    maxLineLength: 120
     excludePackageStatements: true
     excludeImportStatements: true
     excludeCommentStatements: false
@@ -738,16 +743,14 @@ style:
   RedundantVisibilityModifier:
     active: false
   ReturnCount:
-    # Disabled by preference: the codebase has many type-dispatch functions (a `when` over
-    # the open Trino `Type` hierarchy with one `return` per branch + a fall-through default),
-    # for which a low return cap is noise rather than signal.
-    active: false
+    active: true
+    severity: warning
     max: 4
     excludedFunctions:
       - 'equals'
     excludeLabeled: false
     excludeReturnFromLambda: true
-    excludeGuardClauses: true  # tuned: don't count guard-clause returns
+    excludeGuardClauses: true
   SafeCast:
     active: true
   SerialVersionUIDInSerializableClass:

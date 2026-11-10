@@ -16,6 +16,8 @@ version = "0.0.1"
 
 detekt {
     buildUponDefaultConfig = true
+    failOnSeverity = dev.detekt.gradle.extensions.FailOnSeverity.Error
+    ignoreFailures = false
     config.setFrom(rootProject.file("config/detekt/detekt.yml"))
     baseline = file("detekt-baseline.xml")
     source.setFrom("src", "test/src")
